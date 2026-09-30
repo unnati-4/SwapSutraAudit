@@ -18,12 +18,11 @@ import CustomMugEnquiry from './CustomMugEnquiry';
 const API = apiUrl('/api/swapsutra');
 
 /**
- * 30 Sep (owner's request): the shop shows "Coming soon" for now. Flip to
- * true when the MugProducts sheet has live, authorised products — the
- * categories, grid and product pages below come back as they were.
- * The custom mug enquiry stays open either way.
+ * 30 Sep (owner's request): the shop says "Coming soon" until the admin
+ * puts at least one mug live (Admin → Mugs → Mug shop listings). Then the
+ * categories, grid and "Buy on Amazon / Flipkart" buttons appear by
+ * themselves. The custom mug enquiry stays open either way.
  */
-export const MUG_SHOP_OPEN = true;
 
 type Loaded = { state: 'loading' } | { state: 'ready'; items: MugProduct[]; dev: boolean } | { state: 'error' };
 
@@ -38,7 +37,6 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
     let alive = true;
     // Deep link: /mugs?create=1 opens the enquiry.
     try { if (new URLSearchParams(window.location.search).get('create') === '1') setEnquiryOpen(true); } catch { /* ignore */ }
-    if (!MUG_SHOP_OPEN) return () => { alive = false; };
     (async () => {
       let items: MugProduct[] = [];
       let failed = false;
@@ -64,6 +62,8 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
   const shown = useMemo(() => (category === 'all' ? items : items.filter((p) => p.category === category)), [items, category]);
   const counts = useMemo(() => Object.fromEntries(MUG_CATEGORIES.map((c) => [c.id, items.filter((p) => p.category === c.id).length])), [items]);
   const external = items.some((p) => p.sourceMarketplace || p.affiliateUrl);
+  // Open as soon as one real (or, on a developer's machine, sample) mug is live.
+  const shopOpen = loaded.state === 'ready' && items.length > 0;
 
   const browse = () => gridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -75,14 +75,14 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
           <p className="type-eyebrow mug-accent">The mug shelf</p>
           <h1 className="type-h1">Mugs for people who take their coffee personally.</h1>
           <p className="type-lead mugs-hero__lead">From quiet reading mornings to aggressively long TBRs.</p>
-          {MUG_SHOP_OPEN ? (
+          {shopOpen ? (
             <div className="mugs-hero__ctas">
               <button type="button" className="mug-btn mug-btn--solid" onClick={browse}>Browse Mugs</button>
               <button type="button" className="mug-btn mug-btn--quiet" onClick={() => setEnquiryOpen(true)}>Create Your Mug</button>
             </div>
           ) : (
             <div className="mugs-hero__ctas">
-              <span className="mugs-soon" data-testid="mugs-coming-soon">Coming soon</span>
+              {loaded.state !== 'loading' && <span className="mugs-soon" data-testid="mugs-coming-soon">Coming soon</span>}
               <button type="button" className="mug-btn mug-btn--quiet" onClick={() => setEnquiryOpen(true)}>Create Your Mug</button>
             </div>
           )}
@@ -92,7 +92,7 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
         </div>
       </section>
 
-      {MUG_SHOP_OPEN ? (<>
+      {shopOpen ? (<>
       {/* ── Categories ───────────────────────────────────── */}
       <section className="mugs-cats" aria-label="Mug categories">
         <button type="button" className={`mugs-cat ${category === 'all' ? 'is-on' : ''}`} onClick={() => setCategory('all')} aria-pressed={category === 'all'}>
@@ -136,7 +136,9 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
           </p>
         )}
       </section>
-      </>) : (
+      </>) : loaded.state === 'loading' ? (
+        <p className="type-caption" role="status">Dusting the shelf…</p>
+      ) : (
         <section className="mugs-empty" data-testid="mugs-empty" aria-labelledby="mugs-soon-title">
           <h2 id="mugs-soon-title" className="type-h2">Coming soon.</h2>
           <p className="type-body">We’re choosing mugs worth a reader’s morning. The shelf opens here soon — until then, we can help you make your own.</p>

@@ -164,6 +164,10 @@ const AdminCustomMugs = lazyScreen<any>(
   () => import('./components/mugs/AdminCustomMugs'),
   'Opening custom mug enquiries'
 );
+const AdminMugProducts = lazyScreen<any>(
+  () => import('./components/mugs/AdminMugProducts'),
+  'Opening the mug shop listings'
+);
 const SwapStateMachine = lazyScreen<any>(
   () => import('./components/SwapStateMachine'),
   'Opening the swap'
@@ -3019,6 +3023,7 @@ const LoginModal = memo(({
           />
           <motion.div
             initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            data-testid="login-modal"
             className="surface-light night-modal bg-[var(--bg-page)] w-full max-w-md rounded-3xl p-10 shadow-2xl relative z-10 border border-brand-border max-h-[90vh] overflow-y-auto"
           >
             <button onClick={() => setShowLoginModal(false)} className="absolute top-6 right-6 text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
@@ -4692,7 +4697,7 @@ const ManagementConsole = memo(() => {
     { id: 'readerBadges', label: 'Badges', icon: Star },
     { id: 'disputes', label: 'Disputes', icon: AlertTriangle },
     { id: 'securityFeeQueue', label: 'Security Fee Queue', icon: Shield },
-    { id: 'customMugs', label: 'Custom Mugs', icon: Gift },
+    { id: 'customMugs', label: 'Mugs', icon: Gift },
   ];
 
   const normalizeStatus = (status: any) => String(status || '').trim().toLowerCase();
@@ -5090,6 +5095,10 @@ const ManagementConsole = memo(() => {
 
         {tab === 'customMugs' && (
           <AdminCustomMugs />
+        )}
+        {/* 30 Sep: list mugs sold on Amazon / Flipkart / other stores. */}
+        {tab === 'customMugs' && (
+          <div className="mt-10"><AdminMugProducts /></div>
         )}
 
         {tab === 'dashboard' && data && (
@@ -7722,6 +7731,19 @@ export default function App() {
     setShowMembershipGateModal(true);
   };
 
+  /**
+   * The one gate for activity (30 Sep). Returns true when the reader may go
+   * ahead; otherwise opens sign-in (visitor), renewal (expired trial) or
+   * the registration choice (signed in, not registered) and returns false.
+   */
+  const requireMember = (reason?: string): boolean => {
+    if (isAdmin) return true;
+    if (!activeUserEmail) { setShowLoginModal(true); return false; }
+    if (userTier === 'expired') { openMembershipActivation(); return false; }
+    if (!isRegisteredMember || userTier === 'pending' || userTier === 'guest') { promptMembershipGate(reason); return false; }
+    return true;
+  };
+
   const handleBecomeMemberClick = () => {
     if (!activeUserEmail) {
       setShowLoginModal(true);
@@ -8031,11 +8053,11 @@ export default function App() {
   // i.e. genuinely authorized — never for a merely-OTP-verified visitor.
   const [pendingReturnTab, setPendingReturnTab] = useState<AppTab | null>(null);
 
+  // 30 Sep (owner's request): no page is walled off any more. Everyone can
+  // look at every page; doing anything (posting, requesting, chatting,
+  // listing, reacting, joining) goes through requireMember() below, which
+  // opens sign-in or registration instead.
   const navigateTo = (tab: AppTab) => {
-    if (isAccessGated && !GATE_ALLOWED_TABS.includes(tab)) {
-      setPendingReturnTab(prev => prev || tab);
-      tab = 'profile';
-    }
     if (tab === 'events' || tab === 'reader-circle') {
       setCurrentReadRouteCircleId('');
       setActiveTab('events');
@@ -8055,20 +8077,8 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // useLayoutEffect (not useEffect) so a gated visitor is bounced to the
-  // profile/membership screen before the browser paints the frame — an
-  // ordinary useEffect runs after paint and lets a gated tab's content
-  // flash on screen for a frame first. Also covers the case navigateTo()
-  // doesn't: a protected URL typed/bookmarked directly, where activeTab
-  // is initialized straight from routeToTab(window.location.pathname).
-  useLayoutEffect(() => {
-    if (isAccessGated && !GATE_ALLOWED_TABS.includes(activeTab)) {
-      setPendingReturnTab(prev => prev || (activeTab !== 'profile' ? activeTab : prev));
-      setActiveTab('profile');
-      const route = tabToRoute('profile');
-      if (window.location.pathname !== route) window.history.replaceState({}, '', route);
-    }
-  }, [isAccessGated, activeTab]);
+  // (The page-level access wall that bounced visitors to the profile was
+  // removed on 30 Sep — see requireMember.)
 
   // Once the visitor is genuinely authorized (registered + backend-validated
   // membership, not merely OTP-verified), send them back to whichever
@@ -12670,6 +12680,14 @@ export default function App() {
     : activeTab === 'profile' ? (activeProfileGroup === 'books' ? 'shelf' : 'profile')
     : null;
   const goPrimary = (key: PrimaryKey) => {
+    // Profile and Shelf are a reader's own pages: a visitor is asked to
+    // sign in (and lands there afterwards) rather than shown a wall.
+    if ((key === 'profile' || key === 'shelf') && !activeUserEmail) {
+      if (key === 'shelf') setProfileActiveSubTab('books');
+      setPendingReturnTab('profile');
+      setShowLoginModal(true);
+      return;
+    }
     switch (key) {
       case 'books': navigateTo('browse'); break;
       case 'community': setReadingRoomSubTab('feed'); navigateTo('reading-room'); break;
@@ -12706,6 +12724,16 @@ export default function App() {
     setActiveTab('cart');
     window.history.replaceState({}, '', '/cart');
   }, [activeTab, activeProfileGroup, profileActiveSubTab]);
+
+  // A visitor who opens /profile, /shelf or /tracker directly sees the
+  // Library with the sign-in box, and lands on that page after signing in.
+  useEffect(() => {
+    if (activeTab !== 'profile' || activeUserEmail) return;
+    setPendingReturnTab('profile');
+    setActiveTab('browse');
+    window.history.replaceState({}, '', '/library');
+    setShowLoginModal(true);
+  }, [activeTab, activeUserEmail]);
 
   // The reading tracker is a profile section now: /tracker lands there.
   useEffect(() => {
@@ -15039,10 +15067,12 @@ export default function App() {
                 <ReadingRoom
                   userEmail={activeUserEmail}
                   userName={activeSubscription?.name || (activeUserEmail ? activeUserEmail.split('@')[0] : 'Reader')}
-                  isMember={isListerActive}
+                  isMember={isListerActive || isAdmin}
                   books={books}
                   onNavigateToTab={(tab) => navigateTo(tab as AppTab)}
+                  onRequireAuth={(why) => { requireMember(why); }}
                   onRequestSwap={(bookTitle) => {
+                    if (!requireMember('Register to request a swap.')) return;
                     const targetBook = books.find(b => String(b.title).toLowerCase() === String(bookTitle).toLowerCase()) || books[0];
                     if (targetBook) {
                       setShowSwapModal(targetBook);
@@ -15184,9 +15214,9 @@ export default function App() {
               className="space-y-12 sm:space-y-24 py-2 sm:py-12"
             >
               {/* 30 Sep: Events lives inside Community. */}
-              <div className="!mb-[-1.5rem] sm:!mb-[-3rem]">{communityTabs}</div>
-              {/* Events Hero */}
-              <section className="relative overflow-hidden rounded-[32px] sm:rounded-[48px] bg-[var(--bg-surface)]/50 px-5 py-8 text-center shadow-sm ring-1 ring-brand-border/60 sm:py-16 md:py-20">
+              <div className="relative z-10 !mb-0">{communityTabs}</div>
+              {/* Events Hero — kept clear of the tabs above (no overlap). */}
+              <section className="!mt-5 sm:!mt-8 relative overflow-hidden rounded-[32px] sm:rounded-[48px] bg-[var(--bg-surface)]/50 px-5 py-8 text-center shadow-sm ring-1 ring-brand-border/60 sm:py-16 md:py-20">
                  <div className="bookish-sparkle left-[12%] top-10" />
                  <div className="page-turn-line right-12 top-14 hidden opacity-40 md:block" />
                  <img src="/swapsutra-logo.png" alt="SwapSutra" className="h-10 sm:h-16 mx-auto mb-4 sm:mb-8" />
@@ -15857,12 +15887,14 @@ export default function App() {
               {/* 30 Sep: Book requests live in Community now. */}
               {communityTabs}
               {!isListerActive && !isAdmin ? (
-                <MembershipGate
-                  onNavigate={navigateTo}
-                  onShowLoginModal={setShowLoginModal}
-                  title="Book Requests are member-only."
-                  reason="Book Requests are available for approved SwapSutra members."
-                />
+                /* 30 Sep: no wall. The list itself is shared only between
+                   members (it names who is looking), so a visitor sees what
+                   the page is for and one button to take part. */
+                <div className="rounded-3xl border border-brand-border bg-[var(--bg-surface)] px-6 py-8 text-center space-y-3" data-testid="book-requests-invite">
+                  <h2 className="type-h3">Books readers are hunting for</h2>
+                  <p className="type-body text-[var(--text-secondary)]">Members post the books they can’t find, and anyone who has a copy can offer it. Register to see the list, answer a request or post your own.</p>
+                  <button type="button" className="btn-primary px-8 py-3" onClick={() => requireMember('Register to see and answer book requests.')}>Register to take part</button>
+                </div>
               ) : (
                 <>
 
@@ -16454,17 +16486,12 @@ export default function App() {
 
           {activeTab === 'cart' && (
             <motion.div key="cart" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="pb-24">
-              {!activeUserEmail ? (
-                <div className="max-w-sm mx-auto classic-card p-10 bg-[var(--bg-surface)] text-center space-y-6">
-                  <h2 className="type-h2">Your cart</h2>
-                  <p className="type-body text-[var(--text-secondary)]">Sign in to see the books you’ve asked for and your chats.</p>
-                  <button type="button" onClick={() => setShowLoginModal(true)} className="btn-primary w-full !py-3">Sign in</button>
-                </div>
-              ) : (
+              {/* Open to everyone (30 Sep); a visitor sees an empty cart and
+                  every action asks them to sign in or register first. */}
                 <CartPage
                   view={cartView}
                   onViewChange={setCartView}
-                  meEmail={activeUserEmail}
+                  meEmail={activeUserEmail || ''}
                   sent={swapRequests.filter((r: any) => normalizeEmail(r.senderEmail) === activeUserEmail) as any}
                   received={swapRequests.filter((r: any) => normalizeEmail(r.receiverEmail) === activeUserEmail) as any}
                   chats={activeChats.filter((c) => isAdmin || c.chatStatus !== 'Archived')}
@@ -16489,17 +16516,13 @@ export default function App() {
                     if (chat) setActiveChat(chat);
                     else setErrorMessage('That chat is still being set up. Try again in a moment.');
                   }}
-                  onAccept={(id) => handleUpdateSwapStatus(id, 'Accepted')}
-                  onDecline={(id) => handleUpdateSwapStatus(id, 'Declined')}
+                  onAccept={(id) => { if (requireMember()) handleUpdateSwapStatus(id, 'Accepted'); }}
+                  onDecline={(id) => { if (requireMember()) handleUpdateSwapStatus(id, 'Declined'); }}
                   onCancelWanted={(id) => handleCancelBookRequest(id)}
-                  onRequestBook={() => {
-                    if (isListerActive || isAdmin) setShowBookRequestForm(true);
-                    else showMembershipRequired();
-                  }}
+                  onRequestBook={() => { if (requireMember('Register to ask readers for a book.')) setShowBookRequestForm(true); }}
                   onBrowse={() => navigateTo('browse')}
                   onListBook={openListingForm}
                 />
-              )}
             </motion.div>
           )}
 
@@ -16525,21 +16548,9 @@ export default function App() {
                 </div>
 
                 {!activeUserEmail ? (
-                  <div className="max-w-sm mx-auto classic-card p-12 bg-[var(--bg-surface)] text-center space-y-8">
-                    <div className="w-16 h-16 bg-[var(--bg-page)] rounded-2xl flex items-center justify-center mx-auto text-brand-gold-text">
-                      <Icons.User size={32} />
-                    </div>
-                    <div>
-                      <h4 className="text-xl font-serif text-[var(--text-primary)] mb-2 tracking-tight">Authentication Required</h4>
-                      <p className="text-xs text-[var(--text-secondary)] leading-relaxed opacity-80">Please sign in with your registered email to access your personal collection and requests.</p>
-                    </div>
-                    <button 
-                      onClick={() => setShowLoginModal(true)}
-                      className="w-full btn-primary !py-4 uppercase tracking-eyebrow font-bold text-xs"
-                    >
-                      Sign In Now
-                    </button>
-                  </div>
+                  /* No wall here any more (30 Sep): a visitor is sent to
+                     sign in before this page opens. */
+                  null
                 ) : !profileData ? (
                   <div className="max-w-md mx-auto classic-card p-12 bg-[var(--bg-surface)] flex flex-col items-center gap-6">
                     {profileLoading ? (
@@ -16725,14 +16736,7 @@ export default function App() {
                       {profileActiveSubTab === 'settings' && (
                         <>
                           <EditProfile profileData={profileData!} onCancel={() => setProfileActiveSubTab('overview')} onSave={handleSaveProfile} />
-                          <button type="button" onClick={() => navigateTo('newsletter')}
-                            className="classic-card mt-10 flex w-full items-center justify-between gap-3 border border-brand-border bg-[var(--bg-surface)] p-5 text-left">
-                            <span>
-                              <span className="block font-serif text-xl text-[var(--text-primary)]">Newsletter</span>
-                              <span className="block text-sm text-[var(--text-secondary)]">Read past letters or unsubscribe</span>
-                            </span>
-                            <span aria-hidden="true" className="text-brand-gold-text">→</span>
-                          </button>
+                          {/* 30 Sep (owner's request): the Newsletter lives in Community, not the profile. */}
                           {!isAdmin && <DeleteAccount apiUrl={API_URL} onDeleted={handleAccountDeleted} />}
                         </>
                       )}
@@ -17004,6 +17008,8 @@ export default function App() {
                         };
 
                         const filteredActivities = rawActivities.filter((item) => {
+                          // 30 Sep (owner's request): no newsletter entries in the profile.
+                          if (item.activity_type === 'newsletter_subscribed') return false;
                           if (journeyFilter === 'books') {
                             return ['book_listed', 'reading_space_created', 'tbr_added', 'currently_reading_started', 'favourite_marked', 'recommendation_saved'].includes(item.activity_type);
                           }

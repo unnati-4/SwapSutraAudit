@@ -454,6 +454,10 @@ const SESSION_EXEMPT_ACTIONS = {
   // The story wall is part of the same public room. Posting, recording a
   // view and reading an audience list all stay behind a session.
   getCafeStories: true,
+  // 30 Sep (owner's request): every page is open to look at; only actions
+  // need an account. The Reading Room feed is readable signed-out, with
+  // every email address removed for a visitor (see getReadingRoomFeed).
+  getReadingRoomFeed: true,
   healthCheck: true, listAvailableActions: true,
   // newsletter + event opt-in / opt-out (reached from emails, no session)
   subscribeNewsletter: true, subscribeEventNotify: true, unsubscribeEventNotify: true,
@@ -2507,6 +2511,7 @@ function doGetHandler_(e) {
     // Coffee mugs (30 Sep): the public shelf and the admin enquiry list.
     if (action === 'getMugProducts') return respondJson(getMugProducts());
     if (action === 'getAdminCustomMugEnquiries') return respondJson(getAdminCustomMugEnquiries(e.parameter || {}));
+    if (action === 'getAdminMugProducts') return respondJson(getAdminMugProducts());
 
     if (action === 'getCafeStoryViewers') {
       return respondJson(getCafeStoryViewers(e.parameter || {}));
@@ -6349,6 +6354,8 @@ function doPostHandler_(e) {
     if (action === 'getMugProducts') return respondJson(getMugProducts());
     if (action === 'getAdminCustomMugEnquiries') return respondJson(getAdminCustomMugEnquiries(data));
     if (action === 'updateCustomMugEnquiry') return respondJson(updateCustomMugEnquiry(data));
+    if (action === 'getAdminMugProducts') return respondJson(getAdminMugProducts());
+    if (action === 'saveMugProduct') return respondJson(saveMugProduct(data));
     if (action === 'getDailyPushAdmin' || action === 'setDailyPushSettings' || action === 'sendDailyPushTest') {
       if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: 'Unauthorized' });
       if (action === 'getDailyPushAdmin') return respondJson(getDailyPushAdmin(data));
@@ -14045,7 +14052,10 @@ function handleBookEdit(sheet, row, col, newValue, oldValue) {
 
 function getReadingRoomFeed(data) {
   try {
-    const userEmail = normalizeEmail(data.userEmail || data.email);
+    // The viewer is whoever the session says — never the request body, now
+    // that this feed is public. A signed-out visitor gets no addresses.
+    const userEmail = normalizeEmail(getAuthenticatedEmail() || '');
+    const isVisitor = !userEmail;
     const postSheet = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts);
     const reactionSheet = getOrCreateSheet('ReadingRoomReactions', DB_SCHEMA.ReadingRoomReactions);
     const commentSheet = getOrCreateSheet('ReadingRoomComments', DB_SCHEMA.ReadingRoomComments);
@@ -14095,6 +14105,7 @@ function getReadingRoomFeed(data) {
       });
     }
 
+    const readerIdMemo = {};
     const posts = postValues.slice(1).reverse().map(row => {
       const p = rowToObject(postHeaders, row);
       const postId = String(p.id);
@@ -14110,7 +14121,7 @@ function getReadingRoomFeed(data) {
         reactionValues.slice(1).forEach(rx => {
           if (String(rx[rPostIdx]) === postId) {
             const rxType = rx[rTypeIdx] || 'like';
-            reactions.push({ userEmail: rx[rUserIdx], type: rxType });
+            reactions.push({ userEmail: isVisitor ? '' : rx[rUserIdx], type: rxType });
             if (userEmail && normalizeEmail(rx[rUserIdx]) === userEmail) {
               userReaction = rxType;
             }
@@ -14124,7 +14135,9 @@ function getReadingRoomFeed(data) {
         const cPostIdx = cmHeaders.indexOf('postId');
         commentValues.slice(1).forEach(cm => {
           if (String(cm[cPostIdx]) === postId) {
-            comments.push(rowToObject(cmHeaders, cm));
+            const cObj = rowToObject(cmHeaders, cm);
+            if (isVisitor) { cObj.userEmail = ''; cObj.email = ''; }
+            comments.push(cObj);
           }
         });
       }
@@ -14134,8 +14147,9 @@ function getReadingRoomFeed(data) {
 
       return {
         id: p.id,
-        authorEmail: p.authorEmail,
-        authorName: p.authorName || p.authorEmail?.split('@')[0] || 'Reader',
+        authorEmail: isVisitor ? '' : p.authorEmail,
+        authorReaderId: p.authorEmail ? (readerIdMemo[p.authorEmail] = readerIdMemo[p.authorEmail] || readerPublicId(p.authorEmail)) : '',
+        authorName: p.authorName || (isVisitor ? 'Reader' : p.authorEmail?.split('@')[0]) || 'Reader',
         postType: p.postType || 'thought', // 'thought', 'recommendation', 'review', 'quote', 'poem', 'voice'
         content: p.content,
         bookTitle: p.bookTitle,
@@ -22285,6 +22299,112 @@ const MUG_TIMELINES = {
   '1_3_months': '1–3 months', specific_date: 'Need it by a specific date'
 };
 const MUG_IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
+
+/**
+ * Admin: list mugs sold on Amazon, Flipkart or another store (30 Sep 2026).
+ * The admin pastes the product's own link and the details shown on its
+ * page — nothing is scraped. Visitors click "Buy on Amazon/Flipkart" and
+ * the store opens in a new tab; the order is placed there, not here.
+ * Status: live (on the shelf), draft (saved, hidden) or removed.
+ */
+const MUG_PRODUCT_STATUSES = ['live', 'draft', 'removed'];
+
+/** "Amazon" / "Flipkart" from a product link, or '' for any other store. */
+function mugMarketplaceFromUrl_(url) {
+  const m = String(url || '').toLowerCase().match(/^https:\/\/([^\/?#]+)/);
+  const host = m ? m[1].replace(/^www\./, '') : '';
+  if (/(^|\.)amazon\.(in|com)$|^amzn\.(to|in|eu)$|^a\.co$/.test(host)) return 'Amazon';
+  if (/(^|\.)flipkart\.com$|^fkrt\.(it|cc|co)$|^fktr\.in$/.test(host)) return 'Flipkart';
+  return '';
+}
+
+function getAdminMugProducts() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const sheet = getOrCreateSheet('MugProducts', MUG_PRODUCT_HEADERS);
+  ensureSheetHeaders(sheet, MUG_PRODUCT_HEADERS);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(function (h) { return String(h).trim(); });
+  const items = values.slice(1).map(function (r) {
+    const o = {};
+    headers.forEach(function (h, i) { o[h] = r[i] instanceof Date ? r[i].toISOString() : r[i]; });
+    return o;
+  }).filter(function (o) { return String(o.id || '').trim() && String(o.status || '').toLowerCase() !== 'removed'; });
+  return { success: true, items: items, categories: MUG_CATEGORY_IDS, statuses: MUG_PRODUCT_STATUSES };
+}
+
+function saveMugProduct(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  data = data || {};
+  const https = function (u) { u = String(u || '').trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u.slice(0, 1000) : ''; };
+  const money = function (n) { if (n === '' || n === null || n === undefined) return ''; n = Number(n); return isFinite(n) && n > 0 && n < 1000000 ? Math.round(n) : NaN; };
+  const status = String(data.status || 'draft').toLowerCase();
+  if (MUG_PRODUCT_STATUSES.indexOf(status) === -1) return { success: false, message: 'Unknown status.' };
+
+  const title = mugText_(data.title, 120);
+  const category = String(data.category || '').trim();
+  const sourceUrl = https(data.sourceUrl);
+  const affiliateUrl = https(data.affiliateUrl);
+  const imageUrl = https(data.imageUrl);
+  const price = money(data.price), mrp = money(data.mrp);
+  const errors = {};
+  if (status !== 'removed') {
+    if (!title) errors.title = 'Give the mug a name.';
+    if (MUG_CATEGORY_IDS.indexOf(category) === -1) errors.category = 'Pick a category.';
+    if (!sourceUrl) errors.sourceUrl = 'Paste the product link (it must start with https://).';
+    if (String(data.affiliateUrl || '').trim() && !affiliateUrl) errors.affiliateUrl = 'The affiliate link must start with https://.';
+    if (String(data.imageUrl || '').trim() && !imageUrl) errors.imageUrl = 'The image link must start with https://.';
+    if (price !== '' && isNaN(price)) errors.price = 'Price must be a number in rupees.';
+    if (mrp !== '' && isNaN(mrp)) errors.mrp = 'MRP must be a number in rupees.';
+    if (status === 'live' && !imageUrl) errors.imageUrl = 'Add the product photo link before putting it live.';
+  }
+  if (Object.keys(errors).length) return { success: false, errors: errors, message: 'Please fix the highlighted fields.' };
+
+  const marketplace = mugMarketplaceFromUrl_(sourceUrl) || mugText_(data.sourceMarketplace, 40);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getOrCreateSheet('MugProducts', MUG_PRODUCT_HEADERS);
+    ensureSheetHeaders(sheet, MUG_PRODUCT_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(function (h) { return String(h).trim(); });
+    const col = function (h) { return headers.indexOf(h); };
+    const id = String(data.id || '').trim();
+    let rowIndex = -1;
+    if (id) {
+      for (let i = 1; i < values.length; i++) if (String(values[i][col('id')]) === id) { rowIndex = i; break; }
+      if (rowIndex === -1) return { success: false, message: 'That mug no longer exists.' };
+    }
+    const row = rowIndex === -1 ? headers.map(function () { return ''; }) : values[rowIndex].slice();
+    const set = function (h, v) { if (col(h) !== -1) row[col(h)] = v; };
+    const newId = id || ('MUGP-' + Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyyMMdd') + '-' + Utilities.getUuid().slice(0, 5).toUpperCase());
+    set('id', newId);
+    set('status', status);
+    set('updatedAt', new Date().toISOString());
+    if (status !== 'removed') {
+      set('title', title);
+      set('description', mugText_(data.description, 400));
+      set('category', category);
+      set('imageUrl', imageUrl);
+      set('price', price === '' ? '' : price);
+      set('mrp', mrp !== '' && price !== '' && mrp > price ? mrp : '');
+      set('currency', 'INR');
+      set('availability', mugText_(data.availability, 40));
+      set('sourceMarketplace', marketplace);
+      set('sourceUrl', sourceUrl);
+      set('affiliateUrl', affiliateUrl);
+      set('vendor', mugText_(data.vendor, 60));
+      set('sortOrder', Number(data.sortOrder) || 0);
+      // Ratings are never typed in by hand: a number with no verifiable
+      // source is exactly the fake review this shop refuses to show.
+      set('rating', ''); set('ratingCount', ''); set('ratingSource', '');
+    }
+    if (rowIndex === -1) sheet.appendRow(row);
+    else sheet.getRange(rowIndex + 1, 1, 1, row.length).setValues([row]);
+    return { success: true, id: newId, sourceMarketplace: marketplace };
+  } finally {
+    lock.releaseLock();
+  }
+}
 
 function mugText_(v, max) {
   return String(v === undefined || v === null ? '' : v).replace(/\u0000/g, '').trim().slice(0, max);

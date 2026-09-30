@@ -279,7 +279,10 @@ const PUBLIC_ACTIONS = new Set([
   // to capture.
   'joinLibraryWaitlist',
   // Coffee mugs (30 Sep): the public shelf and custom mug ideas.
-  'getMugProducts', 'submitCustomMugEnquiry'
+  'getMugProducts', 'submitCustomMugEnquiry',
+  // 30 Sep: pages are open to look at; the Reading Room feed is readable
+  // signed-out (Apps Script strips every email for a visitor).
+  'getReadingRoomFeed'
 ]);
 
 // --- MEMBERSHIP MICRO-CACHE (perf) ---

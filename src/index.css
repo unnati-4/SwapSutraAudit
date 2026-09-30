@@ -3894,6 +3894,17 @@ details > summary::-webkit-details-marker { display: none; }
   .admin-mugs__idea { min-width: 14rem; }
   .admin-mugs__status { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; border: 1px solid var(--border-strong); font-size: var(--font-size-xs); white-space: nowrap; }
   .admin-mugs__status.is-new { border-color: var(--text-accent); color: var(--text-accent); }
+  /* Admin → Mugs → Mug shop listings (30 Sep) */
+  .admin-mugp__form { display: grid; gap: 0.9rem; max-width: 40rem; padding: 1.25rem; margin: 1rem 0; border-radius: 20px; border: 1px solid var(--border-strong); background: var(--bg-surface); }
+  .admin-mugp__field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+  .admin-mugp__row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+  .admin-mugp__preview { width: 7rem; height: 7rem; object-fit: cover; border-radius: 14px; border: 1px solid var(--border-strong); }
+  .admin-mugp__list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
+  .admin-mugp__list li { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.75rem; border-radius: 16px; border: 1px solid var(--border-strong); background: var(--bg-surface); }
+  .admin-mugp__list img, .admin-mugp__noimg { flex: none; width: 3rem; height: 3rem; border-radius: 10px; object-fit: cover; display: flex; align-items: center; justify-content: center; background: var(--bg-surface-inset); }
+  .admin-mugp__meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .admin-mugp__meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .admin-mugs__status.is-live { border-color: #2F6B45; color: #2F6B45; }
   .admin-mugs__detail { display: grid; gap: 1.5rem; margin-top: 1.5rem; }
   @media (min-width: 1000px) { .admin-mugs__detail { grid-template-columns: 1.3fr 1fr; } }
   .admin-mugs__brief pre {

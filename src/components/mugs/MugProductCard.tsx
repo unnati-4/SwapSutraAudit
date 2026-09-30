@@ -72,7 +72,7 @@ const MugProductCard: React.FC<{ product: MugProduct; onView: (p: MugProduct) =>
           <button type="button" className="mug-btn mug-btn--quiet" onClick={() => onView(product)}>View Mug</button>
           {buyUrl && (
             <a className="mug-btn mug-btn--solid" href={buyUrl} target="_blank" rel="sponsored noopener noreferrer">
-              Buy Now<span className="sr-only"> (opens {product.sourceMarketplace || 'the seller’s site'})</span> ↗
+              {product.sourceMarketplace ? `Buy on ${product.sourceMarketplace}` : 'Buy Now'}<span className="sr-only"> (opens in a new tab)</span> ↗
             </a>
           )}
         </div>

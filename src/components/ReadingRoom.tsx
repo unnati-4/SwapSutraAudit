@@ -64,6 +64,9 @@ export interface ReadingRoomProps {
   /** Community's own Posts / Shout-outs tabs (30 Sep): hides the duplicate
    *  shout-outs chip and hears when the feed switches in or out of it. */
   onShoutoutsChange?: (on: boolean) => void;
+  /** 30 Sep: anyone can read the room; any action by a visitor or an
+   *  unregistered reader asks them to sign in / register instead. */
+  onRequireAuth?: (why: string) => void;
 }
 
 /* Photos in posts ------------------------------------------------------
@@ -166,7 +169,14 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
   onOpenCurrentReadCircle,
   onOpenReader,
   onShoutoutsChange,
+  onRequireAuth,
 }) => {
+  // True when the reader may act; otherwise asks them to join and says why.
+  const canAct = (why: string) => {
+    if (userEmail && isMember) return true;
+    if (onRequireAuth) onRequireAuth(why); else alert(why);
+    return false;
+  };
   // Two sections only. Older links (?tab=saved, joined-circles, …) still
   // land somewhere sensible.
   const CIRCLE_TABS = ['current-reads', 'readers-circles', 'circles', 'groups', 'joined-circles', 'joined', 'you-can-join', 'discover'];
@@ -401,10 +411,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
 
   const handleCreatePost = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userEmail) {
-      alert('Please log in to post in the Reading Room.');
-      return;
-    }
+    if (!canAct('Register to post in the Reading Room.')) return;
     if (postType === 'recognition') {
       if (!shoutReader) { alert('Pick the reader you want to recognise.'); return; }
       if (!postContent.trim()) { alert('Say what they did that deserves the shout-out.'); return; }
@@ -474,10 +481,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
       alert('Please enter a book title for the circle.');
       return;
     }
-    if (!userEmail) {
-      alert('Please log in to create a Readers Circle.');
-      return;
-    }
+    if (!canAct('Register to start a reading circle.')) return;
 
     setIsCreatingCircleSubmitting(true);
     try {
@@ -534,10 +538,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
   };
 
   const handleToggleReaction = async (postId: string, reactionType: 'like' | 'love' | 'thoughtful') => {
-    if (!userEmail) {
-      alert('Please log in to react.');
-      return;
-    }
+    if (!canAct('Register to react to posts.')) return;
 
     setPosts(prev =>
       prev.map(p => {
@@ -582,6 +583,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
     const text = commentInputs[postId] || '';
     const voiceUrl = activeCommentVoice[postId] || '';
     if (!text.trim() && !voiceUrl) return;
+    if (!canAct('Register to comment.')) return;
 
     try {
       const res = await fetch(apiBaseUrl, {
@@ -615,10 +617,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
   };
 
   const handleSaveRecommendation = async (postId: string) => {
-    if (!userEmail) {
-      alert('Please log in to save items.');
-      return;
-    }
+    if (!canAct('Register to save posts.')) return;
 
     let isNowSaved = false;
 
@@ -706,10 +705,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
   };
 
   const handleJoinCircleAction = async (circleId: string) => {
-    if (!userEmail) {
-      alert('Please log in to join a Readers Circle.');
-      return;
-    }
+    if (!canAct('Register to join a reading circle.')) return;
 
     // Optimistically add user to circle members
     setCirclesList(prev => prev.map(c => {
@@ -786,7 +782,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
   }, [posts, postFilter]);
 
   const openComposer = () => {
-    if (!userEmail) { onNavigateToTab('profile'); return; }
+    if (!canAct('Register to post in the Reading Room.')) return;
     if (postFilter === 'recognition') setPostType('recognition');
     setIsComposerOpen(true);
   };
