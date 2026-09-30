@@ -89,6 +89,8 @@ with sync_playwright() as p:
     bar.nth(5).click(); pg.wait_for_timeout(900)
     check('14. Profile opens /profile', pg.evaluate('location.pathname') == '/profile' and bar.nth(5).get_attribute('aria-current') == 'page')
     check('14a. Profile no longer has a Cart section', pg.get_by_role('button', name='Cart', exact=False).filter(has_text='Cart (').count() == 0)
+    pg.get_by_role('button', name='Settings').first.click(); pg.wait_for_timeout(500)
+    check('14d. No Newsletter in the profile', pg.get_by_text('Read past letters or unsubscribe').count() == 0)
     pg.get_by_role('button', name='Reading Tracker').click(); pg.wait_for_timeout(800)
     check('14b. The reading tracker is in the profile at /tracker', pg.evaluate('location.pathname') == '/tracker' and pg.locator('[data-testid="profile-tracker"]').is_visible() and bar.nth(5).get_attribute('aria-current') == 'page')
     pg.goto(BASE + '/tracker'); pg.wait_for_timeout(1500)

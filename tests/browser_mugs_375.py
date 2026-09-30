@@ -59,12 +59,8 @@ with sync_playwright() as p:
     check('1. /mugs opens with the hero headline', pg.get_by_text('Mugs for people who take their coffee personally.').is_visible())
     check('2. Empty shelf is honest: "Products coming soon", no product cards', pg.locator('[data-testid="mugs-empty"]').is_visible() and pg.locator('[data-testid="mug-card"]').count() == 0)
     check('3. No DEVELOPMENT ONLY samples on the built site', pg.get_by_text('DEVELOPMENT ONLY').count() == 0 and pg.get_by_text('DEV SAMPLE').count() == 0)
-    # 30 Sep (owner's request): the shop is "Coming soon" (MUG_SHOP_OPEN = false).
-    SHOP_OPEN = 'MUG_SHOP_OPEN = true' in open(os.path.join(os.path.dirname(__file__), '..', 'src', 'components', 'mugs', 'MugsPage.tsx')).read()
-    if SHOP_OPEN:
-        check('4. All six categories are there', all(pg.get_by_text(c).count() > 0 for c in ['Bookish Mugs', 'Minimal Mugs', 'Funny Reader Mugs', 'Café-Style Mugs', 'Aesthetic Mugs', 'Personalized Mugs']))
-    else:
-        check('4. Shop closed: "Coming soon" is shown and there are no categories', pg.locator('[data-testid="mugs-coming-soon"]').is_visible() and pg.get_by_text('Coming soon.').is_visible() and pg.get_by_text('Bookish Mugs').count() == 0)
+    # 30 Sep: with no live mug the shop says "Coming soon" (it opens by itself once one is live).
+    check('4. No live mugs: "Coming soon" and no categories', pg.locator('[data-testid="mugs-coming-soon"]').is_visible() and pg.get_by_text('Coming soon.').is_visible() and pg.get_by_text('Bookish Mugs').count() == 0)
     check('5. "Have a mug idea?" section is on the page', pg.get_by_text('Have a mug idea?').is_visible())
     check('6. No horizontal scroll on /mugs', pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth'))
     check('7. Nothing smaller than 11px', pg.evaluate(JS_SMALL) >= 11)
@@ -149,25 +145,20 @@ with sync_playwright() as p:
         {'id': 'p1', 'title': 'Stoneware reading mug', 'description': 'Matte cream glaze.', 'category': 'minimal', 'imageUrl': '', 'price': 749, 'mrp': 999, 'currency': 'INR', 'availability': '', 'sourceMarketplace': 'Amazon', 'sourceUrl': 'https://www.amazon.in/dp/EXAMPLE', 'affiliateUrl': 'https://www.amazon.in/dp/EXAMPLE?tag=x', 'vendor': '', 'rating': None, 'ratingCount': None, 'ratingSource': ''},
         {'id': 'p2', 'title': 'Hand-thrown café cup', 'description': 'From a Jaipur studio.', 'category': 'cafe-style', 'imageUrl': '', 'price': 1200, 'mrp': None, 'currency': 'INR', 'availability': 'Made to order', 'sourceMarketplace': '', 'sourceUrl': '', 'affiliateUrl': '', 'vendor': 'Studio Mitti', 'rating': None, 'ratingCount': None, 'ratingSource': ''},
     ]
-    if not SHOP_OPEN:
-        pg2 = ctx.new_page(); pg2.goto(BASE + '/mugs'); pg2.wait_for_selector('[data-testid="mugs-coming-soon"]', timeout=15000); pg2.wait_for_timeout(800)
-        check('34. Shop closed: even with live rows in the feed, no product cards show', pg2.locator('[data-testid="mug-card"]').count() == 0)
-        check('35. Shop closed: "Create Your Mug" still opens the enquiry', (pg2.get_by_role('button', name='Create Your Mug').first.click() or True) and pg2.locator('[role="dialog"]').first.is_visible())
-    else:
-        pg2 = ctx.new_page(); pg2.goto(BASE + '/mugs'); pg2.wait_for_selector('[data-testid="mug-card"]', timeout=15000)
-        cards = pg2.locator('[data-testid="mug-card"]')
-        check('34. Live products render as cards', cards.count() == 2)
-        t = cards.nth(0).inner_text()
-        check('35. An external product says where it is sold, shows price, MRP and the real saving', 'sold on amazon' in t.lower() and '₹749' in t and '₹999' in t and '25% off MRP' in t, t)
-        check('36. No rating is shown when the source gave none', '★' not in pg2.locator('.mugs-grid').inner_text())
-        buy = cards.nth(0).get_by_role('link')
-        check('37. Buy Now goes out to the marketplace (sponsored, new tab)', buy.get_attribute('href').startswith('https://www.amazon.in/') and 'sponsored' in buy.get_attribute('rel') and buy.get_attribute('target') == '_blank')
-        check('38. The affiliate/marketplace disclosure appears', pg2.get_by_text('not by SwapSutra').count() > 0)
-        t2 = cards.nth(1).inner_text()
-        check('39. A product without MRP shows no discount', 'off MRP' not in t2 and '₹1,200' in t2)
-        pg2.get_by_role('button', name='Café-Style Mugs').click(); pg2.wait_for_timeout(200)
-        check('40. Categories filter the grid', pg2.locator('[data-testid="mug-card"]').count() == 1)
-        check('41. Two columns on a phone', len(set(round(c.bounding_box()['x']) for c in ctx.pages[-1].locator('[data-testid="mug-card"]').all())) >= 1 and pg2.evaluate("getComputedStyle(document.querySelector('.mugs-grid')).gridTemplateColumns.split(' ').length") == 2)
+    pg2 = ctx.new_page(); pg2.goto(BASE + '/mugs'); pg2.wait_for_selector('[data-testid="mug-card"]', timeout=15000)
+    cards = pg2.locator('[data-testid="mug-card"]')
+    check('34. The shop opens by itself once mugs are live', cards.count() == 2)
+    t = cards.nth(0).inner_text()
+    check('35. An external product says where it is sold, shows price, MRP and the real saving', 'sold on amazon' in t.lower() and '₹749' in t and '₹999' in t and '25% off MRP' in t, t)
+    check('36. No rating is shown when the source gave none', '★' not in pg2.locator('.mugs-grid').inner_text())
+    buy = cards.nth(0).get_by_role('link')
+    check('37. "Buy on Amazon" opens Amazon in a new tab (sponsored)', buy.get_attribute('href').startswith('https://www.amazon.in/') and 'sponsored' in buy.get_attribute('rel') and buy.get_attribute('target') == '_blank' and 'Buy on Amazon' in buy.inner_text())
+    check('38. The affiliate/marketplace disclosure appears', pg2.get_by_text('not by SwapSutra').count() > 0)
+    t2 = cards.nth(1).inner_text()
+    check('39. A product without MRP shows no discount', 'off MRP' not in t2 and '₹1,200' in t2)
+    pg2.get_by_role('button', name='Café-Style Mugs').click(); pg2.wait_for_timeout(200)
+    check('40. Categories filter the grid', pg2.locator('[data-testid="mug-card"]').count() == 1)
+    check('41. Two columns on a phone', len(set(round(c.bounding_box()['x']) for c in ctx.pages[-1].locator('[data-testid="mug-card"]').all())) >= 1 and pg2.evaluate("getComputedStyle(document.querySelector('.mugs-grid')).gridTemplateColumns.split(' ').length") == 2)
     b.close()
 print(f'\n{ok} passed, {fail} failed')
 sys.exit(0 if fail == 0 else 1)

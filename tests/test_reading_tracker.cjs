@@ -57,19 +57,20 @@ check('M11. Each card has Update Progress and shows time left or the start date'
 check('M14. A "Continue reading" hero with a progress ring leads the page', /Continue reading/.test(trackerSrc) && /const ContinueCard/.test(trackerSrc));
 check('M15. Tabs are short enough for one line on a phone', /short: 'Reading'/.test(trackerSrc) && /whitespace-nowrap/.test(trackerSrc));
 // 30 Sep (owner's request): the tracker left the bar and menu; /tracker still works.
-check('M12. The tracker still has its own page at /tracker', /'\/tracker': 'tracker'/.test(app) && /activeTab === 'tracker' && \(/.test(app));
+check('M12. /tracker opens the tracker inside the profile', /'\/tracker': 'tracker'/.test(app) && /if \(activeTab !== 'tracker'\) return;\s*setProfileActiveSubTab\('tracker'\);/.test(app));
 check('M13. Library covers are reused on tracker cards', /cover: trackerCoverFor\(/.test(app));
 check('M9. Each book shows a finish-by date', /Finish by/.test(trackerSrc) && /aria-label="Minutes you read a day"/.test(trackerSrc));
 
 console.log('\n--- The page ---');
 // The tracker lives on its own page (/tracker) now, not inside My Profile.
-const insights = app.slice(app.indexOf("activeTab === 'tracker' && ("), app.indexOf("activeTab === 'tracker' && (") + 4000);
+const insights = app.slice(app.indexOf("profileActiveSubTab === 'tracker' && ("), app.indexOf("profileActiveSubTab === 'tracker' && (") + 4000);
 check('7. The tracker page renders the tracker', /<ReadingTracker[\s\S]*onUpdate=\{saveTrackerBook\}/.test(insights));
 check('8. It shows reading, want-to-read and finished books from the reading space', /currentlyReading: Boolean\(item\.currently_reading\)/.test(app) && /wantToRead: Boolean\(item\.tbr\)/.test(app) && /books=\{trackerBooks\}/.test(insights));
 for (const gone of ['Reading Mood', 'Weekend Calculator', 'Magical Realism', 'readingPaceInput', 'Bento']) {
   check(`9. Removed from the page: ${gone}`, !insights.includes(gone));
 }
-check('10. My Profile no longer carries a copy of the tracker', !/profileActiveSubTab === 'insights'/.test(app) && !/sub: 'insights'/.test(app) && (app.match(/<ReadingTracker\b/g) || []).length === 1);
+// 30 Sep (owner's request): the tracker moved into the profile — still one copy.
+check('10. One tracker, in Profile → Reading Tracker', !/profileActiveSubTab === 'insights'/.test(app) && (app.match(/<ReadingTracker\b/g) || []).length === 1 && /profileActiveSubTab === 'tracker' && \(/.test(app) && /sub: 'tracker'/.test(app));
 check('11. Several books can be tracked (the list is mapped, not a single slot)', /shown\.map\(\(b\) =>/.test(trackerSrc));
 check('12. Finishing moves the book to the shelf', /currently_reading: false,\s*bookshelf: true/.test(trackerSrc));
 check('13. Saves go to the reading space with the page progress', /action: 'upsertReadingSpaceBook'[\s\S]{0,300}\.\.\.changes/.test(app));
