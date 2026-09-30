@@ -1,0 +1,35 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/swapsutra",
+      "destination": "/api/swapsutra.ts"
+    },
+    {
+      "source": "/api/quill/:path*",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/api/notifications/:route",
+      "destination": "/api/notifications.ts?route=:route"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    },
+    {
+      "source": "/:path*",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
+    }
+  ]
+}
