@@ -53,6 +53,9 @@ with sync_playwright() as p:
     check('2. Every bottom-bar label fits on one line', pg.evaluate("""[...document.querySelectorAll('nav[aria-label="Primary mobile navigation"] button span:last-child')].every(s => s.getBoundingClientRect().height < 20)"""))
     check('3. Books is highlighted on the Library', bar.nth(0).get_attribute('aria-current') == 'page')
     check('4. The Library no longer carries "Books wanted"', pg.get_by_text('Books wanted').count() == 0)
+    hc = pg.locator('[data-testid="header-cart"]')
+    check('4a. Cart is an icon: bottom-bar cart icon on a phone (header icon is desktop-only)', not hc.is_visible() and bar.nth(2).locator('svg').count() == 1 and pg.locator('.ss-header__links button', has_text='Cart').count() == 0)
+    check('4b. The header fits a 360px phone', pg.evaluate("(() => { const h = document.querySelector('.ss-header__inner'); return h.scrollWidth <= h.clientWidth + 1; })()"))
 
     bar.nth(1).click(); pg.wait_for_timeout(900)
     check('5. Shelf opens /shelf on My Shelf', pg.evaluate('location.pathname') == '/shelf' and pg.get_by_text('Listed Books').count() > 0)

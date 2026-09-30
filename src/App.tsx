@@ -19,7 +19,7 @@ import {
   Bell, ArrowDownLeft, ArrowUpRight, MessageCircle, Send, Paperclip,
   Instagram, Youtube, Linkedin, Facebook, Loader, ChevronDown, Eye, FileText, CheckCircle, CheckSquare, AlertTriangle, Image as ImageIcon,
   Feather, Award, Zap, Sparkles, Smile, Trophy, Heart, Compass, Gift,
-  Share2, UserRound, ShoppingBag,
+  Share2, UserRound, ShoppingBag, ShoppingCart,
 } from 'lucide-react';
 import { } from 'qrcode.react';
 // Split out of the main bundle (item 17).
@@ -1677,6 +1677,7 @@ const getEventGalleryMedia = (event: Partial<SwapEvent>) => {
 const Icons = {
   UserRound,
   ShoppingBag,
+  ShoppingCart,
   Share: Share2,
   Search,
   Eye,
@@ -12711,6 +12712,10 @@ export default function App() {
   // Requests / Chats / Wanted panels (notifications, /my-requests, "open
   // chat" links) land on the matching Cart view instead.
   const [cartView, setCartView] = useState<CartView>('cart');
+  // Requests for my books still waiting on me — the badge on the cart icon.
+  const cartNeedsYou = activeUserEmail
+    ? swapRequests.filter((r: any) => normalizeEmail(r.receiverEmail) === activeUserEmail && String(r.status || '').toLowerCase() === 'pending').length
+    : 0;
   // The private chat for a swap request: the two readers, either way round.
   const findChatForRequest = (req: { senderEmail?: string; receiverEmail?: string }) =>
     activeChats.find((c) =>
@@ -14430,7 +14435,8 @@ export default function App() {
           </button>
 
           <div className="ss-header__links hidden xl:flex items-center">
-            {PRIMARY_NAV.filter((n) => n.key !== 'profile').map((n) => (
+            {/* Cart is an icon on the right (1 Oct, owner's request). */}
+            {PRIMARY_NAV.filter((n) => n.key !== 'profile' && n.key !== 'cart').map((n) => (
               <button
                 key={n.key}
                 type="button"
@@ -14481,6 +14487,22 @@ export default function App() {
                 <span className="sm:hidden">Trial ended</span>
               </button>
             )}
+            <button
+              type="button"
+              // Desktop only: on phones and tablets the bottom bar carries the cart icon.
+              className="ss-header__icon relative hidden xl:inline-flex"
+              aria-label={cartNeedsYou > 0 ? `Cart — ${cartNeedsYou} request${cartNeedsYou === 1 ? '' : 's'} waiting for you` : 'Cart'}
+              aria-current={primaryKey === 'cart' ? 'page' : undefined}
+              onClick={() => goPrimary('cart')}
+              data-testid="header-cart"
+            >
+              <Icons.ShoppingCart size={21} />
+              {cartNeedsYou > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 bg-brand-gold text-white text-2xs rounded-full border-2 border-white flex items-center justify-center font-bold">
+                  {cartNeedsYou > 9 ? '9+' : cartNeedsYou}
+                </span>
+              )}
+            </button>
             {activeUserEmail && (
               <button 
                 onClick={() => navigateTo('notifications')}
@@ -14716,7 +14738,7 @@ export default function App() {
               // the menu, in the same words. Mugs is in the menu.
               { key: 'books' as const, label: 'Books', icon: Icons.Compass },
               { key: 'shelf' as const, label: 'Shelf', icon: Icons.BookOpen },
-              { key: 'cart' as const, label: 'Cart', icon: Icons.ShoppingBag },
+              { key: 'cart' as const, label: 'Cart', icon: Icons.ShoppingCart },
               { key: 'chat' as const, label: 'Chat', icon: Icons.MessageCircle },
               { key: 'community' as const, label: 'Community', icon: Icons.Users },
               { key: 'profile' as const, label: 'Profile', icon: Icons.User },
@@ -14741,6 +14763,14 @@ export default function App() {
                         aria-label={`${cafeUnread} new café message${cafeUnread === 1 ? '' : 's'}`}
                       >
                         {cafeUnread > 9 ? '9+' : cafeUnread}
+                      </span>
+                    )}
+                    {item.key === 'cart' && cartNeedsYou > 0 && (
+                      <span
+                        className="absolute -top-1.5 -right-2.5 min-w-[17px] h-[17px] px-1 rounded-full bg-brand-gold text-white text-2xs font-bold leading-[17px] text-center"
+                        aria-label={`${cartNeedsYou} request${cartNeedsYou === 1 ? '' : 's'} waiting for you`}
+                      >
+                        {cartNeedsYou > 9 ? '9+' : cartNeedsYou}
                       </span>
                     )}
                   </span>
