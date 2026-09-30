@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>SwapSutra Campus Ambassador Certificate — Template</title>
+<style>
+  /*
+    ⚠️ BEFORE YOU USE THIS
+    Fill in every [BRACKET] below, duplicate this file per ambassador (or
+    just edit and re-save/re-print each time), then open in a browser and
+    print to PDF ("Save as PDF" in the print dialog). Landscape, no margins,
+    background graphics ON, gives the cleanest result.
+
+    Keep the description of what they did HONEST and specific — this is
+    unpaid volunteer participation, not employment or an internship, and the
+    certificate should never imply otherwise. See campus-ambassador-
+    volunteer-agreement.md clause 3B for why that matters.
+
+    Only describe work the ambassador actually submitted proof of and Unnati
+    Goyal confirmed, per clause 3A of that agreement. Don't fill this in from
+    memory or a verbal claim — check the submitted proof first.
+  */
+  @page { size: A4 landscape; margin: 0; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #ECE6D8;
+    font-family: 'Georgia', 'Times New Roman', serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .certificate {
+    width: 297mm;
+    height: 210mm;
+    background: #FBF8F1;
+    position: relative;
+    padding: 14mm;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+  }
+  .border {
+    position: absolute;
+    inset: 8mm;
+    border: 1.5pt solid #C8A97E;
+    pointer-events: none;
+  }
+  .border::before {
+    content: '';
+    position: absolute;
+    inset: 3mm;
+    border: 0.5pt solid #C8A97E;
+  }
+  .content {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 8mm 20mm;
+  }
+  .brand {
+    font-size: 15pt;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: #7A6A4F;
+    font-weight: 700;
+    margin-bottom: 2mm;
+  }
+  .tagline {
+    font-size: 8pt;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #A99B7F;
+    font-style: italic;
+    margin-bottom: 10mm;
+  }
+  .title {
+    font-size: 28pt;
+    color: #3A3226;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    margin-bottom: 8mm;
+  }
+  .presented {
+    font-size: 10pt;
+    color: #6B5E48;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin-bottom: 4mm;
+  }
+  .name {
+    font-size: 24pt;
+    color: #2F5D50;
+    font-style: italic;
+    margin-bottom: 8mm;
+    border-bottom: 1pt solid #C8A97E;
+    padding-bottom: 3mm;
+    min-width: 100mm;
+  }
+  .body-text {
+    font-size: 11pt;
+    color: #4A4136;
+    line-height: 1.8;
+    max-width: 170mm;
+  }
+  .body-text b { color: #2F5D50; }
+  .footer {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 0 20mm 6mm;
+  }
+  .sig-block { text-align: center; width: 60mm; }
+  .sig-line { border-top: 0.75pt solid #7A6A4F; padding-top: 2mm; }
+  .sig-name { font-size: 10pt; color: #3A3226; font-weight: 700; }
+  .sig-role { font-size: 8pt; color: #7A6A4F; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 1mm; }
+  .date-block { text-align: center; font-size: 9pt; color: #7A6A4F; }
+  .ref { position: absolute; bottom: 4mm; right: 12mm; font-size: 7pt; color: #B5A88C; letter-spacing: 0.05em; }
+
+  @media screen {
+    body { padding: 20px; }
+  }
+  @media print {
+    body { background: none; }
+    .certificate { box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+  <div class="certificate">
+    <div class="border"></div>
+
+    <div class="content">
+      <div class="brand">SwapSutra</div>
+      <div class="tagline">Keep Your Books Travelling</div>
+
+      <div class="title">Certificate of Participation</div>
+
+      <div class="presented">This certifies that</div>
+      <div class="name">[AMBASSADOR FULL NAME]</div>
+
+      <div class="body-text">
+        volunteered as a <b>SwapSutra Campus Ambassador</b> at <b>[COLLEGE NAME]</b>
+        from <b>[START DATE]</b> to <b>[END DATE]</b>, contributing to
+        <b>[BRIEF, HONEST DESCRIPTION — e.g. "campus outreach, student
+        onboarding support, and a book-drive event"]</b>.
+        <br /><br />
+        This was an unpaid, volunteer role. The work described above was
+        submitted with supporting evidence and reviewed by the undersigned.
+        We are grateful for the time, energy and enthusiasm brought to the
+        SwapSutra reading community.
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="sig-block">
+        <div class="sig-line">
+          <div class="sig-name">Unnati Goyal</div>
+          <div class="sig-role">Founder &amp; Admin, SwapSutra</div>
+        </div>
+      </div>
+
+      <div class="date-block">
+        Issued [DATE OF ISSUE]<br />
+        [CITY], India
+      </div>
+
+      <div class="sig-block">
+        <div class="sig-line">
+          <div class="sig-name">&nbsp;</div>
+          <div class="sig-role">Ambassador Signature (optional)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ref">SwapSutra Campus Ambassador Programme · SwapSutra.in · Udyam Reg. No. UDYAM-UP-64-0140512</div>
+  </div>
+
+</body>
+</html>

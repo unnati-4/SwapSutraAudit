@@ -1,0 +1,34 @@
+-- ══════════════════════════════════════════════════════════════════════════
+-- 008 — GEMINI_ESTIMATED, a new boundary_method value
+-- ──────────────────────────────────────────────────────────────────────────
+-- appsscript.js's resolveListingPricing() now has a tier between the
+-- catalogue RPC and the Sheet fallback: when the catalogue has no data for
+-- an edition (not a price refusal — a genuine miss), it asks Gemini for a
+-- realistic INR market-price range for that exact edition + condition,
+-- validates the response server-side, and — on success — writes the result
+-- straight into listing_prices (the same table validate_and_record_listing
+-- writes), tagged with methodology = 'GEMINI_ESTIMATED' so it is honestly
+-- distinguishable from EDITION_OBSERVATIONS/MRP_DERIVED/etc. in any future
+-- audit or in the MRP evidence-tier hierarchy pricing/README.md documents.
+--
+-- ALTER TYPE ... ADD VALUE cannot be used and then referenced in the SAME
+-- transaction on older PostgreSQL, so this is its own file/transaction,
+-- run after 001-007, rather than folded into 003 or 005.
+--
+-- RUN THIS BEFORE the Apps Script Gemini-pricing code path goes live on a
+-- given Supabase project. Until it runs, a listing_prices INSERT/upsert
+-- carrying methodology='GEMINI_ESTIMATED' is simply rejected by Postgres
+-- (invalid enum value) — appsscript.js's storeGeminiPriceEstimate_ treats
+-- that the same as any other failed Supabase write and falls back to the
+-- GeminiPriceEstimates sheet cache, so nothing breaks, but the estimate
+-- will not land in Supabase until this migration has been applied.
+--
+-- NOT EXECUTED OR VERIFIED AGAINST A LIVE DATABASE in this change — see the
+-- engagement report for why (no reachable Postgres/Supabase instance from
+-- this sandbox). Run it yourself with:
+--   psql $DATABASE_URL -f sql/008_gemini_estimated_methodology.sql
+-- or the Supabase SQL editor, and confirm with:
+--   SELECT unnest(enum_range(NULL::boundary_method));
+-- ══════════════════════════════════════════════════════════════════════════
+
+ALTER TYPE boundary_method ADD VALUE IF NOT EXISTS 'GEMINI_ESTIMATED';

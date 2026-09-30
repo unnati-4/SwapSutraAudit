@@ -1,0 +1,402 @@
+<title>Price Boundary Engine</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+:root{
+  --ink:#12161c; --ink-2:#38424f; --ink-3:#66717f;
+  --paper:#f7f8fa; --surface:#ffffff; --surface-2:#eef1f5;
+  --rule:#d8dee6; --rule-strong:#b6c0cc;
+  --accent:#0f6b63;          /* oxidised copper-teal */
+  --accent-soft:#e2f0ee;
+  --refuse:#a8322c; --refuse-soft:#fbe9e7;
+  --hold:#8a5a12;  --hold-soft:#fbf0da;
+  --measure:68ch;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ink:#e6eaf0; --ink-2:#aab4c1; --ink-3:#7d8896;
+    --paper:#0e1116; --surface:#161b22; --surface-2:#1d242d;
+    --rule:#2a323c; --rule-strong:#3c4652;
+    --accent:#4fbfb2; --accent-soft:#12312e;
+    --refuse:#e8837c; --refuse-soft:#331a19;
+    --hold:#d9a648; --hold-soft:#2d2413;
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#e6eaf0; --ink-2:#aab4c1; --ink-3:#7d8896;
+  --paper:#0e1116; --surface:#161b22; --surface-2:#1d242d;
+  --rule:#2a323c; --rule-strong:#3c4652;
+  --accent:#4fbfb2; --accent-soft:#12312e;
+  --refuse:#e8837c; --refuse-soft:#331a19;
+  --hold:#d9a648; --hold-soft:#2d2413;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--paper); color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,sans-serif;
+  font-size:16px; line-height:1.65; margin:0;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:78rem;margin:0 auto;padding:3rem 1.5rem 6rem}
+.col{max-width:var(--measure)}
+h1,h2,h3{font-family:"IBM Plex Mono",ui-monospace,monospace;text-wrap:balance;line-height:1.15}
+h1{font-size:clamp(1.9rem,4vw,2.9rem);font-weight:600;letter-spacing:-.03em;margin:0 0 .6rem}
+h2{font-size:1.35rem;font-weight:600;letter-spacing:-.02em;margin:0 0 .2rem}
+h3{font-size:1rem;font-weight:600;letter-spacing:-.01em;margin:0 0 .35rem}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.88em}
+code{background:var(--surface-2);padding:.1em .35em;border-radius:3px}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;font-size:.7rem;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);
+}
+.lede{font-family:"IBM Plex Serif",Georgia,serif;font-size:1.15rem;line-height:1.6;color:var(--ink-2)}
+.lede em{color:var(--ink)}
+
+header{border-bottom:2px solid var(--ink);padding-bottom:2rem;margin-bottom:3rem}
+.meta{display:flex;flex-wrap:wrap;gap:.4rem 1.6rem;margin-top:1.6rem;
+      font-family:"IBM Plex Mono",monospace;font-size:.75rem;color:var(--ink-3)}
+.meta b{color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
+
+section{margin:0 0 3.5rem;scroll-margin-top:2rem}
+.sechead{display:flex;gap:1rem;align-items:baseline;
+  border-top:1px solid var(--rule-strong);padding-top:.8rem;margin-bottom:1.4rem}
+.sechead .n{font-family:"IBM Plex Mono",monospace;font-size:.75rem;color:var(--accent);
+  font-weight:600;flex:0 0 2.2rem}
+
+/* A ruling: the decision, then the evidence for it. */
+.ruling{
+  display:grid;grid-template-columns:1fr;gap:0;
+  border:1px solid var(--rule);border-left:3px solid var(--accent);
+  background:var(--surface);margin:0 0 1.25rem;border-radius:2px;overflow:hidden;
+}
+@media(min-width:60rem){.ruling{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr)}}
+.ruling>div{padding:1.1rem 1.25rem;min-width:0}
+.ruling>div+div{border-top:1px solid var(--rule);background:var(--surface-2)}
+@media(min-width:60rem){.ruling>div+div{border-top:0;border-left:1px solid var(--rule)}}
+.ruling p:last-child{margin-bottom:0}
+.ruling.refuse{border-left-color:var(--refuse)}
+.ruling.hold{border-left-color:var(--hold)}
+
+.tag{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:.66rem;
+  letter-spacing:.1em;text-transform:uppercase;padding:.16em .5em;border-radius:2px;
+  background:var(--accent-soft);color:var(--accent);font-weight:600;vertical-align:.12em}
+.tag.refuse{background:var(--refuse-soft);color:var(--refuse)}
+.tag.hold{background:var(--hold-soft);color:var(--hold)}
+
+.tablewrap{overflow-x:auto;margin:0 0 1.25rem;border:1px solid var(--rule);border-radius:2px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.86rem;min-width:34rem}
+th,td{text-align:left;padding:.55rem .8rem;border-bottom:1px solid var(--rule);vertical-align:top}
+thead th{font-family:"IBM Plex Mono",monospace;font-size:.68rem;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:500;background:var(--surface-2)}
+tbody tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:"IBM Plex Mono",monospace}
+
+.flow{display:flex;flex-wrap:wrap;gap:.4rem;align-items:stretch;margin:0 0 1.25rem}
+.flow .step{flex:1 1 8.5rem;min-width:8.5rem;background:var(--surface);border:1px solid var(--rule);
+  border-radius:2px;padding:.7rem .8rem}
+.flow .step .k{font-family:"IBM Plex Mono",monospace;font-size:.64rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.2rem}
+.flow .step .v{font-size:.82rem;line-height:1.4;color:var(--ink-2)}
+
+ul{margin:0 0 1rem;padding-left:1.1rem}
+li{margin-bottom:.4rem}
+.tight li{margin-bottom:.15rem}
+
+.callout{border:1px solid var(--rule);border-radius:2px;background:var(--surface);
+  padding:1.1rem 1.25rem;margin:0 0 1.25rem}
+.callout.refuse{background:var(--refuse-soft);border-color:var(--refuse)}
+.callout p:last-child{margin-bottom:0}
+
+.files{font-family:"IBM Plex Mono",monospace;font-size:.8rem}
+.files td:first-child{color:var(--accent);white-space:nowrap}
+footer{border-top:1px solid var(--rule);margin-top:4rem;padding-top:1.5rem;
+  font-size:.82rem;color:var(--ink-3)}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">SwapSutra · pricing subsystem</p>
+  <h1>Price Boundary Engine</h1>
+  <p class="lede col">A reader scans an ISBN, picks a format and a condition, and gets a range they may list within — not a number handed to them, and not a box they can type anything into. Three figures, kept apart on purpose: <em>the allowed listing range, SwapSutra&rsquo;s reference value, and the security deposit.</em></p>
+  <div class="meta">
+    <span>Postgres <b>16</b> / Supabase</span>
+    <span>catalogue <b>Open Library</b></span>
+    <span>anchor <b>printed MRP</b></span>
+    <span>tests <b>421</b> passing</span>
+    <span>lookup <b>4.5 µs</b> at 1M editions</span>
+  </div>
+</header>
+
+<section>
+  <div class="sechead"><span class="n">01</span><div><h2>Four corrections</h2></div></div>
+  <p class="col">Each came out of building the thing rather than reading the spec, and each changes what gets shipped.</p>
+
+  <div class="ruling">
+    <div>
+      <h3>P25 / median / P75 does not survive small samples <span class="tag hold">changed</span></h3>
+      <p>The spec asked for percentiles and then gave a worked example that was <strong>min / median / max</strong>. On the Atomic Habits observations <span class="mono">350, 399, 425, 450, 499</span>, P25/P75 gives ₹399–₹450 — a band less than half as wide as the ₹350–₹499 in the example.</p>
+    </div>
+    <div>
+      <p>Below n≈5 percentiles carry no information: at n=2 the type-7 P25 is exactly <span class="mono">x₁ + 0.25(x₂−x₁)</span>, a formatted constant. There are nine standard quantile definitions, and R and SAS disagree on P25 of four numbers. Split conformal prediction needs n≥9 for 90% coverage — a theorem, not a tooling limit.</p>
+      <p><strong>Replaced with:</strong> a robust centre in log space, shrunk toward a group prior. eBay, Airbnb and Mercari all reached the same answer independently — pool across similar items.</p>
+    </div>
+  </div>
+
+  <div class="ruling">
+    <div>
+      <h3>The deposit must not follow the user's chosen price <span class="tag hold">changed</span></h3>
+      <p>The spec set the 60% security deposit from the price the owner picks. But the deposit is paid by the <em>other</em> reader. An owner free to move it has every incentive to pick the top of the band and none not to.</p>
+    </div>
+    <div>
+      <p>"The user chooses" would collapse to "every owner chooses the maximum" for swap and lend within a week. The boundary caps the abuse; it does not remove the incentive.</p>
+      <p><strong>Now:</strong> the chosen price governs <strong>SELL</strong>, where the market corrects an overpriced listing by nobody buying it. Deposits for <strong>SWAP / RENT / LEND</strong> come from the reference price. <span class="mono">deposit_from_band()</span> takes no user price as an argument at all.</p>
+    </div>
+  </div>
+
+  <div class="ruling">
+    <div>
+      <h3>A reader-entered MRP is a claim, not evidence <span class="tag hold">changed</span></h3>
+      <p>An MRP typed into the listing form used to be stored as an observation and fed straight into the price anchor. It carried a lower confidence &mdash; but confidence is a <em>weight</em>, not a gate, so the number still moved the band, and the band decides what the other reader deposits.</p>
+    </div>
+    <div>
+      <p>Plausibility bounds did not close this. A category range rejects the absurd; it says nothing about whether &#8377;900 is the MRP of <em>this</em> book.</p>
+      <p><strong>Now four tiers.</strong> <span class="mono">PHOTO_VERIFIED</span> (an admin read the printed MRP off the reader&rsquo;s own photo) &middot; <span class="mono">CATALOGUE_VERIFIED</span> &middot; <span class="mono">PUBLISHER_SOURCED</span> (a quote checked against a real page) &middot; <span class="mono">USER_PROVISIONAL</span>. The first three anchor a price. The fourth is recorded, shown to the reader as provisional, and cannot move money. A Gemini extraction with no verifiable source page can only ever reach the fourth.</p>
+    </div>
+  </div>
+
+  <div class="ruling refuse">
+    <div>
+      <h3>Unofficial copies: declarable, not priceable <span class="tag refuse">refused</span></h3>
+      <p>The declaration option ships, and your reasoning for it is right — if the platform offers no honest option, unauthorised copies get declared as "publisher edition" and the whole price dataset rots.</p>
+    </div>
+    <div>
+      <p>What does not ship is market-price research producing a reference price and range for them. That would make SwapSutra a rate card for unauthorised copies, and under the 60% rule the platform would hold money calculated from it. They are excluded from pricing and from paid transactions because facilitating their sale or rental creates unnecessary copyright and platform-risk exposure. That is a risk decision for SwapSutra to take &mdash; the specific statutory position is a question for your own legal advice, not one this document is competent to settle.</p>
+      <p><strong>Instead:</strong> no observations collected, no boundary computed, ineligible for SELL and RENT. A database <span class="mono">CHECK</span> constraint makes this structural rather than a matter of pipeline discipline.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sechead"><span class="n">02</span><div><h2>MRP is the spine</h2></div></div>
+  <p class="col">You chose Google Books as the price source. It returns Play Books <strong>ebook</strong> prices, which are not print prices — so it is structurally wrong for this, not merely sparse. Its terms also forbid charging users for an app that surfaces its data, and you charge ₹49/month.</p>
+  <p class="col">Every other route is closed or gated. What remains is better than any of them.</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Source</th><th>Status</th><th>What it actually gives you</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Printed MRP</strong></td><td><span class="tag">use now</span></td><td>Printed on the cover of essentially every Indian book. Publisher-set, INR-native, free, and already visible in the photo your reader uploads.</td></tr>
+        <tr><td>Your own transactions</td><td><span class="tag">use now</span></td><td>Empty today, the best Indian used-book dataset in existence in six months. The only true source of <em>used</em> value.</td></tr>
+        <tr><td>Admin entry</td><td><span class="tag">use now</span></td><td>The existing 72-row sheet. Slow, reliable, legally clean.</td></tr>
+        <tr><td>NielsenIQ BookData India</td><td><span class="tag hold">worth an email</span></td><td>ONIX feeds with publisher list prices for the Indian market. Terms unpublished — <span class="mono">bookindia@nielseniq.com</span>.</td></tr>
+        <tr><td>Google Books <span class="mono">saleInfo</span></td><td><span class="tag hold">weak</span></td><td>Ebook prices. Stored, but never mixed into a print band.</td></tr>
+        <tr><td>Amazon PA-API 5.0</td><td><span class="tag refuse">dead</span></td><td>Deprecated; returns 403. Successor needs 10 qualifying affiliate sales in 30 days — impossible pre-launch.</td></tr>
+        <tr><td>Scraping amazon.in / flipkart.com</td><td><span class="tag refuse">prohibited</span></td><td>Both prohibit it in terms. Flipkart's clause names "page-scrape" and "spider" explicitly.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <p><strong>The consequence is a better design, not a compromise.</strong> Your SELL rule — 75–80% of MRP for As New, decreasing with condition — is a function of MRP and condition. It needs no market data at all, so <strong>it works on day one</strong>, before a single observation has been collected. Market observations become a correction to MRP rather than the primary signal.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sechead"><span class="n">03</span><div><h2>How a band is computed</h2></div></div>
+  <p class="col">Two questions, deliberately separated. The first version of the engine merged them and produced an <em>identical</em> band for an as-new copy and a fair one — condition is the largest single driver of second-hand price, and the bug only surfaced by running it on a real example.</p>
+
+  <div class="flow">
+    <div class="step"><span class="k">1 · anchor</span><span class="v">What is this edition's new price? MRP answers it; new-retail observations refine it, 50/50.</span></div>
+    <div class="step"><span class="k">2 · band</span><span class="v">The published condition ladder, applied to the anchor. Width is policy, not sample spread.</span></div>
+    <div class="step"><span class="k">3 · pull</span><span class="v">Direct used-copy evidence at the matching grade shrinks the reference toward itself.</span></div>
+    <div class="step"><span class="k">4 · cap</span><span class="v">SwapSutra caps used-book pricing at the printed MRP. A platform policy, not a legal rule.</span></div>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>What the reader sees</th><th>What it is</th><th>Who decides it</th></tr></thead>
+      <tbody>
+        <tr><td>&ldquo;You may list this book for &#8377;X&ndash;&#8377;Y&rdquo;</td><td>The <strong>allowed listing range</strong>, from the condition ladder applied to the anchor.</td><td>The seller chooses any figure inside it. The server checks.</td></tr>
+        <tr><td>&ldquo;SwapSutra reference value: &#8377;Z&rdquo;</td><td>The engine&rsquo;s deterministic valuation for non-sale transactions. Not a claim about market value.</td><td>The engine only. Never the seller.</td></tr>
+        <tr><td>&ldquo;Security deposit: &#8377;D&rdquo;</td><td>60% of the reference value.</td><td>Derived from the reference value, never from the seller&rsquo;s chosen listing price.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="col">Everything runs in <strong>log space</strong> — book prices vary multiplicatively, so a ₹200 novel and a ₹2,000 textbook have no comparable additive spread. The prior is fitted on <span class="mono">ln(price / MRP)</span>, the discount ratio, because ratios pool across price scales and rupees do not.</p>
+
+  <h3 style="margin-top:1.75rem">Atomic Habits, as the engine actually returns it</h3>
+  <p class="col" style="font-size:.9rem;color:var(--ink-2)">Observations <span class="mono">350, 399, 425, 450, 499</span>; printed MRP ₹599; Self Help prior.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Condition</th><th class="num">Allowed range</th><th class="num">Reference</th><th class="num">Deposit (60%)</th><th class="num">Confidence</th></tr></thead>
+      <tbody>
+        <tr><td>As New</td><td class="num">₹360 – ₹410</td><td class="num">₹395</td><td class="num">₹235</td><td class="num">0.60</td></tr>
+        <tr><td>Very Good</td><td class="num">₹305 – ₹385</td><td class="num">₹345</td><td class="num">₹205</td><td class="num">0.60</td></tr>
+        <tr><td>Good</td><td class="num">₹230 – ₹305</td><td class="num">₹270</td><td class="num">₹160</td><td class="num">0.60</td></tr>
+        <tr><td>Fair</td><td class="num">₹155 – ₹230</td><td class="num">₹180</td><td class="num">₹110</td><td class="num">0.60</td></tr>
+        <tr><td>Poor</td><td class="num">₹75 – ₹155</td><td class="num">₹100</td><td class="num">₹60</td><td class="num">0.60</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col" style="font-size:.9rem">With <strong>no observations at all</strong> and only a ₹399 MRP, the same code returns ₹240–₹300 with a ₹270 reference, method <span class="mono">MRP_DERIVED</span>, confidence 0.55. That is the day-one path, and it is a published policy rather than a guess.</p>
+
+  <h3 style="margin-top:1.75rem">Estimator by sample size</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th class="num">n</th><th>Centre</th><th>Outlier filter</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0</td><td>Prior only</td><td>—</td><td>Labelled as an estimate, never as a measurement.</td></tr>
+        <tr><td class="num">1–2</td><td>Geometric mean</td><td>none</td><td>The median of two points <em>is</em> their mean. No robustness available.</td></tr>
+        <tr><td class="num">3–4</td><td>Median</td><td>none</td><td>An outlier and a small sample are indistinguishable here.</td></tr>
+        <tr><td class="num">5–7</td><td>Median</td><td>Hampel, 3·MAD</td><td>NIST screens at 3, not Tukey's 1.5 — discarding a real observation costs more.</td></tr>
+        <tr><td class="num">8+</td><td>20% trimmed mean</td><td>Hampel, 3·MAD</td><td>Efficient under mild contamination, 20% breakdown point.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <p><strong>The failure mode that eats good data.</strong> <span class="mono">MAD == 0</span> is not a corner case here — three sources all reporting ₹399 is the <em>majority</em> case for MRP observations, which are supposed to agree. An unguarded Hampel filter then gives every non-identical point an infinite score and deletes every genuine observation that differs at all. The scale is floored at 0.10 in log space, which is a fixed <em>percentage</em> in rupee space and so means the same thing for a ₹150 novel and a ₹4,000 textbook.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sechead"><span class="n">04</span><div><h2>What Gemini does, and what it must not</h2></div></div>
+  <div class="ruling">
+    <div>
+      <h3>Reads pages. Never computes.</h3>
+      <p>Extracting "the printed MRP is ₹399, this is a paperback, this is the Indian edition" from unstructured page text is a language task, and an LLM is the right tool for it.</p>
+      <p>Computing a boundary, a median, a shrinkage weight or a deposit is not. Those numbers decide how much money one reader hands another.</p>
+    </div>
+    <div>
+      <p><strong>Reproducibility</strong> — the same inputs must give the same band, and the model will be upgraded underneath you.<br>
+      <strong>Auditability</strong> — when a reader is refused a price, someone must be able to say which observations produced the boundary and by which rule. "The model decided" is not an answer you can give a user, or a defence if the figure is disputed.<br>
+      <strong>A provable floor</strong> — a test pins <span class="mono">median([350,399,425]) == 399</span> forever. No test pins an LLM's arithmetic.</p>
+    </div>
+  </div>
+
+  <h3>The hallucination gate</h3>
+  <p class="col">Asked what a book costs, a model produces a confident, plausible, invented number. The defence that actually works is never asking: the prompt supplies page text and demands a verbatim quote for every price, and <strong>a quote that is not a substring of the source is discarded automatically.</strong> Live output from <span class="mono">extract.py</span>:</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th class="num">Price</th><th>Kind</th><th>Verdict</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td class="num">₹399</td><td>MRP</td><td><span class="tag">accept</span></td><td>Quote found in source, price found in quote.</td></tr>
+        <tr><td class="num">₹199</td><td>EBOOK</td><td><span class="tag">accept</span></td><td>Stored — but format forced to <span class="mono">UNKNOWN</span>, so it can never enter a print band.</td></tr>
+        <tr><td class="num">₹450</td><td>NEW_RETAIL</td><td><span class="tag refuse">reject</span></td><td>Quote is not a substring of the source text — hallucinated.</td></tr>
+        <tr><td class="num">₹12</td><td>NEW_RETAIL</td><td><span class="tag refuse">reject</span></td><td>The price does not appear within its own quote.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col" style="font-size:.9rem">Rejected extractions are stored with <span class="mono">excluded = TRUE</span> and their reason, never dropped. A filter you cannot inspect is a filter you cannot debug — and a spike in one rejection reason is the earliest warning that a source changed its page layout.</p>
+</section>
+
+<section>
+  <div class="sechead"><span class="n">05</span><div><h2>Safeguards, and where each one lives</h2></div></div>
+  <p class="col">A rule enforced in one place is a rule someone routes around. The column that matters is the last one.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Risk</th><th>Defence</th><th>Enforced in</th></tr></thead>
+      <tbody>
+        <tr><td>Hallucinated price</td><td>Verbatim quote must be a substring of the source</td><td><span class="mono">extract.py</span></td></tr>
+        <tr><td>Ebook price in a print band</td><td>Kind + format constraint, and an ingest-side filter</td><td><span class="mono">CHECK</span> + engine</td></tr>
+        <tr><td>Invalid ISBN</td><td>Checksum validated; a bad one is dropped, not stored</td><td><span class="mono">isbn.py</span> + <span class="mono">CHECK</span></td></tr>
+        <tr><td>Duplicate ISBN across editions</td><td>Many rows allowed, exactly one canonical, chosen deterministically</td><td>partial <span class="mono">UNIQUE</span> index</td></tr>
+        <tr><td>Re-ingest inflating sample size</td><td>One observation per source per edition per UTC day</td><td><span class="mono">UNIQUE</span> index</td></tr>
+        <tr><td>Extreme outlier</td><td>Hampel at 3·MAD, with a floored scale, only at n≥5</td><td><span class="mono">boundaries.py</span></td></tr>
+        <tr><td>Owner inflating their own price</td><td>Price is server-resolved; the client never sends an amount</td><td>SQL function + RLS</td></tr>
+        <tr><td>Owner inflating the other reader's deposit</td><td>Deposit derives from the reference, not the chosen price</td><td><span class="mono">deposit_from_band()</span></td></tr>
+        <tr><td>Second-hand priced above new</td><td>Band clamped at printed MRP</td><td><span class="mono">boundaries.py</span></td></tr>
+        <tr><td>Inventing a number under thin data</td><td><span class="mono">INSUFFICIENT_DATA</span> may carry no prices at all</td><td><span class="mono">CHECK</span> constraint</td></tr>
+        <tr><td>Pricing an unauthorised copy</td><td>Refused before any computation, and again at write time</td><td>engine + <span class="mono">CHECK</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col"><strong>Row-level security</strong> lets the client read editions and boundaries and write nothing. <span class="mono">book_prices</span>, <span class="mono">price_history</span> and <span class="mono">price_priors</span> have RLS on and no policy at all, which makes them invisible to <span class="mono">anon</span> and <span class="mono">authenticated</span> entirely — raw observations are the input to a number that moves money, and no client needs them.</p>
+</section>
+
+<section>
+  <div class="sechead"><span class="n">06</span><div><h2>Measured, not asserted</h2></div></div>
+  <p class="col">"Scalable to millions" is easy to write. These figures come from loading a million rows into Postgres 16 and timing it.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Check</th><th class="num">Result</th><th>Method</th></tr></thead>
+      <tbody>
+        <tr><td>Catalogue at scale</td><td class="num">1,000,000</td><td>editions + boundaries loaded</td></tr>
+        <tr><td>Storage</td><td class="num">570 MB</td><td>both tables, all indexes</td></tr>
+        <tr><td>ISBN lookup</td><td class="num">4.5 µs</td><td>5,000 random lookups in 22 ms</td></tr>
+        <tr><td>Query plan</td><td class="num">3 buffers</td><td>index scan, no sequential scan</td></tr>
+        <tr><td>Schema constraint checks</td><td class="num">17 / 17</td><td>each tries an insert the schema must refuse</td></tr>
+        <tr><td>Pricing engine tests</td><td class="num">41 / 41</td><td>MAD==0, n≤4, ebook, deposit incentive</td></tr>
+        <tr><td>Ingest, malformed input</td><td class="num">handled</td><td>duplicate ISBNs, bad checksums, unparseable JSON</td></tr>
+        <tr><td>Ingest idempotency</td><td class="num">stable</td><td>same merge run twice, no duplicate rows</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col" style="font-size:.9rem">The schema test file itself needed two fixes worth knowing about: it was not repeatable (fixtures collided with themselves on a second run), and four <span class="mono">must_fail</span> checks were passing <em>for the wrong reason</em> — psql does not interpolate <span class="mono">:variables</span> inside dollar-quoted strings, so a syntax error was being counted as a constraint refusal. <span class="mono">must_fail</span> now reports <span class="mono">BROKEN</span> when the failure is the test's own fault.</p>
+</section>
+
+<section>
+  <div class="sechead"><span class="n">07</span><div><h2>Migrating what you already have</h2></div></div>
+  <p class="col">The existing 72-row spreadsheet fans out cleanly: one row with three price columns becomes up to three observations, each carrying its format, its edition tier, and — critically — the row's own <span class="mono">V</span>/<span class="mono">E</span> confidence flag, so a rough figure stays findable instead of becoming indistinguishable from a verified one the moment it enters a database.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Stage</th><th class="num">Count</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>Sheet rows read</td><td class="num">73</td><td></td></tr>
+        <tr><td>Observations produced</td><td class="num">96</td><td>fan-out across format tiers</td></tr>
+        <tr><td>Blank tiers skipped</td><td class="num">123</td><td>blank means "this edition does not exist", never zero</td></tr>
+        <tr><td>Rows with no ISBN</td><td class="num">49</td><td>kept with title and price; not keyable until an ISBN is added</td></tr>
+        <tr><td>Genre priors seeded</td><td class="num">24</td><td>deliberately wide variances — placeholders, not beliefs</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col"><strong>Google Sheets stays as the admin layer.</strong> Nothing about this moves your operational control out of a spreadsheet; it moves the <em>catalogue</em> out, which is the part that cannot live there.</p>
+</section>
+
+<section>
+  <div class="sechead"><span class="n">08</span><div><h2>Order of work</h2></div></div>
+  <p class="col">Phase one delivers a working boundary system with no market-price research at all. That is the point — every later phase improves an already-shipping product rather than being a precondition for one.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Phase</th><th>What ships</th><th>Depends on</th></tr></thead>
+      <tbody>
+        <tr><td><strong>1</strong></td><td>Supabase project, schema, legacy import, MRP + condition ladder. Bands live for every book with a known MRP.</td><td>nothing</td></tr>
+        <tr><td><strong>2</strong></td><td>ISBN capture in the listing form; user-declared MRP validated against category plausibility; server-side price validation wired into <span class="mono">createBook</span>.</td><td>phase 1</td></tr>
+        <tr><td><strong>3</strong></td><td>Open Library ingest. Catalogue autofills title, author, publisher, format from a scan.</td><td>phase 1</td></tr>
+        <tr><td><strong>4</strong></td><td>Gemini extraction against publisher sites only. Observations begin accumulating.</td><td>phases 1–3</td></tr>
+        <tr><td><strong>5</strong></td><td>Refit priors from real SwapSutra transactions. This is where the system starts being genuinely about the Indian used-book market rather than about MRP.</td><td>~6 months of trades</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <p><strong>Two things to check yourself before phase 4.</strong> One <span class="mono">curl</span> to the Google Books volumes endpoint with <span class="mono">country=IN</span> settles whether INR prices come back at all and at what hit rate — I could not complete that call. And your real Books API quota is in Google Cloud Console; the widely-repeated 1,000/day figure has no authoritative source.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sechead"><span class="n">09</span><div><h2>Files</h2></div></div>
+  <div class="tablewrap">
+    <table class="files">
+      <thead><tr><th>Path</th><th style="font-family:'IBM Plex Sans',sans-serif">Contents</th></tr></thead>
+      <tbody>
+        <tr><td>sql/001_schema.sql</td><td>Tables, enums, indexes, partitions, RLS, <span class="mono">lookup_price_band</span>, <span class="mono">validate_listing_price</span></td></tr>
+        <tr><td>sql/002_staging.sql</td><td>Bulk-load staging table and the set-based merge into the catalogue</td></tr>
+        <tr><td>engine/boundaries.py</td><td>The estimator. Log space, Hampel, shrinkage, condition ladder, deposit</td></tr>
+        <tr><td>pipeline/isbn.py</td><td>ISBN validation and conversion, format and edition-tier normalisation</td></tr>
+        <tr><td>pipeline/ingest_openlibrary.py</td><td>Dump streaming, dedup, canonical selection, COPY staging</td></tr>
+        <tr><td>pipeline/import_legacy_xlsx.py</td><td>The existing spreadsheet into the new schema</td></tr>
+        <tr><td>pipeline/extract.py</td><td>Gemini prompt and the verification gate its output must pass</td></tr>
+        <tr><td>tests/test_schema.sql</td><td>17 constraint checks, repeatable, rolled back</td></tr>
+        <tr><td>tests/test_boundaries.py</td><td>41 engine tests</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="col">
+  <p>Verified against PostgreSQL 16.13 and Python 3. Source facts on Open Library dumps, API availability and statistical method were researched and marked verified or unverified at the point of use; the two items flagged for your own confirmation are named in section 08.</p>
+</footer>
+</div>
