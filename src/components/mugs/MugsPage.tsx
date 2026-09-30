@@ -23,7 +23,7 @@ const API = apiUrl('/api/swapsutra');
  * categories, grid and product pages below come back as they were.
  * The custom mug enquiry stays open either way.
  */
-export const MUG_SHOP_OPEN = false;
+export const MUG_SHOP_OPEN = true;
 
 type Loaded = { state: 'loading' } | { state: 'ready'; items: MugProduct[]; dev: boolean } | { state: 'error' };
 
