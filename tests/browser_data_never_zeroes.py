@@ -79,15 +79,15 @@ with sync_playwright() as p:
 
     # 3. Profile refresh fails → My Books stays.
     pg.goto(BASE+'/profile'); pg.wait_for_timeout(4500)
-    pg.evaluate("""() => {const b=[...document.querySelectorAll('button')].find(b=>/^My Books/i.test(b.innerText.trim())); if(b) b.click();}""")
+    pg.evaluate("""() => {const b=[...document.querySelectorAll('button')].find(b=>/^My Shelf/i.test(b.innerText.trim())); if(b) b.click();}""")
     pg.wait_for_timeout(1200)
-    tab_before=pg.evaluate("""() => {const b=[...document.querySelectorAll('button')].find(b=>/^My Books/i.test(b.innerText.trim())); return b?b.innerText.trim():''}""")
+    tab_before=pg.evaluate("""() => {const b=[...document.querySelectorAll('button')].find(b=>/^My Shelf/i.test(b.innerText.trim())); return b?b.innerText.trim():''}""")
     mode['profile']=[FAIL_502, FAIL_SE, FAIL_502]
     ref=pg.get_by_role('button', name='Refresh')
     if ref.count(): ref.first.click()
     pg.wait_for_timeout(6000)
-    tab_after=pg.evaluate("""() => {const b=[...document.querySelectorAll('button')].find(b=>/^My Books/i.test(b.innerText.trim())); return b?b.innerText.trim():''}""")
-    ck("5. A failed profile refresh keeps 'My Books (2)'", tab_before=='My Books (2)' and tab_after=='My Books (2)', (tab_before, tab_after))
+    tab_after=pg.evaluate("""() => {const b=[...document.querySelectorAll('button')].find(b=>/^My Shelf/i.test(b.innerText.trim())); return b?b.innerText.trim():''}""")
+    ck("5. A failed profile refresh keeps 'My Shelf (2)'", tab_before=='My Shelf (2)' and tab_after=='My Shelf (2)', (tab_before, tab_after))
     ck("6. The profile was actually asked again (the failure was exercised)", calls['getUserProfile']>=2, calls['getUserProfile'])
     ck("7. No page errors", not errs, errs[:2])
     b.close()

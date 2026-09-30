@@ -171,6 +171,7 @@ const SwapStateMachine = lazyScreen<any>(
 import RateCounterparty from './components/RateCounterparty';
 import {apiUrl, SHARE_ORIGIN} from './config/runtime';
 import { shelfCoverCandidates, shelfCoverUrl } from './utils/bookCover';
+import CartPage, { type CartView } from './components/CartPage';
 import { depositLine, DEPOSIT_ESTIMATE_EXPLAINER } from './utils/deposit';
 import { buildShelfImage } from './utils/shelfImage';
 import ShareSheet from './components/ShareSheet';
@@ -6749,7 +6750,7 @@ const ChatModal = memo(({
     );
   };
 
-type AppTab = 'home' | 'mugs' | 'about' | 'tracker' | 'newsletter' | 'browse' | 'book-requests' | 'notifications' | 'list' | 'info' | 'privacy' | 'profile' | 'reader' | 'reader-circle' | 'reading-room' | 'cafe' | 'events' | 'events-gallery' | 'newsletter-manager' | 'support' | 'management' | 'unsubscribe' | 'ambassador' | 'terms' | 'refund-policy' | 'grievance';
+type AppTab = 'home' | 'mugs' | 'cart' | 'about' | 'tracker' | 'newsletter' | 'browse' | 'book-requests' | 'notifications' | 'list' | 'info' | 'privacy' | 'profile' | 'reader' | 'reader-circle' | 'reading-room' | 'cafe' | 'events' | 'events-gallery' | 'newsletter-manager' | 'support' | 'management' | 'unsubscribe' | 'ambassador' | 'terms' | 'refund-policy' | 'grievance';
 const routeToTab = (path: string): AppTab => {
   const clean = path.replace(/\/+$/, '') || '/';
   if (clean.startsWith('/events-gallery/')) return 'events-gallery';
@@ -6787,7 +6788,7 @@ const routeToTab = (path: string): AppTab => {
     '/community': 'reading-room',
     '/chat': 'cafe',
     '/shelf': 'profile',
-    '/cart': 'profile',
+    '/cart': 'cart',
     '/events-gallery': 'events-gallery',
     '/events': 'events',
     '/community-events': 'events',
@@ -6836,7 +6837,8 @@ const tabToRoute = (tab: AppTab) => ({
   'newsletter-manager': '/management',
   unsubscribe: '/unsubscribe',
   ambassador: '/campus-ambassador',
-  mugs: '/mugs'
+  mugs: '/mugs',
+  cart: '/cart'
 }[tab] || '/');
 
 // Official Campus Ambassador registration form (external, Google Forms).
@@ -7928,7 +7930,6 @@ export default function App() {
       }
       if (path === '/my-requests') setProfileActiveSubTab('book-requests');
       if (path === '/shelf') setProfileActiveSubTab('books');
-      if (path === '/cart') setProfileActiveSubTab('requests');
       setActiveTab(nextTab);
     };
 
@@ -10798,12 +10799,18 @@ export default function App() {
   // PERF: only where they are shown (profile, Books Wanted).
   useEffect(() => {
     if (activeUserEmail && (isListerActive || isAdmin)) {
-      if (activeTab !== 'profile' && activeTab !== 'book-requests') return;
+      if (activeTab !== 'profile' && activeTab !== 'book-requests' && activeTab !== 'cart') return;
       fetchUserBookRequests(activeUserEmail);
       fetchBookRequestResponses();
     }
     else setUserBookRequests([]);
-  }, [activeUserEmail, isListerActive, isAdmin, activeTab === 'profile' || activeTab === 'book-requests']);
+  }, [activeUserEmail, isListerActive, isAdmin, activeTab === 'profile' || activeTab === 'book-requests' || activeTab === 'cart']);
+
+  // The Cart shows requests and chats: refresh them whenever it opens.
+  useEffect(() => {
+    if (activeTab === 'cart' && activeUserEmail) fetchOngoingData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, activeUserEmail]);
 
   useEffect(() => {
     if (activeTab === 'book-requests') fetchBookRequestFeed();
@@ -11575,12 +11582,12 @@ export default function App() {
           internalBookVideo: listingMedia.internalBookVideo ? 'x' : '',
         });
         const finishNote = createdGaps.length
-          ? ` It shows "${MORE_PHOTOS_LABEL}" until you add ${listingPhotoGapText(createdGaps)} from My Profile → My Books.`
+          ? ` It shows "${MORE_PHOTOS_LABEL}" until you add ${listingPhotoGapText(createdGaps)} from Shelf.`
           : '';
         setSuccessMessage(
           (data.status === 'Approved' || /live/i.test(String(data.message || ''))
-            ? 'Your book is live in the Library. You can see it any time in My Profile → My Books.'
-            : 'Your book has been submitted successfully. You can track its approval status in My Profile → My Books. It will appear in the Library after approval.')
+            ? 'Your book is live in the Library. You can see it any time in your Shelf.'
+            : 'Your book has been submitted successfully. You can track its approval status in your Shelf. It will appear in the Library after approval.')
           + finishNote
         );
         // PERF: the book is already created at this point. This mirrors it
@@ -12637,6 +12644,7 @@ export default function App() {
   const PROFILE_TAB_GROUPS: Record<string, string[]> = {
     overview: ['overview'],
     books: ['books'],
+    tracker: ['tracker'],
     requests: ['requests', 'book-requests', 'chats'],
     reading: ['journey', 'achievements'],
     settings: ['settings'],
@@ -12655,11 +12663,11 @@ export default function App() {
   type PrimaryKey = 'books' | 'shelf' | 'cart' | 'chat' | 'community' | 'mugs' | 'profile';
   const primaryKey: PrimaryKey | null =
     activeTab === 'browse' ? 'books'
-    : activeTab === 'reading-room' || activeTab === 'book-requests' ? 'community'
+    : ['reading-room', 'book-requests', 'events', 'events-gallery', 'newsletter'].includes(activeTab) ? 'community'
     : activeTab === 'cafe' ? 'chat'
     : activeTab === 'mugs' ? 'mugs'
-    : activeTab === 'profile'
-      ? (activeProfileGroup === 'books' ? 'shelf' : activeProfileGroup === 'requests' ? 'cart' : 'profile')
+    : activeTab === 'cart' ? 'cart'
+    : activeTab === 'profile' ? (activeProfileGroup === 'books' ? 'shelf' : 'profile')
     : null;
   const goPrimary = (key: PrimaryKey) => {
     switch (key) {
@@ -12668,7 +12676,7 @@ export default function App() {
       case 'chat': navigateTo('cafe'); break;
       case 'mugs': navigateTo('mugs'); break;
       case 'shelf': setProfileActiveSubTab('books'); navigateTo('profile'); break;
-      case 'cart': setProfileActiveSubTab('requests'); navigateTo('profile'); break;
+      case 'cart': navigateTo('cart'); break;
       default: setProfileActiveSubTab('overview'); navigateTo('profile');
     }
   };
@@ -12681,33 +12689,71 @@ export default function App() {
     { key: 'mugs', label: 'Mugs' },
     { key: 'profile', label: 'Profile' },
   ];
-  // The profile's address follows the section: /shelf, /cart or /profile.
+  // The Cart is its own page (30 Sep). Older paths into the profile's
+  // Requests / Chats / Wanted panels (notifications, /my-requests, "open
+  // chat" links) land on the matching Cart view instead.
+  const [cartView, setCartView] = useState<CartView>('cart');
+  // The private chat for a swap request: the two readers, either way round.
+  const findChatForRequest = (req: { senderEmail?: string; receiverEmail?: string }) =>
+    activeChats.find((c) =>
+      (normalizeEmail(c.ownerEmail) === normalizeEmail(req.receiverEmail) && normalizeEmail(c.requesterEmail) === normalizeEmail(req.senderEmail)) ||
+      (normalizeEmail(c.ownerEmail) === normalizeEmail(req.senderEmail) && normalizeEmail(c.requesterEmail) === normalizeEmail(req.receiverEmail)));
   useEffect(() => {
-    if (activeTab !== 'profile') return;
-    const want = activeProfileGroup === 'books' ? '/shelf' : activeProfileGroup === 'requests' ? '/cart' : '/profile';
+    if (activeTab !== 'profile' || activeProfileGroup !== 'requests') return;
+    const sub = profileActiveSubTab;
+    setCartView(sub === 'chats' ? 'chats' : sub === 'book-requests' ? 'wanted' : 'incoming');
+    setProfileActiveSubTab('overview');
+    setActiveTab('cart');
+    window.history.replaceState({}, '', '/cart');
+  }, [activeTab, activeProfileGroup, profileActiveSubTab]);
+
+  // The reading tracker is a profile section now: /tracker lands there.
+  useEffect(() => {
+    if (activeTab !== 'tracker') return;
+    setProfileActiveSubTab('tracker');
+    setActiveTab('profile');
+  }, [activeTab]);
+
+  // The profile's address follows the section: /shelf or /profile.
+  useEffect(() => {
+    if (activeTab !== 'profile' || activeProfileGroup === 'requests') return;
+    const want = activeProfileGroup === 'books' ? '/shelf' : activeProfileGroup === 'tracker' ? '/tracker' : '/profile';
     const cur = window.location.pathname.replace(/\/+$/, '');
-    if (['/profile', '/shelf', '/cart', '/my-requests'].includes(cur) && cur !== want) window.history.replaceState({}, '', want);
+    if (['/profile', '/shelf', '/tracker', '/my-requests'].includes(cur) && cur !== want) window.history.replaceState({}, '', want);
   }, [activeTab, activeProfileGroup]);
 
-  // Community: one page, three views.
-  const communityView = activeTab === 'book-requests' ? 'requests' : readingRoomSubTab === 'shoutouts' ? 'shoutouts' : 'posts';
+  // Community: one page, five views (Events and Newsletter joined 30 Sep).
+  const communityView = activeTab === 'book-requests' ? 'requests'
+    : activeTab === 'events' || activeTab === 'events-gallery' ? 'events'
+    : activeTab === 'newsletter' ? 'newsletter'
+    : readingRoomSubTab === 'shoutouts' ? 'shoutouts' : 'posts';
   const communityTabs = (
-    <div className="ss-community-tabs flex justify-center gap-2" aria-label="Community sections">
+    <div className="ss-community-tabs" aria-label="Community sections">
       {([
         ['posts', 'Posts'],
         ['shoutouts', 'Shout-outs'],
         ['requests', 'Book requests'],
+        ['events', 'Events'],
+        ['newsletter', 'Newsletter'],
       ] as const).map(([view, label]) => (
         <button
           key={view}
           type="button"
           aria-current={communityView === view ? 'page' : undefined}
+          // On a phone the row scrolls; keep the open tab in view.
+          ref={(el) => {
+            if (!el || communityView !== view) return;
+            const row = el.parentElement;
+            if (row && row.scrollWidth > row.clientWidth) row.scrollLeft = el.offsetLeft - row.offsetLeft - (row.clientWidth - el.offsetWidth) / 2;
+          }}
           onClick={() => {
             if (view === 'requests') { navigateTo('book-requests'); return; }
+            if (view === 'events') { navigateTo('events'); return; }
+            if (view === 'newsletter') { navigateTo('newsletter'); return; }
             setReadingRoomSubTab(view === 'shoutouts' ? 'shoutouts' : 'feed');
             if (activeTab !== 'reading-room') navigateTo('reading-room');
           }}
-          className={`rounded-full border px-4 py-2 text-sm font-semibold whitespace-nowrap transition-colors ${
+          className={`shrink-0 rounded-full border px-4 py-2 text-sm font-semibold whitespace-nowrap transition-colors ${
             communityView === view
               ? 'border-brand-gold bg-brand-gold text-white'
               : 'border-brand-border text-[var(--text-secondary)] hover:border-brand-gold hover:text-brand-gold-text'
@@ -13590,7 +13636,7 @@ export default function App() {
                 <Icons.Close size={24} />
               </button>
               <div className="mb-8 pr-10">
-                <span className="mb-3 block text-2xs font-bold uppercase tracking-eyebrow text-brand-gold-text">My Books</span>
+                <span className="mb-3 block text-2xs font-bold uppercase tracking-eyebrow text-brand-gold-text">My Shelf</span>
                 <h3 className="font-serif text-3xl text-[var(--text-primary)] tracking-tight">Edit Book</h3>
                 <p className="mt-3 text-xs leading-relaxed text-[var(--text-secondary)]">
                   Updates are sent for review before returning to the public Library.
@@ -15137,6 +15183,8 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="space-y-12 sm:space-y-24 py-2 sm:py-12"
             >
+              {/* 30 Sep: Events lives inside Community. */}
+              <div className="!mb-[-1.5rem] sm:!mb-[-3rem]">{communityTabs}</div>
               {/* Events Hero */}
               <section className="relative overflow-hidden rounded-[32px] sm:rounded-[48px] bg-[var(--bg-surface)]/50 px-5 py-8 text-center shadow-sm ring-1 ring-brand-border/60 sm:py-16 md:py-20">
                  <div className="bookish-sparkle left-[12%] top-10" />
@@ -16404,6 +16452,57 @@ export default function App() {
             </motion.div>
           )}
 
+          {activeTab === 'cart' && (
+            <motion.div key="cart" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="pb-24">
+              {!activeUserEmail ? (
+                <div className="max-w-sm mx-auto classic-card p-10 bg-[var(--bg-surface)] text-center space-y-6">
+                  <h2 className="type-h2">Your cart</h2>
+                  <p className="type-body text-[var(--text-secondary)]">Sign in to see the books you’ve asked for and your chats.</p>
+                  <button type="button" onClick={() => setShowLoginModal(true)} className="btn-primary w-full !py-3">Sign in</button>
+                </div>
+              ) : (
+                <CartPage
+                  view={cartView}
+                  onViewChange={setCartView}
+                  meEmail={activeUserEmail}
+                  sent={swapRequests.filter((r: any) => normalizeEmail(r.senderEmail) === activeUserEmail) as any}
+                  received={swapRequests.filter((r: any) => normalizeEmail(r.receiverEmail) === activeUserEmail) as any}
+                  chats={activeChats.filter((c) => isAdmin || c.chatStatus !== 'Archived')}
+                  wanted={userBookRequests}
+                  busy={submitting}
+                  coverFor={(bookId, title) => {
+                    const b: any = books.find((x: any) => String(x.id) === String(bookId || ''))
+                      || (title ? books.find((x: any) => String(x.title || '').toLowerCase() === String(title).toLowerCase()) : undefined);
+                    return b ? (getBookImages(b)[0] || shelfCoverUrl(b.isbn) || '') : '';
+                  }}
+                  bookTitleFor={(bookId) => String((books.find((x: any) => String(x.id) === String(bookId || '')) as any)?.title || '')}
+                  hasChatFor={(req) => Boolean(findChatForRequest(req))}
+                  responsesFor={(requestId) => bookRequestResponses.filter((r: any) => r.requestId === requestId) as any}
+                  onOpenRequestChat={(req) => {
+                    const chat = findChatForRequest(req);
+                    if (chat) setActiveChat(chat);
+                    else setErrorMessage('Your private chat is being set up. It will appear under Chats in a moment.');
+                  }}
+                  onOpenChat={(chat) => setActiveChat(chat as any)}
+                  onOpenChatById={(chatId) => {
+                    const chat = activeChats.find((c) => c.chatId === chatId);
+                    if (chat) setActiveChat(chat);
+                    else setErrorMessage('That chat is still being set up. Try again in a moment.');
+                  }}
+                  onAccept={(id) => handleUpdateSwapStatus(id, 'Accepted')}
+                  onDecline={(id) => handleUpdateSwapStatus(id, 'Declined')}
+                  onCancelWanted={(id) => handleCancelBookRequest(id)}
+                  onRequestBook={() => {
+                    if (isListerActive || isAdmin) setShowBookRequestForm(true);
+                    else showMembershipRequired();
+                  }}
+                  onBrowse={() => navigateTo('browse')}
+                  onListBook={openListingForm}
+                />
+              )}
+            </motion.div>
+          )}
+
           {activeTab === 'profile' && (
             <motion.div
               key="profile"
@@ -16559,7 +16658,7 @@ export default function App() {
                       {[
                         { group: 'overview', label: 'Reading Space', sub: 'overview' },
                         { group: 'books', label: `My Shelf (${ownedProfileBooks.length})`, sub: 'books' },
-                        { group: 'requests', label: `Cart (${profileData.swapRequests.length + userBookRequests.length + activeChats.length})`, sub: 'requests' },
+                        { group: 'tracker', label: 'Reading Tracker', sub: 'tracker' },
                         { group: 'reading', label: 'Reading', sub: 'journey' },
                         { group: 'settings', label: 'Settings', sub: 'settings' },
                       ].map((t) => (
@@ -16609,6 +16708,20 @@ export default function App() {
                     )}
 
                     <AnimatePresence mode="wait">
+                      {/* 30 Sep (owner's request): the physical-book reading
+                          tracker lives in the profile. /tracker opens it here. */}
+                      {profileActiveSubTab === 'tracker' && (
+                        <motion.div key="tracker" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                          className="mx-auto max-w-xl" data-testid="profile-tracker">
+                          <ReadingTracker
+                            books={trackerBooks}
+                            finishedCount={trackerFinishedThisYear}
+                            goal={readingGoal}
+                            onGoalChange={updateReadingGoal}
+                            onUpdate={saveTrackerBook}
+                          />
+                        </motion.div>
+                      )}
                       {profileActiveSubTab === 'settings' && (
                         <>
                           <EditProfile profileData={profileData!} onCancel={() => setProfileActiveSubTab('overview')} onSave={handleSaveProfile} />
@@ -17775,6 +17888,8 @@ export default function App() {
 
           {activeTab === 'newsletter' && (
             <motion.div key="newsletter" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              {/* 30 Sep: the Newsletter lives inside Community. */}
+              <div className="pt-2 pb-4">{communityTabs}</div>
               <NewsletterPage
                 apiUrl={API_URL}
                 signedIn={!!activeUserEmail}
@@ -17784,37 +17899,7 @@ export default function App() {
             </motion.div>
           )}
 
-          {activeTab === 'tracker' && (
-            <motion.div key="tracker" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-              className="mx-auto max-w-xl">
-              {!activeUserEmail ? (
-                <div className="rounded-3xl border border-brand-border bg-[var(--bg-surface)] p-8 text-center space-y-4">
-                  <h2 className="font-serif text-3xl text-[var(--text-primary)]">My Reading Tracker</h2>
-                  <p className="text-sm text-[var(--text-secondary)]">Track your paperbacks like an e-book — pages read, time left and the day you'll finish. Sign in to start.</p>
-                  <button type="button" className="btn-primary px-8 py-3" onClick={() => { setLoginStep('choice'); setShowLoginModal(true); }}>Sign in</button>
-                </div>
-              ) : !profileData ? (
-                <div className="rounded-3xl border border-brand-border bg-[var(--bg-surface)] p-8 text-center space-y-3">
-                  {profileError ? (
-                    <>
-                      <p className="text-sm text-[var(--text-secondary)]">We couldn't load your books just now.</p>
-                      <button type="button" className="btn-outline px-6 py-2.5 text-xs uppercase tracking-widest" onClick={() => fetchUserProfile(activeUserEmail)}>Try again</button>
-                    </>
-                  ) : (
-                    <p className="text-sm text-[var(--text-secondary)]">Opening your tracker…</p>
-                  )}
-                </div>
-              ) : (
-                <ReadingTracker
-                  books={trackerBooks}
-                  finishedCount={trackerFinishedThisYear}
-                  goal={readingGoal}
-                  onGoalChange={updateReadingGoal}
-                  onUpdate={saveTrackerBook}
-                />
-              )}
-            </motion.div>
-          )}
+          {/* /tracker opens Profile → Reading Tracker (30 Sep); see the redirect near PRIMARY_NAV. */}
 
           {(activeTab === 'about' || activeTab === 'privacy' || activeTab === 'terms' || activeTab === 'refund-policy' || activeTab === 'grievance') && (
             <LegalPage key={activeTab} tab={activeTab} navigateTo={navigateTo} />
@@ -18934,7 +19019,7 @@ export default function App() {
                             <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Add now or later</p>
                             <p className="mt-1 text-2xs text-[var(--text-secondary)]">
                               Back cover and a look inside. Skip them and your book still goes live — it shows
-                              "{MORE_PHOTOS_LABEL}" until you add them from My Books.
+                              "{MORE_PHOTOS_LABEL}" until you add them from your Shelf.
                             </p>
                           </div>
                           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

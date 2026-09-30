@@ -135,15 +135,15 @@ with sync_playwright() as p:
     ck("11. A front-cover-only listing is submitted", bool(c), pg.locator('[role=alert], .text-red-700, .text-red-600').all_inner_texts()[:3])
     ck("12. ...with the front cover and nothing else", bool(c.get('frontCoverImage')) and not c.get('backCoverImage') and not c.get('internalBookImage') and not c.get('internalBookVideo'))
     body=pg.locator('body').inner_text()
-    ck("13. The success message says how to finish it", 'More photos coming' in body and 'My Books' in body, body[:200])
+    ck("13. The success message says how to finish it", 'More photos coming' in body and 'Shelf' in body, body[:200])
     (os.makedirs('shots',exist_ok=True) or pg.screenshot)(path='shots/partial_created_375.png')
 
     # ── 4. Owner: My Books prompt, book-page prompt, finish flow
     pg.goto(BASE+'/profile'); pg.wait_for_timeout(4000)
-    pg.evaluate("""() => {const b=[...document.querySelectorAll('button')].find(b=>/^My Books/i.test(b.innerText.trim())); if(b) b.click();}""")
+    pg.evaluate("""() => {const b=[...document.querySelectorAll('button')].find(b=>/^My Shelf/i.test(b.innerText.trim())); if(b) b.click();}""")
     pg.wait_for_timeout(1500)
     mp=pg.locator('[data-testid="my-books-finish-prompt"]')
-    ck("14. My Books shows the 'finish your listing' prompt", mp.count()==1 and 'Add the back cover and an inside photo or video to finish your listing' in mp.inner_text(), mp.inner_text() if mp.count() else '')
+    ck("14. My Shelf shows the 'finish your listing' prompt", mp.count()==1 and 'Add the back cover and an inside photo or video to finish your listing' in mp.inner_text(), mp.inner_text() if mp.count() else '')
     ck("15. The owner's tile says 'Add photos'", pg.locator('[data-testid="more-photos-tag"]', has_text='Add photos').count()>=1)
     mp.scroll_into_view_if_needed(); (os.makedirs('shots',exist_ok=True) or pg.screenshot)(path='shots/partial_mybooks_375.png')
     pg.locator('button.ss-shelf__book[aria-label^="My Half Listing"]').click(); pg.wait_for_timeout(1200)

@@ -30,7 +30,7 @@ const fd = app.slice(fdStart, app.indexOf('const results = await Promise.all(fet
 check('10. Opening the app asks only for books + settings (no testimonials/events)', /action=getBooks/.test(fd) && !/getTestimonials/.test(fd) && !/getEvents/.test(fd));
 check('11. Events load when an events page opens', /eventsLoadedRef\.current = true;/.test(app));
 check('12. Reading journey loads with the profile, not on every open', /if \(activeTab !== 'profile' \|\| journeyLoadedForRef\.current === activeUserEmail\) return;/.test(app));
-check('13. Book requests load only on the pages that show them', /if \(activeTab !== 'profile' && activeTab !== 'book-requests'\) return;/.test(app));
+check('13. Book requests load only on the pages that show them', /if \(activeTab !== 'profile' && activeTab !== 'book-requests' && activeTab !== 'cart'\) return;/.test(app));
 check('14. Swaps/chats/notifications wait 2.5s and never run twice at once', /setTimeout\(\(\) => \{ fetchOngoingData\(\); \}, 2500\)/.test(app) && /if \(ongoingInFlightRef\.current\) return;/.test(app));
 check('15. Genres are kept for a day', /swapsutraGenres/.test(app));
 const px = fs.readFileSync(path.join(__dirname, '..', 'api', 'swapsutra.ts'), 'utf8');

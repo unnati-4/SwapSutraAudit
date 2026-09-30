@@ -59,24 +59,40 @@ with sync_playwright() as p:
     check('6. Shelf is highlighted', bar.nth(1).get_attribute('aria-current') == 'page')
 
     bar.nth(2).click(); pg.wait_for_timeout(900)
-    check('7. Cart opens /cart with Swaps, Chats and Wanted', pg.evaluate('location.pathname') == '/cart' and all(pg.get_by_role('button', name=n).count() for n in ['Swaps (0)', 'Chats (0)', 'Wanted (0)']))
-    pg.get_by_role('button', name='Chats (0)').click(); pg.wait_for_timeout(500)
-    check('8. Chats live inside the Cart', pg.get_by_text('Swap Conversations').count() > 0 and bar.nth(2).get_attribute('aria-current') == 'page')
+    check('7. Cart is its own page at /cart (not the profile)', pg.evaluate('location.pathname') == '/cart' and pg.locator('[data-testid="cart-page"]').is_visible() and pg.get_by_text('Listed Books').count() == 0)
+    tabs7 = pg.locator('.cart-tab')
+    check('7a. Cart has My cart / Requests / Chats / Wanted', [tabs7.nth(i).inner_text().split('\n')[0].strip() for i in range(tabs7.count())] == ['My cart', 'Requests', 'Chats', 'Wanted'])
+    check('7b. The four cart tabs fit a 360px phone', pg.evaluate("(() => { const r = document.querySelector('.cart-tabs'); return r.scrollWidth <= r.clientWidth + 1; })()"))
+    pg.get_by_role('tab', name='Chats').click(); pg.wait_for_timeout(400)
+    check('8. Chats live inside the Cart', pg.get_by_text('No conversations yet').count() > 0 and bar.nth(2).get_attribute('aria-current') == 'page')
+    pg.goto(BASE + '/my-requests'); pg.wait_for_timeout(1500)
+    check('8a. Old profile request links land on the Cart', pg.evaluate('location.pathname') == '/cart' and pg.locator('.cart-tab[aria-selected="true"]').inner_text().startswith('Wanted'))
 
     bar.nth(3).click(); pg.wait_for_timeout(900)
     check('9. Chat opens the Readers’ Café at /chat', pg.evaluate('location.pathname') == '/chat' and pg.locator('#cafe-heading').count() > 0)
 
     bar.nth(4).click(); pg.wait_for_timeout(1200)
     tabs = pg.locator('.ss-community-tabs button')
-    check('10. Community is at /community with Posts / Shout-outs / Book requests', pg.evaluate('location.pathname') == '/community' and [tabs.nth(i).inner_text() for i in range(tabs.count())] == ['Posts', 'Shout-outs', 'Book requests'])
+    check('10. Community is at /community with Posts / Shout-outs / Book requests / Events / Newsletter', pg.evaluate('location.pathname') == '/community' and [tabs.nth(i).inner_text() for i in range(tabs.count())] == ['Posts', 'Shout-outs', 'Book requests', 'Events', 'Newsletter'])
     tabs.nth(1).click(); pg.wait_for_timeout(600)
     check('11. Shout-outs filters the feed to shout-outs', pg.get_by_text('No shout-outs yet').count() > 0 or pg.locator('text=🎉 Shout-out').count() > 0)
     pg.locator('.ss-community-tabs button', has_text='Book requests').click(); pg.wait_for_timeout(900)
     check('12. Book requests open inside Community (still highlighted)', pg.evaluate('location.pathname') == '/book-requests' and pg.locator('.ss-community-tabs button[aria-current="page"]').inner_text() == 'Book requests' and bar.nth(4).get_attribute('aria-current') == 'page')
+    pg.locator('.ss-community-tabs button', has_text='Events').click(); pg.wait_for_timeout(900)
+    check('13a. Events opens inside Community', pg.evaluate('location.pathname') == '/events' and pg.locator('.ss-community-tabs button[aria-current="page"]').inner_text() == 'Events' and bar.nth(4).get_attribute('aria-current') == 'page' and pg.get_by_text('Come sit with fellow readers.').count() > 0)
+    pg.locator('.ss-community-tabs button', has_text='Newsletter').click(); pg.wait_for_timeout(900)
+    check('13b. Newsletter opens inside Community', pg.evaluate('location.pathname') == '/newsletter' and pg.locator('.ss-community-tabs button[aria-current="page"]').inner_text() == 'Newsletter' and bar.nth(4).get_attribute('aria-current') == 'page')
+    check('13c. The tab row scrolls by itself, not the page', pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth'))
+    pg.locator('.ss-community-tabs button', has_text='Book requests').click(); pg.wait_for_timeout(900)
     check('13. "+ Request a book" is offered there', pg.get_by_role('button', name='Request a book').count() > 0 or pg.get_by_text('Request a book').count() > 0)
 
     bar.nth(5).click(); pg.wait_for_timeout(900)
     check('14. Profile opens /profile', pg.evaluate('location.pathname') == '/profile' and bar.nth(5).get_attribute('aria-current') == 'page')
+    check('14a. Profile no longer has a Cart section', pg.get_by_role('button', name='Cart', exact=False).filter(has_text='Cart (').count() == 0)
+    pg.get_by_role('button', name='Reading Tracker').click(); pg.wait_for_timeout(800)
+    check('14b. The reading tracker is in the profile at /tracker', pg.evaluate('location.pathname') == '/tracker' and pg.locator('[data-testid="profile-tracker"]').is_visible() and bar.nth(5).get_attribute('aria-current') == 'page')
+    pg.goto(BASE + '/tracker'); pg.wait_for_timeout(1500)
+    check('14c. Opening /tracker directly shows it inside the profile', pg.locator('[data-testid="profile-tracker"]').is_visible())
 
     pg.get_by_label('Open menu').click(); pg.wait_for_timeout(500)
     for gone in ['Community Events', 'How It Works', 'Newsletter', 'Campus Ambassador', 'Tracker']:
@@ -91,7 +107,7 @@ with sync_playwright() as p:
     for path in ['/events', '/tracker', '/newsletter', '/about']:
         pg.goto(BASE + path); pg.wait_for_timeout(900)
     check('18. Old pages still open by URL', pg.evaluate('location.pathname') == '/about')
-    for path in ['/library', '/shelf', '/cart', '/chat', '/community', '/mugs']:
+    for path in ['/library', '/shelf', '/cart', '/chat', '/community', '/events', '/newsletter', '/mugs']:
         pg.goto(BASE + path); pg.wait_for_timeout(900)
         if pg.evaluate('document.documentElement.scrollWidth > window.innerWidth'):
             check(f'19. No horizontal scroll on {path}', False); break
