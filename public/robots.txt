@@ -1,0 +1,23 @@
+# SwapSutra — https://www.swapsutra.in
+#
+# There was no robots.txt at all before this, which meant no way to
+# declare a sitemap and no instruction to keep crawlers out of the
+# members-only surfaces.
+
+User-agent: *
+Allow: /
+
+# Nothing behind a login is worth crawling, and some of it is personal.
+Disallow: /profile
+Disallow: /management
+Disallow: /notifications
+Disallow: /my-requests
+Disallow: /newsletter-manager
+Disallow: /unsubscribe
+Disallow: /api/
+
+# The sitemap is generated from the live Library rather than kept as a
+# static file, so a book listed this morning is discoverable today. It
+# is served from /api/sitemap; declaring it here is what makes a sitemap
+# at a non-standard path count.
+Sitemap: https://www.swapsutra.in/api/sitemap

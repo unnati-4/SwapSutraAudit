@@ -1,0 +1,1281 @@
+<title>SwapSutra Field Manual</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+:root{
+  --serif:"Cormorant Garamond",Georgia,"Times New Roman",serif;
+  --sans:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+
+  --ground:#F9F6F0;
+  --ground-alt:#F2EBE1;
+  --surface:#FFFFFF;
+  --ink:#4A3B32;
+  --ink-muted:#7C6E65;
+  --ink-faint:#A39B94;
+  --accent:#8E4A59;
+  --accent-soft:#A85D6D;
+  --accent-wash:rgba(142,74,89,0.07);
+  --rule:#E5DDD3;
+  --rule-strong:#D6C9BC;
+  --good:#4F6B4A;
+  --warn:#9A6B2F;
+  --shadow:0 1px 2px rgba(74,59,50,.05),0 8px 24px -12px rgba(74,59,50,.18);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#1E1B18;
+    --ground-alt:#241F1C;
+    --surface:#241F1C;
+    --ink:#F0E9E2;
+    --ink-muted:#A39B94;
+    --ink-faint:#7C6E65;
+    --accent:#D08C9D;
+    --accent-soft:#DCA3B1;
+    --accent-wash:rgba(208,140,157,0.10);
+    --rule:#3A332E;
+    --rule-strong:#4A4139;
+    --good:#8FB388;
+    --warn:#D3A566;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#1E1B18;
+  --ground-alt:#241F1C;
+  --surface:#241F1C;
+  --ink:#F0E9E2;
+  --ink-muted:#A39B94;
+  --ink-faint:#7C6E65;
+  --accent:#D08C9D;
+  --accent-soft:#DCA3B1;
+  --accent-wash:rgba(208,140,157,0.10);
+  --rule:#3A332E;
+  --rule-strong:#4A4139;
+  --good:#8FB388;
+  --warn:#D3A566;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:16px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--accent);text-underline-offset:3px}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
+
+/* ---------- shell ---------- */
+.shell{
+  display:grid;
+  grid-template-columns:1fr;
+  max-width:1240px;
+  margin:0 auto;
+  padding:0 20px 100px;
+}
+@media(min-width:1040px){
+  .shell{grid-template-columns:216px minmax(0,1fr);gap:56px;padding:0 40px 120px}
+}
+
+/* ---------- index rail ---------- */
+.rail{display:none}
+@media(min-width:1040px){
+  .rail{
+    display:block;
+    position:sticky;
+    top:0;
+    align-self:start;
+    max-height:100vh;
+    overflow-y:auto;
+    padding:56px 0 40px;
+  }
+}
+.rail .mark{
+  font-family:var(--serif);
+  font-size:23px;
+  font-weight:600;
+  letter-spacing:.01em;
+  margin:0 0 4px;
+}
+.rail .mark em{font-style:italic;color:var(--accent)}
+.rail .sub{
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.14em;
+  color:var(--ink-faint);margin:0 0 26px;
+}
+.rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
+.rail a{
+  display:flex;gap:10px;align-items:baseline;
+  text-decoration:none;color:var(--ink-muted);
+  font-size:13.5px;line-height:1.35;padding:5px 0;
+  border-bottom:1px solid transparent;
+}
+.rail a:hover{color:var(--accent)}
+.rail a span{
+  font-size:10px;font-variant-numeric:tabular-nums;
+  color:var(--ink-faint);min-width:14px;padding-top:1px;
+}
+
+/* ---------- masthead ---------- */
+.mast{padding:60px 0 0;border-bottom:1px solid var(--rule)}
+.mast .eyebrow{
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.18em;
+  color:var(--accent);font-weight:700;margin:0 0 20px;
+}
+.mast h1{
+  font-family:var(--serif);
+  font-size:clamp(42px,7.5vw,74px);
+  line-height:1.02;
+  font-weight:500;
+  letter-spacing:-.015em;
+  margin:0 0 22px;
+  text-wrap:balance;
+}
+.mast h1 em{font-style:italic;color:var(--accent)}
+.mast .standfirst{
+  font-size:clamp(17px,2.2vw,20px);
+  line-height:1.55;
+  color:var(--ink-muted);
+  max-width:62ch;
+  margin:0 0 34px;
+}
+.meta-strip{
+  display:flex;flex-wrap:wrap;gap:0;
+  border-top:1px solid var(--rule);
+  margin-bottom:0;
+}
+.meta-strip div{
+  flex:1 1 150px;padding:16px 20px 18px 0;
+}
+.meta-strip dt{
+  font-size:10px;text-transform:uppercase;letter-spacing:.14em;
+  color:var(--ink-faint);margin:0 0 5px;font-weight:600;
+}
+.meta-strip dd{margin:0;font-size:14.5px;font-weight:600;line-height:1.35}
+
+/* ---------- sections ---------- */
+section{padding:64px 0 0;scroll-margin-top:24px}
+.sec-head{margin-bottom:30px}
+.sec-head .num{
+  font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--accent);font-weight:700;display:block;margin-bottom:11px;
+  font-variant-numeric:tabular-nums;
+}
+.sec-head h2{
+  font-family:var(--serif);
+  font-size:clamp(30px,4.6vw,42px);
+  line-height:1.1;font-weight:600;letter-spacing:-.01em;
+  margin:0 0 12px;text-wrap:balance;
+}
+.sec-head p{
+  margin:0;color:var(--ink-muted);font-size:16.5px;max-width:66ch;
+}
+h3{
+  font-family:var(--sans);
+  font-size:16px;font-weight:700;letter-spacing:-.005em;
+  margin:38px 0 12px;
+}
+h4{
+  font-size:11px;text-transform:uppercase;letter-spacing:.13em;
+  color:var(--ink-faint);font-weight:700;margin:28px 0 10px;
+}
+p{max-width:68ch}
+.lede{font-size:17.5px;line-height:1.6}
+
+/* ---------- callouts ---------- */
+.verdict{
+  background:var(--ground-alt);
+  border:1px solid var(--rule);
+  border-left:3px solid var(--accent);
+  padding:26px 28px;
+  margin:26px 0;
+}
+.verdict p{margin:0 0 12px}
+.verdict p:last-child{margin-bottom:0}
+.verdict .big{
+  font-family:var(--serif);
+  font-size:clamp(22px,3vw,29px);
+  line-height:1.28;font-weight:500;
+  margin-bottom:14px;
+}
+.note{
+  border:1px dashed var(--rule-strong);
+  background:var(--accent-wash);
+  padding:16px 20px;margin:24px 0;
+  font-size:14.5px;line-height:1.6;
+}
+.note strong{color:var(--accent)}
+.note p{margin:0;max-width:none}
+
+/* ---------- pillar grid ---------- */
+.pillars{display:grid;gap:14px;margin-top:8px}
+@media(min-width:720px){.pillars{grid-template-columns:1fr 1fr}}
+.pillar{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  padding:22px 24px 24px;
+  box-shadow:var(--shadow);
+  display:flex;flex-direction:column;
+}
+.pillar .top{
+  display:flex;justify-content:space-between;align-items:baseline;
+  gap:12px;border-bottom:1px solid var(--rule);padding-bottom:11px;margin-bottom:13px;
+}
+.pillar .name{font-family:var(--serif);font-size:23px;font-weight:600;line-height:1.15}
+.pillar .share{
+  font-size:12px;font-weight:800;color:var(--accent);
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+.pillar p{margin:0 0 12px;font-size:14.5px;color:var(--ink-muted);max-width:none}
+.pillar .why{
+  margin-top:auto;font-size:12.5px;line-height:1.5;
+  padding-top:12px;border-top:1px solid var(--rule);
+  color:var(--ink);
+}
+.pillar .why b{color:var(--accent);text-transform:uppercase;letter-spacing:.08em;font-size:10px;display:block;margin-bottom:3px}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto;margin:22px 0;border:1px solid var(--rule);background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:14px}
+th,td{text-align:left;padding:11px 16px;border-bottom:1px solid var(--rule);vertical-align:top}
+thead th{
+  font-size:10px;text-transform:uppercase;letter-spacing:.12em;
+  color:var(--ink-faint);font-weight:700;background:var(--ground-alt);
+  border-bottom:1px solid var(--rule-strong);white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+td.num,th.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+td strong{font-weight:700}
+
+/* ---------- ritual (numbered, real sequence) ---------- */
+.ritual{list-style:none;margin:22px 0 0;padding:0;display:flex;flex-direction:column;gap:0}
+.ritual li{
+  display:grid;grid-template-columns:auto 1fr;gap:18px;
+  padding:18px 0;border-top:1px solid var(--rule);
+}
+.ritual li:last-child{border-bottom:1px solid var(--rule)}
+.ritual .slot{
+  font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--accent);width:74px;padding-top:3px;line-height:1.4;
+}
+.ritual .body strong{display:block;font-size:15.5px;margin-bottom:4px}
+.ritual .body p{margin:0;font-size:14.5px;color:var(--ink-muted);max-width:62ch}
+.ritual .dur{
+  font-size:11px;color:var(--ink-faint);font-variant-numeric:tabular-nums;
+  display:block;margin-top:6px;letter-spacing:.04em;
+}
+
+/* ---------- script cards ---------- */
+.scripts{display:grid;gap:14px;margin-top:6px}
+@media(min-width:800px){.scripts{grid-template-columns:1fr 1fr}}
+.script{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  box-shadow:var(--shadow);
+  display:flex;flex-direction:column;
+}
+.script .card-head{
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:8px 16px;border-bottom:1px solid var(--rule);
+  background:var(--ground-alt);
+}
+.script .id{
+  font-size:10px;font-weight:800;letter-spacing:.14em;color:var(--ink-faint);
+  font-variant-numeric:tabular-nums;
+}
+.chip{
+  font-size:9.5px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;
+  padding:3px 8px;border:1px solid var(--accent);color:var(--accent);
+  white-space:nowrap;
+}
+.chip.solid{background:var(--accent);color:var(--surface);border-color:var(--accent)}
+.script .inner{padding:18px 20px 20px;display:flex;flex-direction:column;gap:11px;flex:1}
+.script .hook{
+  font-family:var(--serif);font-size:21px;line-height:1.22;font-weight:600;
+  letter-spacing:-.005em;margin:0;
+}
+.script dl{margin:0;display:flex;flex-direction:column;gap:8px}
+.script dt{
+  font-size:9.5px;text-transform:uppercase;letter-spacing:.13em;
+  color:var(--ink-faint);font-weight:700;margin-bottom:2px;
+}
+.script dd{margin:0;font-size:13.5px;line-height:1.52;color:var(--ink-muted)}
+.script dd.cta{color:var(--ink);font-weight:600}
+
+/* ---------- hooks bank ---------- */
+.hooks{
+  columns:2;column-gap:32px;margin:20px 0 0;padding:0;list-style:none;
+}
+@media(max-width:700px){.hooks{columns:1}}
+.hooks li{
+  break-inside:avoid;padding:9px 0 9px 18px;border-bottom:1px solid var(--rule);
+  font-size:14.5px;line-height:1.45;position:relative;
+}
+.hooks li::before{
+  content:"";position:absolute;left:0;top:17px;
+  width:7px;height:1px;background:var(--accent);
+}
+
+/* ---------- funnel ---------- */
+.funnel{display:flex;flex-direction:column;gap:0;margin:22px 0}
+.funnel .step{
+  display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start;
+  padding:16px 0;border-top:1px solid var(--rule);
+}
+.funnel .step:last-child{border-bottom:1px solid var(--rule)}
+.funnel .stage{
+  font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--surface);background:var(--ink);padding:4px 9px;white-space:nowrap;
+  min-width:96px;text-align:center;
+}
+.funnel .step:nth-child(n+4) .stage{background:var(--accent)}
+.funnel .txt strong{display:block;font-size:15px;margin-bottom:3px}
+.funnel .txt p{margin:0;font-size:14px;color:var(--ink-muted);max-width:60ch}
+
+/* ---------- phases ---------- */
+.phases{display:grid;gap:14px;margin-top:8px}
+@media(min-width:860px){.phases{grid-template-columns:repeat(3,1fr)}}
+.phase{
+  border:1px solid var(--rule);background:var(--surface);
+  padding:22px 22px 24px;box-shadow:var(--shadow);
+}
+.phase .ph{
+  font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);font-weight:800;margin-bottom:8px;
+  font-variant-numeric:tabular-nums;
+}
+.phase h3{margin:0 0 4px;font-family:var(--serif);font-size:25px;font-weight:600;letter-spacing:-.01em}
+.phase .days{font-size:12px;color:var(--ink-faint);margin-bottom:16px;letter-spacing:.03em}
+.phase ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+.phase li{font-size:13.5px;line-height:1.5;padding-left:16px;position:relative;color:var(--ink-muted)}
+.phase li::before{content:"→";position:absolute;left:0;color:var(--accent);font-size:12px}
+.phase .target{
+  margin-top:18px;padding-top:14px;border-top:1px solid var(--rule);
+  font-size:13px;
+}
+.phase .target b{display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.13em;color:var(--ink-faint);margin-bottom:4px}
+
+/* ---------- do-not list ---------- */
+.avoid{list-style:none;margin:20px 0 0;padding:0;display:flex;flex-direction:column;gap:0}
+.avoid li{
+  padding:14px 0 14px 30px;border-top:1px solid var(--rule);position:relative;
+  font-size:14.5px;line-height:1.55;
+}
+.avoid li:last-child{border-bottom:1px solid var(--rule)}
+.avoid li::before{
+  content:"✕";position:absolute;left:4px;top:14px;
+  color:var(--accent);font-size:12px;font-weight:700;
+}
+.avoid b{font-weight:700}
+
+footer{
+  margin-top:70px;padding-top:26px;border-top:1px solid var(--rule);
+  font-size:13px;color:var(--ink-faint);
+}
+footer p{max-width:70ch;margin:0 0 8px}
+</style>
+
+<div class="shell">
+
+<nav class="rail" aria-label="Sections">
+  <p class="mark">Swap<em>Sutra</em></p>
+  <p class="sub">Field Manual</p>
+  <ol>
+    <li><a href="#read"><span>01</span>The read</a></li>
+    <li><a href="#moat"><span>02</span>What only you can post</a></li>
+    <li><a href="#pillars"><span>03</span>Five pillars</a></li>
+    <li><a href="#week"><span>04</span>The four-hour week</a></li>
+    <li><a href="#kit"><span>05</span>Faceless kit</a></li>
+    <li><a href="#scripts"><span>06</span>30 scripts</a></li>
+    <li><a href="#hooks"><span>07</span>Hooks bank</a></li>
+    <li><a href="#youtube"><span>08</span>YouTube slate</a></li>
+    <li><a href="#money"><span>09</span>The money math</a></li>
+    <li><a href="#funnel"><span>10</span>Conversion funnel</a></li>
+    <li><a href="#cities"><span>11</span>City density</a></li>
+    <li><a href="#numbers"><span>12</span>Numbers to watch</a></li>
+    <li><a href="#plan"><span>13</span>90-day plan</a></li>
+    <li><a href="#avoid"><span>14</span>Do not do this</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="mast">
+  <p class="eyebrow">Growth &amp; content strategy · India · 90 days</p>
+  <h1>Books that <em>travel</em> are the content.</h1>
+  <p class="standfirst">A faceless content engine for SwapSutra, built for one person with four hours a week. Every format here can be shot with a phone, a stack of books and a window — no face, no studio, no crew.</p>
+  <dl class="meta-strip">
+    <div><dt>Operator</dt><dd>Solo, 3–5 hrs/week</dd></div>
+    <div><dt>North star</dt><dd>Completed swaps per week</dd></div>
+    <div><dt>Primary channels</dt><dd>Instagram · YouTube · WhatsApp</dd></div>
+    <div><dt>Horizon</dt><dd>13 weeks</dd></div>
+  </dl>
+</header>
+
+<!-- 01 -->
+<section id="read">
+  <div class="sec-head">
+    <span class="num">01 — The read</span>
+    <h2>Your problem isn't reach. It's that you're posting the wrong category.</h2>
+    <p>Before a single new reel, this is the diagnosis the rest of the manual is built on.</p>
+  </div>
+
+  <div class="verdict">
+    <p class="big">India already has thousands of accounts posting book reviews, book stacks and aesthetic shelf photos. If SwapSutra posts those, it competes with people who do it full-time for fun — and loses.</p>
+    <p>Low traction on a book account almost never means the videos are badly made. It means the account is interchangeable with fifty others. The algorithm has nothing to distinguish, so it distributes nothing.</p>
+    <p>SwapSutra has one thing no bookstagrammer in India has: <strong>real books physically moving between real strangers, and the data trail of those movements.</strong> That is a category of content nobody else is allowed to make. It is also, conveniently, entirely faceless.</p>
+  </div>
+
+  <p class="lede">So the strategic bet is simple: <strong>stop being a book account and become a book-<em>movement</em> account.</strong> Reviews are commodity. Circulation is proprietary. Every pillar, script and video in this manual comes from that one shift.</p>
+
+  <p>The second thing worth naming honestly: at 3–5 hours a week you cannot win on volume. You win on <em>ownability</em> and <em>repetition</em> — a small number of recurring, recognisable formats that people start to expect. Three named series beat thirty one-off posts.</p>
+</section>
+
+<!-- 02 -->
+<section id="moat">
+  <div class="sec-head">
+    <span class="num">02 — The moat</span>
+    <h2>Content only SwapSutra can make</h2>
+    <p>Four assets you already own that no competing account can copy.</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Asset</th><th>What it produces</th><th>Why it can't be copied</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Circulation history</strong><br>Every book's chain of readers</td><td>Serialised story arcs: one copy, seven readers, four cities</td><td>Requires an actual swap network. A review account has none.</td></tr>
+        <tr><td><strong>Swap data in your Sheets</strong><br>Titles, cities, condition, timing</td><td>Data journalism: what India is actually reading, city by city</td><td>Proprietary first-party data. Nobody else can quote it.</td></tr>
+        <tr><td><strong>Reader submissions</strong><br>Notes, inscriptions, objects found in books</td><td>An endless, zero-cost, deeply emotional archive</td><td>Only a community platform can source it at volume.</td></tr>
+        <tr><td><strong>The product itself</strong><br>Listings, near-you feed, handover proof</td><td>Screen-recorded demos that double as conversion assets</td><td>It's your app.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><strong>Standing rule — never invent a number.</strong> Every statistic, distance, reader count or rupee figure in a post must come out of your Users / Books / Swaps sheets. If the data isn't there yet, use a smaller true number or run the format as a question instead. One fabricated stat that gets screenshotted is worth more damage than a month of growth.</p>
+  </div>
+</section>
+
+<!-- 03 -->
+<section id="pillars">
+  <div class="sec-head">
+    <span class="num">03 — Pillars</span>
+    <h2>Five pillars, and what each one is for</h2>
+    <p>Each pillar has a job in the funnel. Don't judge them all by the same metric — the confessions pillar exists to farm comments, not signups.</p>
+  </div>
+
+  <div class="pillars">
+    <div class="pillar">
+      <div class="top"><span class="name">The Travelling Book</span><span class="share">30%</span></div>
+      <p>Follow one real copy as it moves between readers and cities. Each episode adds a reader, a city, a line they wrote before passing it on. Runs as a numbered series with a fixed opening shot.</p>
+      <p class="why"><b>Job</b>Brand memory + shareability. This is the format people describe to their friends.</p>
+    </div>
+    <div class="pillar">
+      <div class="top"><span class="name">Found In Books</span><span class="share">20%</span></div>
+      <p>Inscriptions, train tickets, pressed flowers, margin notes, grocery lists — the objects and handwriting found in secondhand and swapped books. Sourced from your own community by open call.</p>
+      <p class="why"><b>Job</b>Saves and shares. Emotional, screenshot-able, costs you nothing to produce.</p>
+    </div>
+    <div class="pillar">
+      <div class="top"><span class="name">Reading Economics</span><span class="share">20%</span></div>
+      <p>The money side of reading in India. New vs secondhand vs swap pricing, what a shelf is worth, how to read thirty books for nothing, Sunday market versus online. Numbers on screen.</p>
+      <p class="why"><b>Job</b>Search + intent. This is what converts, because it makes the product the obvious answer.</p>
+    </div>
+    <div class="pillar">
+      <div class="top"><span class="name">Swap Mechanics</span><span class="share">15%</span></div>
+      <p>Screen recordings of the real product: listing a book in eighteen seconds, the near-you feed, handover proof, what happens if someone doesn't return. Clean, fast, no music swells.</p>
+      <p class="why"><b>Job</b>Objection handling. Trust is the actual barrier, not interest.</p>
+    </div>
+    <div class="pillar">
+      <div class="top"><span class="name">Reader Confessions</span><span class="share">15%</span></div>
+      <p>Opinions and shared guilt: unread shelves, DNF permission, TBR piles, reading slumps, the plastic-cover habit. Text on screen, one strong line, deliberately arguable.</p>
+      <p class="why"><b>Job</b>Comments and reach. Cheap to make, feeds the algorithm, warms the audience for the rest.</p>
+    </div>
+    <div class="pillar" style="background:var(--ground-alt);box-shadow:none">
+      <div class="top"><span class="name">Weekly mix</span><span class="share">7 posts</span></div>
+      <p>5 short videos + 2 carousels per week, drawn in this ratio. Over a month that's roughly 6 Travelling Book, 4 Found In Books, 4 Reading Economics, 3 Swap Mechanics, 3 Confessions, and 8 carousels split across pillars.</p>
+      <p class="why"><b>Rule</b>Never two posts from the same pillar back to back.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 04 -->
+<section id="week">
+  <div class="sec-head">
+    <span class="num">04 — Operating system</span>
+    <h2>The four-hour week</h2>
+    <p>One batch session and four short daily windows. This is a genuine sequence, so it's numbered — each step depends on the one before it.</p>
+  </div>
+
+  <ol class="ritual">
+    <li>
+      <span class="slot">Sun<br>Block A</span>
+      <div class="body">
+        <strong>Shoot once, harvest all week</strong>
+        <p>One table, one window, one stack of books. Capture 20–25 clips of generic B-roll: page flips, spines sliding out, a book being wrapped, hands stacking, a shelf pan, a book on a table with tea. This footage gets reused for months across every pillar — you are building a library, not shooting a video.</p>
+        <span class="dur">45 min</span>
+      </div>
+    </li>
+    <li>
+      <span class="slot">Sun<br>Block B</span>
+      <div class="body">
+        <strong>Write five hooks, then five scripts</strong>
+        <p>Pull five hooks from the bank in section 07. Write the hook first and the script second — if the hook doesn't survive being read aloud, kill it before you spend editing time on it. Keep each script under 110 words for a 45-second cut.</p>
+        <span class="dur">35 min</span>
+      </div>
+    </li>
+    <li>
+      <span class="slot">Sun<br>Block C</span>
+      <div class="body">
+        <strong>Cut, caption, schedule</strong>
+        <p>Assemble in CapCut from the B-roll library, auto-caption, correct the caption timing, export 1080×1920. Schedule all five plus two carousels through Meta Business Suite. Leave one slot open for something reactive.</p>
+        <span class="dur">60 min</span>
+      </div>
+    </li>
+    <li>
+      <span class="slot">Mon–Fri<br>Daily</span>
+      <div class="body">
+        <strong>The engagement window</strong>
+        <p>Same time each day. Reply to every comment on your last post — the first 60 minutes after publishing matter most. Then leave ten substantive comments on Indian book accounts and in city-specific posts. Not "great post": a related experience, a real disagreement, a question. This is how a small account gets discovered.</p>
+        <span class="dur">15 min / day</span>
+      </div>
+    </li>
+    <li>
+      <span class="slot">Wed<br>Midweek</span>
+      <div class="body">
+        <strong>Work the inbox</strong>
+        <p>Answer every DM. Personally message anyone who signed up but hasn't listed a book yet — one line, no template energy. This single habit moves more first swaps than any post.</p>
+        <span class="dur">20 min</span>
+      </div>
+    </li>
+    <li>
+      <span class="slot">Sat<br>Review</span>
+      <div class="body">
+        <strong>Read the numbers, set next week</strong>
+        <p>Top three and bottom three posts, by shares and saves rather than likes. Write down the one thing the top three had in common. Choose next week's five hooks from that pattern. Log signups and completed swaps against the previous week.</p>
+        <span class="dur">25 min</span>
+      </div>
+    </li>
+  </ol>
+
+  <div class="note">
+    <p><strong>Total: about 4 hours.</strong> If a week collapses, protect the daily engagement window over the batch session. An account that posts three times and engages daily outgrows one that posts seven times and disappears.</p>
+  </div>
+</section>
+
+<!-- 05 -->
+<section id="kit">
+  <div class="sec-head">
+    <span class="num">05 — Production</span>
+    <h2>The faceless kit</h2>
+    <p>Three visual modes cover all thirty scripts. Nothing here requires anything you don't already have.</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Mode</th><th>What it looks like</th><th>Use it for</th><th>Tools</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Voiceover + books</strong></td><td>Overhead and tabletop shots, hands only, natural window light, your voice reading a written script</td><td>Travelling Book, Found In Books, anything with a story arc</td><td>Phone rear camera, a chair as tripod, voice memo re-recorded in a quiet room</td></tr>
+        <tr><td><strong>Text on screen</strong></td><td>Slow B-roll with bold captions, no voice, licensed or platform audio</td><td>Confessions, quick Reading Economics, hot takes</td><td>CapCut text presets — build one and reuse it so every post is recognisable</td></tr>
+        <tr><td><strong>Screen recording</strong></td><td>The real app, finger taps visible, sped up 1.5–2×, single caption per action</td><td>Swap Mechanics, feature launches, objection handling</td><td>Phone screen recorder, then crop to 9:16</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Non-negotiables for every video</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Rule</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Visual + text + first spoken word all land inside 1 second</td><td>You have three seconds of scroll to survive, and the first is the only one you control</td></tr>
+        <tr><td>Captions: max two lines, 3–5 words per line, key word in the accent colour</td><td>Most viewing is silent; captions lift watch time substantially</td></tr>
+        <tr><td>Under 45 seconds unless the story genuinely needs longer</td><td>Retention percentage drives distribution more than absolute length</td></tr>
+        <tr><td>One fixed opening frame per series</td><td>Repetition is how a faceless account builds recognition without a face</td></tr>
+        <tr><td>Every video ends with one instruction, never two</td><td>Two calls to action produce zero</td></tr>
+        <tr><td>Vertical 1080×1920, safe margins clear of the caption overlay</td><td>Text hidden behind the UI is the most common avoidable mistake</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 06 -->
+<section id="scripts">
+  <div class="sec-head">
+    <span class="num">06 — Script bank</span>
+    <h2>Thirty scripts, ready to shoot</h2>
+    <p>Six per pillar. Swap every bracketed value for real data from your sheets. <span style="white-space:nowrap"><span class="chip">VO</span> voiceover</span> · <span style="white-space:nowrap"><span class="chip">TEXT</span> silent</span> · <span style="white-space:nowrap"><span class="chip">SCREEN</span> app recording</span></p>
+  </div>
+
+  <h4>Pillar one — The Travelling Book</h4>
+  <div class="scripts">
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 01</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"This copy has been read by seven strangers. Here's all of them."</p>
+        <dl>
+          <dt>Shot</dt><dd>Overhead, book closed on a plain table. Hand opens the front cover to a handwritten list of names and cities.</dd>
+          <dt>Beats</dt><dd>Name each reader with one true detail — "Ananya, Pune, kept it four days." Cut to the next name every three seconds. Close on where it is right now and where it goes next.</dd>
+          <dt>CTA</dt><dd class="cta">"Put one of your books on a route. Link in bio."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 02</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"Every book on your shelf has one job. Most of them are unemployed."</p>
+        <dl>
+          <dt>Shot</dt><dd>Slow pan across a full shelf, then one book pulled out and held still.</dd>
+          <dt>Beats</dt><dd>"You bought it." / "You read it." / "That was two years ago." / "Now it's furniture." / "Somewhere near you, someone is looking for exactly this."</dd>
+          <dt>CTA</dt><dd class="cta">"Comment SWAP and I'll send you the link."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 03</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"I asked every reader to write one line before passing the book on."</p>
+        <dl>
+          <dt>Shot</dt><dd>Close on a page of handwriting, camera slowly moving down the lines.</dd>
+          <dt>Beats</dt><dd>Read three or four of the lines aloud, unhurried, no music under the reading. Silence after the last one, then the title card.</dd>
+          <dt>CTA</dt><dd class="cta">"Book number two is looking for its first reader."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 04</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"Day 1 versus day [N] of a book that never stopped moving."</p>
+        <dl>
+          <dt>Shot</dt><dd>Split or hard cut: pristine copy, then the same copy now — softened spine, a coffee ring, a folded corner.</dd>
+          <dt>Beats</dt><dd>Caption the wear as history, not damage: "that crease is Kochi", "that stain is a chai in Indiranagar".</dd>
+          <dt>CTA</dt><dd class="cta">"A book that looks used has been loved [N] times."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 05</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"This book has travelled [N] kilometres. I haven't left my city."</p>
+        <dl>
+          <dt>Shot</dt><dd>Static book on the table; a simple line animation draws city to city over it, distance counting up in the corner.</dd>
+          <dt>Beats</dt><dd>Name each leg and the reader who carried it. Keep the maths honest — sum the real routes from your Swaps sheet.</dd>
+          <dt>CTA</dt><dd class="cta">"Send yours somewhere you've never been."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 06</span><span class="chip">SCREEN</span></div>
+      <div class="inner">
+        <p class="hook">"Where books actually go when you let them leave."</p>
+        <dl>
+          <dt>Shot</dt><dd>Screen recording of the swap history / near-you feed, scrolling steadily.</dd>
+          <dt>Beats</dt><dd>Pause on three real entries. One sentence each. No hype language — the list is the payoff.</dd>
+          <dt>CTA</dt><dd class="cta">"Your city's shelf is in the link."</dd>
+        </dl>
+      </div>
+    </article>
+  </div>
+
+  <h4>Pillar two — Found In Books</h4>
+  <div class="scripts">
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 07</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"Someone left a train ticket from [year] inside this book."</p>
+        <dl>
+          <dt>Shot</dt><dd>The ticket lifted out from between pages, held to the light.</dd>
+          <dt>Beats</dt><dd>Read the route and date aloud. Wonder aloud about the journey. Do not resolve it — the unanswered question is what drives the comments.</dd>
+          <dt>CTA</dt><dd class="cta">"What's the strangest thing you've found in a book?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 08</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"'To Meera, so you never feel far from home. — 1998'"</p>
+        <dl>
+          <dt>Shot</dt><dd>Hold on the inscription for a full three seconds before anything else happens.</dd>
+          <dt>Beats</dt><dd>Read it. Pause. "Meera gave this book away last month." Let that sit. End card only.</dd>
+          <dt>CTA</dt><dd class="cta">"Send us an inscription from your shelf."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 09</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"Things Indians leave inside books, ranked."</p>
+        <dl>
+          <dt>Shot</dt><dd>Each object placed onto an open book, one cut per item.</dd>
+          <dt>Beats</dt><dd>Boarding pass · pressed flower · Rakhi · exam hall ticket · a phone number with no name at number one.</dd>
+          <dt>CTA</dt><dd class="cta">"Number one has never been claimed."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 10</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"The margin notes in this copy are better than the book."</p>
+        <dl>
+          <dt>Shot</dt><dd>Close-ups of pencil annotations, camera drifting across the page.</dd>
+          <dt>Beats</dt><dd>Read three notes in the previous reader's voice, gently. Land on the one that's funny or devastating.</dd>
+          <dt>CTA</dt><dd class="cta">"Are you a margin writer or a clean-page person?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 11</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"A secondhand book comes with a stranger's bookmark at page 61."</p>
+        <dl>
+          <dt>Shot</dt><dd>Bookmark still in place, book opened exactly there.</dd>
+          <dt>Beats</dt><dd>"They stopped here." / "They never came back." / "You get to decide what happens next."</dd>
+          <dt>CTA</dt><dd class="cta">"Finish someone else's book this month."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 12</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"I asked 200 readers what they found in a used book. These four ruined me."</p>
+        <dl>
+          <dt>Shot</dt><dd>Four objects laid out in a row, revealed one at a time.</dd>
+          <dt>Beats</dt><dd>Real submissions only, credited by first name and city. Build to the heaviest one.</dd>
+          <dt>CTA</dt><dd class="cta">"Part two comes from the comments."</dd>
+        </dl>
+      </div>
+    </article>
+  </div>
+
+  <h4>Pillar three — Reading Economics</h4>
+  <div class="scripts">
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 13</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"New: ₹599. Secondhand: ₹180. Swap: one book you're already done with."</p>
+        <dl>
+          <dt>Shot</dt><dd>Three copies of the same title on the table, price cards placed on each in turn.</dd>
+          <dt>Beats</dt><dd>Hold on the third for twice as long as the first two. Let the comparison do the argument.</dd>
+          <dt>CTA</dt><dd class="cta">"Column three is in the link."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 14</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"How to read 30 books this year without buying a single one."</p>
+        <dl>
+          <dt>Shot</dt><dd>Books stacked one by one as each method is named.</dd>
+          <dt>Beats</dt><dd>Public library card · office and hostel shelves · Sunday markets for near-free · a reading circle that rotates copies · swapping. Five methods, five stacks.</dd>
+          <dt>CTA</dt><dd class="cta">"Save this before your next order."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 15</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"Count your unread books. Multiply by ₹400. That's your shelf's dead money."</p>
+        <dl>
+          <dt>Shot</dt><dd>Numbers appearing over a shelf pan, counting up.</dd>
+          <dt>Beats</dt><dd>No shaming. Land on: "It isn't wasted. It's just parked in the wrong hands."</dd>
+          <dt>CTA</dt><dd class="cta">"Put three of them back in circulation."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 16</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"I priced ten books at a Sunday market and online. It wasn't close."</p>
+        <dl>
+          <dt>Shot</dt><dd>Market B-roll if you have it; otherwise the ten books at home with two price tags each.</dd>
+          <dt>Beats</dt><dd>Run the total both ways. Then add the third column — what the same ten cost through swaps.</dd>
+          <dt>CTA</dt><dd class="cta">"Which market is yours?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 17</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"Five cheapest ways to read in India, ranked by effort."</p>
+        <dl>
+          <dt>Shot</dt><dd>Numbered cards placed on a table, one per method.</dd>
+          <dt>Beats</dt><dd>Rank honestly, including the options that aren't yours. Credibility is the point; being the easiest option is the payoff.</dd>
+          <dt>CTA</dt><dd class="cta">"Number two takes four minutes to set up."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 18</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"The most-swapped book in [city] this month isn't the one you'd guess."</p>
+        <dl>
+          <dt>Shot</dt><dd>Three candidate books face down; flip the winner.</dd>
+          <dt>Beats</dt><dd>Straight from your Swaps sheet. Name the runner-up. Say which city is next month's.</dd>
+          <dt>CTA</dt><dd class="cta">"Tell me your city and I'll pull its numbers."</dd>
+        </dl>
+      </div>
+    </article>
+  </div>
+
+  <h4>Pillar four — Swap Mechanics</h4>
+  <div class="scripts">
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 19</span><span class="chip">SCREEN</span></div>
+      <div class="inner">
+        <p class="hook">"A whole swap, start to finish, in 40 seconds."</p>
+        <dl>
+          <dt>Shot</dt><dd>Screen recording at 1.75×: list → request → accept → chat → handover proof → confirmed.</dd>
+          <dt>Beats</dt><dd>One caption per screen, four words maximum. No music build. End on the confirmation state held for two seconds.</dd>
+          <dt>CTA</dt><dd class="cta">"First month is free. Link in bio."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 20</span><span class="chip">SCREEN</span></div>
+      <div class="inner">
+        <p class="hook">"But what if the stranger just keeps my book?"</p>
+        <dl>
+          <dt>Shot</dt><dd>The actual objection typed as a DM on screen, then cut to the product answering it.</dd>
+          <dt>Beats</dt><dd>Condition photos · handover confirmation · peer ratings · dispute handling. Show each, don't describe it.</dd>
+          <dt>CTA</dt><dd class="cta">"Ask me the harder version of this question."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 21</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"Lend, rent, swap or sell — most people pick wrong."</p>
+        <dl>
+          <dt>Shot</dt><dd>Four books, four labelled cards, sorted onto them.</dd>
+          <dt>Beats</dt><dd>One rule per option: lend what you'll want back, rent what's expensive, swap what you've finished, sell what you'll never open again.</dd>
+          <dt>CTA</dt><dd class="cta">"Which pile is biggest on your shelf?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 22</span><span class="chip">SCREEN</span></div>
+      <div class="inner">
+        <p class="hook">"Listing a book takes 18 seconds. Timer on screen."</p>
+        <dl>
+          <dt>Shot</dt><dd>Real time, no speed-up, visible timer. Scan the ISBN, cover and details autofill, publish.</dd>
+          <dt>Beats</dt><dd>The honesty of real time <em>is</em> the hook. Do not cut it.</dd>
+          <dt>CTA</dt><dd class="cta">"Beat my time. Send me a screenshot."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 23</span><span class="chip">SCREEN</span></div>
+      <div class="inner">
+        <p class="hook">"Readers within 3 km of me, right now."</p>
+        <dl>
+          <dt>Shot</dt><dd>Near-you feed, scrolling. Blur names and exact locations.</dd>
+          <dt>Beats</dt><dd>Count them out loud. Note two books you'd want. Localise this per city and repost it as a city-specific version.</dd>
+          <dt>CTA</dt><dd class="cta">"Comment your city — I'll tell you how many are already there."</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 24</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"The handover: what actually happens when two readers meet."</p>
+        <dl>
+          <dt>Shot</dt><dd>Two hands, one book, a café table. Nothing above the wrists.</dd>
+          <dt>Beats</dt><dd>Public place, condition photo, confirm in app, done. Ninety seconds, described calmly. Safety framed as normal practice, not as warning.</dd>
+          <dt>CTA</dt><dd class="cta">"Your first one is the only awkward one."</dd>
+        </dl>
+      </div>
+    </article>
+  </div>
+
+  <h4>Pillar five — Reader Confessions</h4>
+  <div class="scripts">
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 25</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"Buying books and reading books are two different hobbies."</p>
+        <dl>
+          <dt>Shot</dt><dd>A tall unread stack next to a short read one.</dd>
+          <dt>Beats</dt><dd>Say it, defend it in two lines, then concede one point to the other side. The concession is what makes people argue in the comments.</dd>
+          <dt>CTA</dt><dd class="cta">"Be honest. Which hobby are you actually in?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 26</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"Your TBR isn't a reading plan. It's a guilt pile."</p>
+        <dl>
+          <dt>Shot</dt><dd>Books stacked until the tower wobbles.</dd>
+          <dt>Beats</dt><dd>Then the reframe: a TBR you'll never finish is fine, if the books you've abandoned are moving to someone who will.</dd>
+          <dt>CTA</dt><dd class="cta">"How many unread are on your shelf right now?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 27</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"You're allowed to stop at page 50. Here's the rule."</p>
+        <dl>
+          <dt>Shot</dt><dd>A book closed decisively and set aside.</dd>
+          <dt>Beats</dt><dd>The fifty-page rule, and the permission that goes with it. Then: pass it on rather than let it sit as a reproach.</dd>
+          <dt>CTA</dt><dd class="cta">"What did you DNF and never regret?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 28</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"A reading slump is not a discipline problem."</p>
+        <dl>
+          <dt>Shot</dt><dd>A book face down, untouched, dust visible.</dd>
+          <dt>Beats</dt><dd>It's usually the wrong book, the wrong format or the wrong hour. Three fixes, one line each.</dd>
+          <dt>CTA</dt><dd class="cta">"Which of the three is yours?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 29</span><span class="chip">TEXT</span></div>
+      <div class="inner">
+        <p class="hook">"The most Indian reading habit: the plastic cover."</p>
+        <dl>
+          <dt>Shot</dt><dd>Brown paper and plastic being wrapped over a cover, school-style.</dd>
+          <dt>Beats</dt><dd>Nostalgia, then the turn: we were taught to protect books so they'd last for the <em>next</em> person. That instinct is the whole idea.</dd>
+          <dt>CTA</dt><dd class="cta">"Did your school make you do this too?"</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="script">
+      <div class="card-head"><span class="id">S 30</span><span class="chip solid">VO</span></div>
+      <div class="inner">
+        <p class="hook">"Nobody wants to say it: you will not reread 95% of your shelf."</p>
+        <dl>
+          <dt>Shot</dt><dd>Shelf pan, then one book pulled and placed alone in frame.</dd>
+          <dt>Beats</dt><dd>Name the five you genuinely would reread. Everything else is a book waiting to be someone's first copy.</dd>
+          <dt>CTA</dt><dd class="cta">"Name the one book you'd never let go."</dd>
+        </dl>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- 07 -->
+<section id="hooks">
+  <div class="sec-head">
+    <span class="num">07 — Hooks</span>
+    <h2>Thirty spare hooks</h2>
+    <p>For the Sunday session, when the thirty scripts are used up. Pick five, write the script after the hook, never before.</p>
+  </div>
+
+  <ul class="hooks">
+    <li>"I let strangers borrow my books for a year. Here's the return rate."</li>
+    <li>"The book that gets swapped most in India is not the one on every bestseller list."</li>
+    <li>"Your bookshelf is a library with one member."</li>
+    <li>"Three books, three cities, one week."</li>
+    <li>"I stopped buying books in January. Here's what happened to my reading."</li>
+    <li>"Nobody tells you this about secondhand books."</li>
+    <li>"The cheapest book in India is the one your neighbour already finished."</li>
+    <li>"This is what ₹49 a month actually buys a reader."</li>
+    <li>"Readers in [city]: this is your shelf, and you didn't know it existed."</li>
+    <li>"How many books did you buy last year? Now how many did you finish?"</li>
+    <li>"The one shelf rule that changed how I read."</li>
+    <li>"Bookstores hate this. Libraries invented it."</li>
+    <li>"I DMed 50 readers the same question. The answers were identical."</li>
+    <li>"What happens to a book after you're done with it?"</li>
+    <li>"A stranger returned my book with a note in it."</li>
+    <li>"Reading is not expensive. Owning is."</li>
+    <li>"Watch a book cross India in 30 seconds."</li>
+    <li>"Every unread book on your shelf is somebody's favourite book."</li>
+    <li>"The best book I read this year cost me nothing."</li>
+    <li>"Why Indian readers never lend books — and why that's changing."</li>
+    <li>"Rate my shelf, then tell me which three should leave."</li>
+    <li>"Five books that are always available and never worth owning."</li>
+    <li>"I tracked what my city reads for 90 days."</li>
+    <li>"This book has outlived two of its owners' relationships."</li>
+    <li>"Hostel shelves are the most underrated library in India."</li>
+    <li>"The book you're avoiding is the one you should pass on."</li>
+    <li>"What your most-lent book says about you."</li>
+    <li>"I asked for the worst book anyone has ever swapped. It got personal."</li>
+    <li>"A reading circle of six people needs one copy, not six."</li>
+    <li>"The most valuable book on your shelf is the one someone else is looking for."</li>
+  </ul>
+</section>
+
+<!-- 08 -->
+<section id="youtube">
+  <div class="sec-head">
+    <span class="num">08 — YouTube</span>
+    <h2>Eight faceless formats worth building a channel on</h2>
+    <p>One long-form video every week from week five, each one harvested into three or four Shorts. The channel is not a second job — it's the same footage, cut longer.</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Format</th><th>Length</th><th>How it's shot faceless</th><th>Why it earns</th></tr></thead>
+      <tbody>
+        <tr><td><strong>The Travelling Book</strong><br>Numbered docu-series</td><td class="num">8–12 min</td><td>Tabletop B-roll, route animation, your voice, readers' written lines read aloud</td><td>Your flagship. Serialised, so viewers return — and returns are what build watch hours.</td></tr>
+        <tr><td><strong>What India Actually Reads</strong><br>Data video from your Sheets</td><td class="num">10–14 min</td><td>Charts on screen, voiceover, book stacks as cutaways</td><td>Proprietary data nobody can copy. Gets picked up and cited. Your strongest single video idea.</td></tr>
+        <tr><td><strong>₹0 Reading</strong><br>Utility guide</td><td class="num">8–10 min</td><td>Screen recordings, library footage, price comparisons</td><td>Search demand. Keeps earning views for years, which is what actually accumulates watch hours.</td></tr>
+        <tr><td><strong>Inside India's Book Markets</strong><br>Place documentary</td><td class="num">10–15 min</td><td>Handheld B-roll of Daryaganj, College Street, Abids · no presenter</td><td>High retention, visually rich, culturally specific. Sponsorship-friendly.</td></tr>
+        <tr><td><strong>Notes Left In Books</strong><br>Ambient anthology</td><td class="num">12–20 min</td><td>Close-ups of handwriting, quiet narration, minimal music</td><td>Long watch sessions. Community-sourced, so it costs almost nothing to make.</td></tr>
+        <tr><td><strong>Building SwapSutra</strong><br>Build-in-public</td><td class="num">10–15 min</td><td>Screen recordings, dashboards, real numbers</td><td>Reaches founders and press, not just readers. Recruits ambassadors.</td></tr>
+        <tr><td><strong>Reading Circle Sessions</strong><br>Recorded meetups</td><td class="num">20–40 min</td><td>Slides plus audio, participants credited by first name only</td><td>Long-duration watch hours from content you were producing anyway.</td></tr>
+        <tr><td><strong>One Book, Seven Readers</strong><br>Audio anthology</td><td class="num">15–25 min</td><td>Voice notes from real swappers over static book imagery</td><td>Podcast-shaped. Easy to make weekly once the pipeline exists.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>How each long-form video pays for itself</h3>
+  <p>Shoot the long-form first, then harvest. From one 10-minute video you should get three or four Shorts, one Instagram carousel, one WhatsApp broadcast and a week of story frames. That's the only way weekly long-form fits inside four hours — it doesn't sit on top of the short-form workload, it <em>replaces</em> the writing half of it.</p>
+
+  <h3>Search-first titling</h3>
+  <p>YouTube is a search engine in a way Instagram isn't. Title for what someone types: "How to read 30 books a year in India (without buying them)" outperforms "My reading journey" every time. Put the same phrase in the first line of the description and say it aloud in the first fifteen seconds.</p>
+</section>
+
+<!-- 09 -->
+<section id="money">
+  <div class="sec-head">
+    <span class="num">09 — Economics</span>
+    <h2>The honest money math</h2>
+    <p>You asked about profiting from YouTube. Here's the version a marketing director owes you rather than the version that sounds good.</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Gate</th><th>Requirement</th><th>What it means for you</th></tr></thead>
+      <tbody>
+        <tr><td>Fan funding tier</td><td>500 subscribers · 3 public uploads in 90 days · 3,000 watch hours <em>or</em> 3M Shorts views</td><td>Reachable in roughly 4–6 months at one long-form per week.</td></tr>
+        <tr><td>Full ad revenue<br><em>through 31 Jan 2027</em></td><td>1,000 subscribers · 4,000 watch hours <em>or</em> 10M Shorts views (90 days)</td><td><strong>Qualify before February 2027.</strong> This is the single most valuable deadline on the page.</td></tr>
+        <tr><td>Full ad revenue<br><em>from 1 Feb 2027</em></td><td>1,000 subscribers · 8,000 watch hours <em>or</em> 20M Shorts views (90 days)</td><td>The bar doubles. Missing the window costs you months.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="verdict">
+    <p class="big">Ad revenue will not be the profit. It's the smallest line on the list.</p>
+    <p>Reported Indian CPMs for general-interest content cluster in a wide, low range, and book content sits at the modest end of it. Treat published RPM figures as directional only, and expect a channel doing 100,000 views a month to produce pocket money rather than income. That is not a reason to skip YouTube — it's a reason to be clear about what YouTube is <em>for</em>.</p>
+    <p>YouTube's real job here is to be the top of the funnel that Instagram can't be: searchable, evergreen, and long enough to build actual trust before someone hands a book to a stranger.</p>
+  </div>
+
+  <h3>The revenue stack, in the order it should matter</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="num">Priority</th><th>Line</th><th>Why it ranks here</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td><strong>SwapSutra memberships</strong> — ₹49/month after the free trial</td><td>Your own margin, your own data, compounding. A thousand paying members is worth more than most Indian book channels earn in a year from ads.</td></tr>
+        <tr><td class="num">2</td><td><strong>Publisher and brand sponsorships</strong></td><td>Indian publishers, bookstores, reading apps and stationery brands want exactly this audience. A niche channel with a defined community sells better than a bigger, vaguer one. Negotiate per campaign; don't anchor on public rate cards.</td></tr>
+        <tr><td class="num">3</td><td><strong>Affiliate links</strong> — Amazon Associates India and similar</td><td>Fits naturally under "₹0 reading" and market videos. Modest but genuinely passive.</td></tr>
+        <tr><td class="num">4</td><td><strong>Ticketed events and circles</strong></td><td>You already have reading circles and meetups in the product. Small ticket prices, high margin, and they deepen the community rather than taxing it.</td></tr>
+        <tr><td class="num">5</td><td><strong>YouTube ad revenue</strong></td><td>Real, but last. Take it as a bonus for content you were making anyway.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><strong>Verify before you plan around these.</strong> Monetisation thresholds and CPM ranges change; the figures above reflect what's published as of August 2026. Check the current YouTube Partner Program page before you make a decision that depends on a number.</p>
+  </div>
+</section>
+
+<!-- 10 -->
+<section id="funnel">
+  <div class="sec-head">
+    <span class="num">10 — Conversion</span>
+    <h2>From a view to a completed swap</h2>
+    <p>Most book accounts lose people between the video and the app. Six steps, each with one job.</p>
+  </div>
+
+  <div class="funnel">
+    <div class="step"><span class="stage">See</span><div class="txt"><strong>The video does one job: make them curious enough to tap the profile</strong><p>Not to convert. Conversion happens on the profile, never in the caption. Stop putting links in captions — they suppress reach and nobody taps them anyway.</p></div></div>
+    <div class="step"><span class="stage">Profile</span><div class="txt"><strong>Bio names the outcome and the city, not the category</strong><p>"Swap books with readers near you · Bengaluru, Pune, Delhi NCR · first month free" beats "India's book community". Pin three posts: the best Travelling Book episode, the 40-second swap demo, and the ₹0 reading guide.</p></div></div>
+    <div class="step"><span class="stage">Link</span><div class="txt"><strong>The link goes to a city page, never the homepage</strong><p>Three options only: <em>Books near you in [city]</em> · <em>How swapping works, 60 seconds</em> · <em>Free: the ₹0 Reading Guide</em>. Every extra link costs you conversions.</p></div></div>
+    <div class="step"><span class="stage">Capture</span><div class="txt"><strong>Comment-to-DM on every high-reach post</strong><p>"Comment SWAP" triggers an automatic DM with the link. It converts far better than bio traffic, and the comments themselves boost distribution. Follow the auto-DM with a real one within a day.</p></div></div>
+    <div class="step"><span class="stage">Activate</span><div class="txt"><strong>Signup is not the win. The first listing is.</strong><p>A user with zero books listed will never swap. Message every new signup within 48 hours with one specific ask: "List three books you're finished with — takes about a minute each."</p></div></div>
+    <div class="step"><span class="stage">Swap</span><div class="txt"><strong>Hand-hold the first swap personally, for as long as you can</strong><p>Until you're at real volume, matching people yourself is the highest-leverage hour in your week. A completed first swap is the strongest predictor of a paying member — and it produces the next Travelling Book episode.</p></div></div>
+  </div>
+
+  <h3>Three lead magnets worth making</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Magnet</th><th>Format</th><th>Why this one</th></tr></thead>
+      <tbody>
+        <tr><td><strong>The ₹0 Reading Guide</strong></td><td>6-page PDF</td><td>Directly downstream of your best-performing pillar. Ends with SwapSutra as method five, not method one.</td></tr>
+        <tr><td><strong>The Book Passport</strong></td><td>Printable insert</td><td>A slip readers print, sign and leave inside a swapped book. It's a lead magnet, a physical branding object, and an endless content source in one — every returned passport is a Travelling Book episode.</td></tr>
+        <tr><td><strong>Shelf Audit</strong></td><td>Sheet or simple web tool</td><td>Count your unread books, see what they cost, see what they'd swap for. Turns a vague feeling into a number, and the number is the motivation.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><strong>WhatsApp is the channel that actually converts in India.</strong> Instagram builds the audience; WhatsApp closes it. Run one group per active city, capped and curated, plus a weekly broadcast of new listings near them. Design one story-and-status-shaped asset per week so members can forward it without editing — forwarding is the only distribution that costs you nothing.</p>
+  </div>
+</section>
+
+<!-- 11 -->
+<section id="cities">
+  <div class="sec-head">
+    <span class="num">11 — Density</span>
+    <h2>Three cities, not one country</h2>
+    <p>A swap network is worthless at 1% density in twenty cities and valuable at 20% density in one neighbourhood. This is the least intuitive and most important part of the plan.</p>
+  </div>
+
+  <p class="lede">Pull your Users sheet and rank cities by signups. Pick the top two, plus one campus city where the Ambassador system gives you a shortcut. Everything geo-targeted goes to those three for the full 90 days.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Lever</th><th>What to do</th><th>Effort</th></tr></thead>
+      <tbody>
+        <tr><td>City cuts of every post</td><td>Re-export your best three videos with the city name in the on-screen text and caption. Same edit, three versions.</td><td>10 min each</td></tr>
+        <tr><td>Campus ambassadors</td><td>You already have the system. Recruit two per campus, give them a target of ten listings and three swaps each, and feature their campus in a video.</td><td>High leverage</td></tr>
+        <tr><td>Bookstores and cafés</td><td>A small QR card on the counter of independent bookshops and reading cafés. Offer them a featured shelf on the platform in exchange.</td><td>One afternoon per city</td></tr>
+        <tr><td>Local bookstagram collabs</td><td>Don't ask for a promo. Offer to run a swap for their followers and film it. They get content, you get density.</td><td>2–3 per city</td></tr>
+        <tr><td>The first meetup</td><td>Eight people, one café, everyone brings two books. Film it faceless — hands, books, table. That footage carries a month of posts.</td><td>Once per city</td></tr>
+        <tr><td>Hostels and PGs</td><td>The highest-density book-sharing environment in India and the most under-served. One ambassador per hostel block.</td><td>Underrated</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 12 -->
+<section id="numbers">
+  <div class="sec-head">
+    <span class="num">12 — Measurement</span>
+    <h2>What to look at, and what to ignore</h2>
+    <p>Saturday review, twenty-five minutes, same six numbers every week.</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Metric</th><th>Read it as</th><th>Weight</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Completed swaps / week</strong></td><td>The north star. If this is flat, nothing else on this table matters.</td><td>Decisive</td></tr>
+        <tr><td><strong>Shares per post</strong></td><td>The strongest reach signal there is. A post with 40 shares and 200 likes beats one with 2,000 likes.</td><td>High</td></tr>
+        <tr><td><strong>Saves per post</strong></td><td>Intent to act later. Reading Economics posts should over-index here.</td><td>High</td></tr>
+        <tr><td><strong>Signup → first listing rate</strong></td><td>Your activation health. Below 40% means the onboarding, not the content, is the problem.</td><td>High</td></tr>
+        <tr><td><strong>Comments</strong></td><td>Worth several likes each. Confessions posts are judged on this alone.</td><td>Medium</td></tr>
+        <tr><td><strong>Average watch percentage</strong></td><td>Where people leave tells you whether your hook or your middle is broken.</td><td>Medium</td></tr>
+        <tr><td>Follower count</td><td>Lagging, vanity-adjacent, and easy to fake. Track it, never optimise for it.</td><td>Low</td></tr>
+        <tr><td>Likes</td><td>Close to meaningless in isolation.</td><td>Ignore</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>One habit worth more than any dashboard: after the Saturday review, write a single sentence in a notes file — "this week, the posts that worked all had ___ in the first two seconds." Thirteen of those sentences is a house style nobody can copy.</p>
+</section>
+
+<!-- 13 -->
+<section id="plan">
+  <div class="sec-head">
+    <span class="num">13 — Schedule</span>
+    <h2>The 90 days</h2>
+    <p>Three phases, in order. Don't start phase two until phase one's target is hit — the sequence is the point.</p>
+  </div>
+
+  <div class="phases">
+    <div class="phase">
+      <div class="ph">Phase 01</div>
+      <h3>Build the machine</h3>
+      <div class="days">Days 1–30</div>
+      <ul>
+        <li>Rewrite bio and link page; pin three posts</li>
+        <li>Shoot the B-roll library — one long session, 60+ clips</li>
+        <li>Ship scripts S01–S15; establish the Sunday ritual</li>
+        <li>Launch The Travelling Book as a named, numbered series</li>
+        <li>Open the call for Found In Books submissions</li>
+        <li>Pick the three cities from your Users sheet</li>
+        <li>Publish the ₹0 Reading Guide; turn on comment-to-DM</li>
+      </ul>
+      <div class="target"><b>Target</b>Consistent 7 posts/week and a first-listing rate above 40%</div>
+    </div>
+
+    <div class="phase">
+      <div class="ph">Phase 02</div>
+      <h3>Find what works</h3>
+      <div class="days">Days 31–60</div>
+      <ul>
+        <li>Launch YouTube: one long-form per week, harvested into Shorts</li>
+        <li>Publish "What India Actually Reads" from your own data</li>
+        <li>Double down on the two pillars with the best share rate</li>
+        <li>First city meetup; film it faceless</li>
+        <li>Recruit campus ambassadors in city three</li>
+        <li>Open WhatsApp groups for the top two cities</li>
+        <li>Ship the Book Passport</li>
+      </ul>
+      <div class="target"><b>Target</b>One post per week clearing 10× your normal reach, and a repeatable reason why</div>
+    </div>
+
+    <div class="phase">
+      <div class="ph">Phase 03</div>
+      <h3>Compound it</h3>
+      <div class="days">Days 61–90</div>
+      <ul>
+        <li>Cut low-performing pillars; reallocate their share</li>
+        <li>Re-cut the top five posts as city-specific versions</li>
+        <li>Collaborate with 3–5 Indian book creators, swap-led not promo-led</li>
+        <li>Push toward the 500-subscriber fan-funding gate</li>
+        <li>Convert the first free-trial cohort to ₹49 members</li>
+        <li>Approach two publishers or bookstores for sponsorship</li>
+        <li>Write the house-style document from your thirteen Saturday sentences</li>
+      </ul>
+      <div class="target"><b>Target</b>Swaps growing week on week without you matching people by hand</div>
+    </div>
+  </div>
+</section>
+
+<!-- 14 -->
+<section id="avoid">
+  <div class="sec-head">
+    <span class="num">14 — Guardrails</span>
+    <h2>Things that will cost you the next 90 days</h2>
+    <p>Each of these is a specific way small book accounts stall.</p>
+  </div>
+
+  <ul class="avoid">
+    <li><b>Generic book reviews and "5 books you must read" lists.</b> Infinite supply, zero differentiation, and they attract followers who will never swap anything.</li>
+    <li><b>Launching in ten cities at once.</b> A reader who opens the app and finds nobody nearby does not come back, and you only get one first impression per city.</li>
+    <li><b>Buying followers or engagement.</b> It poisons your reach distribution permanently and tells you nothing true about what's working.</li>
+    <li><b>Posting the same file to Instagram, YouTube and everywhere else.</b> Re-cut per platform — different length, different first frame, different caption. A visible watermark from another app suppresses reach.</li>
+    <li><b>Leading with the ₹49 membership.</b> Sell the first swap. Sell the membership to people who've already completed one and felt it work.</li>
+    <li><b>Inventing statistics because the real ones are small.</b> "Seven readers" told honestly is more compelling than "ten thousand books" that isn't true, and it's the only version you can defend.</li>
+    <li><b>Chasing trending audio that has nothing to do with books.</b> It buys a spike of the wrong audience and teaches the algorithm to show you to people who won't convert.</li>
+    <li><b>Abandoning a series after four episodes.</b> Serialised formats pay off exactly when they start to feel repetitive to you — that's the moment they've become recognisable to everyone else.</li>
+    <li><b>Skipping the daily engagement window because you posted.</b> Posting is broadcast; commenting is distribution. At your size the second matters more.</li>
+  </ul>
+
+  <footer>
+    <p><strong>Sources for the platform requirements and monetisation figures:</strong> YouTube Partner Program requirements as published in 2026 (subscriber, watch-hour and Shorts-view thresholds, including the 1 February 2027 change), and reported Indian CPM/RPM ranges. Both are directional and change frequently — verify against YouTube's own documentation before making decisions that depend on them.</p>
+    <p>Every bracketed value in the script bank is a placeholder for real data from the SwapSutra Users, Books and Swaps sheets.</p>
+  </footer>
+</section>
+
+</main>
+</div>
