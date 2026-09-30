@@ -1,0 +1,4013 @@
+@import "tailwindcss";
+
+/* ════════════════════════════════════════════════════════════════════════════
+   SWAPSUTRA — DESIGN SYSTEM  v4.0
+   ────────────────────────────────────────────────────────────────────────────
+   PHILOSOPHY
+   • All colour decisions live in CSS custom properties (tokens).
+   • :root defines the (single, light) colour tokens. There is no dark mode.
+   • Every component reads ONLY from tokens — never hard-coded hex values
+     in component rules, never class-name inference selectors.
+   • NO blanket  p, span, li, a, button  overrides outside :root / body.
+   • NO [class~="bg-*"] / [class*="bg-"] selectors anywhere.
+   • WCAG AA compliance is baked into the token palette, not enforced
+     with !important hammers.
+
+   TOKEN LAYERS
+   ┌─ Page layer   : --bg-page, --bg-page-alt
+   ├─ Surface layer: --bg-surface, --bg-surface-raised, --bg-surface-inset
+   ├─ Text layer   : --text-primary, --text-secondary, --text-muted, --text-accent
+   ├─ Border layer : --border-default, --border-strong, --border-subtle
+   ├─ Button layer : --btn-primary-bg, --btn-primary-fg
+   │               : --btn-outline-border, --btn-outline-fg
+   └─ Input layer  : --input-bg, --input-fg, --input-border, --input-placeholder
+
+   CONTRAST AUDIT (WCAG AA ≥ 4.5:1 body, ≥ 3:1 large/UI)
+   — recomputed for the "dusty rose feather" cozy-reader palette —
+   DAY MODE
+     --text-primary   #4A3B32 / --bg-page    #F9F6F0  →  9.9:1 ✓
+     --text-primary   #4A3B32 / --bg-surface #FFFFFF  → 10.7:1 ✓
+     --text-muted     #7C6E65 / --bg-page    #F9F6F0  →  4.6:1 ✓ (AA, body-text floor)
+     --text-accent    #8E4A59 / --bg-page    #F9F6F0  →  6.0:1 ✓
+     --btn-primary-fg #FFFFFF / --btn-primary-bg #8E4A59 → 6.4:1 ✓
+   Note: --text-secondary is intentionally the same value as --text-primary — one warm ink color for all headings AND body/description
+   text (rather than a second distinct hue), which keeps long book descriptions
+   at the same high-contrast ratio as headings instead of a dimmer in-between
+   tone. --text-muted stays a visibly lighter step for true de-emphasis
+   (labels, captions) and still clears the AA floor on its own.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+
+/* ══════════════════════════════════════════════════════
+   1. TAILWIND THEME EXTENSION
+   ══════════════════════════════════════════════════════ */
+
+/* ══════════════════════════════════════════════════════
+   0. TYPOGRAPHY TOKENS (30 Sep 2026) — the ONE place type is decided
+   ──────────────────────────────────────────────────────────
+   Premium bookstore × editorial magazine × quiet Indian reading café.
+     --font-display  Cormorant Garamond — the literary serif SwapSutra's
+                     headings already use; kept for continuity.
+     --font-body /   Source Sans 3 — a humanist sans made for long
+     --font-ui       reading and small UI text (replaces Plus Jakarta Sans,
+                     whose geometric shapes read "startup").
+   Sizes are fluid with clamp(): each step grows smoothly from a phone
+   (360px) to a desktop (1280px+) instead of jumping at a breakpoint.
+   Floors: body/form text never below 16px (also stops iOS zooming into
+   inputs); nothing anywhere below 11px (--font-size-2xs is only for dense
+   chips, overlays and the bottom-bar labels).
+   Tailwind's text-*, font-*, leading-* and tracking-* utilities are mapped
+   onto these tokens in @theme below, so every existing class follows them.
+   ══════════════════════════════════════════════════════ */
+:root {
+  --font-display: "Cormorant Garamond", "Iowan Old Style", Georgia, serif;
+  --font-body:    "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-ui:      "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  --font-size-2xs: 0.6875rem;                                    /* 11px — dense chips only */
+  --font-size-xs:  0.75rem;                                      /* 12px */
+  --font-size-sm:  0.875rem;                                     /* 14px */
+  --font-size-md:  1rem;                                         /* 16px — body floor */
+  --font-size-lg:  clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);   /* 17 → 19 */
+  --font-size-xl:  clamp(1.1875rem, 1.1rem + 0.45vw, 1.4375rem); /* 19 → 23 */
+  --font-size-2xl: clamp(1.3125rem, 1.15rem + 0.85vw, 1.875rem); /* 21 → 30 */
+  --font-size-3xl: clamp(1.625rem, 1.3rem + 1.5vw, 2.5rem);      /* 26 → 40 */
+  --font-size-4xl: clamp(1.875rem, 1.4rem + 2.6vw, 3.5rem);      /* 30 → 56 */
+  --font-size-5xl: clamp(2.125rem, 1.5rem + 3.8vw, 4.5rem);      /* 34 → 72 — hero display */
+
+  --font-weight-regular:  400;
+  --font-weight-medium:   500;
+  --font-weight-semibold: 600;
+  --font-weight-bold:     700;
+
+  --line-height-tight:   1.15;
+  --line-height-snug:    1.3;
+  --line-height-normal:  1.5;
+  --line-height-relaxed: 1.7;
+
+  --letter-spacing-tight:   -0.02em;
+  --letter-spacing-normal:  0em;
+  --letter-spacing-wide:    0.06em;   /* small caps labels */
+  --letter-spacing-caps:    0.12em;   /* UPPERCASE eyebrow/button labels */
+  --letter-spacing-eyebrow: 0.22em;   /* the widest editorial eyebrows */
+}
+/* Phones: wide caps tracking turns a three-word label into two lines. */
+@media (max-width: 767px) {
+  :root {
+    --letter-spacing-caps: 0.1em;
+    --letter-spacing-eyebrow: 0.16em;
+  }
+}
+
+@theme {
+  --font-serif:   var(--font-display);
+  --font-sans:    var(--font-body);
+
+  /* Tailwind size utilities → tokens (each with a sensible line height). */
+  --text-2xs:  var(--font-size-2xs);  --text-2xs--line-height: 1.45;
+  --text-xs:   var(--font-size-xs);   --text-xs--line-height: 1.5;
+  --text-sm:   var(--font-size-sm);   --text-sm--line-height: 1.5;
+  --text-base: var(--font-size-md);   --text-base--line-height: 1.6;
+  --text-md:   var(--font-size-md);   --text-md--line-height: 1.6;
+  --text-lg:   var(--font-size-lg);   --text-lg--line-height: 1.55;
+  --text-xl:   var(--font-size-xl);   --text-xl--line-height: 1.4;
+  --text-2xl:  var(--font-size-2xl);  --text-2xl--line-height: 1.3;
+  --text-3xl:  var(--font-size-3xl);  --text-3xl--line-height: 1.2;
+  --text-4xl:  var(--font-size-4xl);  --text-4xl--line-height: 1.1;
+  --text-5xl:  var(--font-size-5xl);  --text-5xl--line-height: 1.05;
+  --text-6xl:  var(--font-size-5xl);  --text-6xl--line-height: 1.05;
+  --text-7xl:  var(--font-size-5xl);  --text-7xl--line-height: 1.05;
+  --text-8xl:  var(--font-size-5xl);  --text-8xl--line-height: 1;
+  --text-9xl:  var(--font-size-5xl);  --text-9xl--line-height: 1;
+
+  /* Weights: nothing heavier than bold (no shouting). */
+  --font-weight-normal:    var(--font-weight-regular);
+  --font-weight-extrabold: var(--font-weight-bold);
+  --font-weight-black:     var(--font-weight-bold);
+
+  --leading-none:    1;
+  --leading-tight:   var(--line-height-tight);
+  --leading-snug:    var(--line-height-snug);
+  --leading-normal:  var(--line-height-normal);
+  --leading-relaxed: var(--line-height-relaxed);
+
+  --tracking-tighter: var(--letter-spacing-tight);
+  --tracking-tight:   var(--letter-spacing-tight);
+  --tracking-normal:  var(--letter-spacing-normal);
+  --tracking-wide:    var(--letter-spacing-wide);
+  --tracking-wider:   var(--letter-spacing-wide);
+  --tracking-widest:  var(--letter-spacing-caps);
+  --tracking-eyebrow: var(--letter-spacing-eyebrow);
+
+  /* Brand palette — static, never change between modes
+     "Dusty rose feather" palette (matches the SwapSutra logo mark). */
+  --color-brand-offwhite:   #F9F6F0;
+  --color-brand-beige:      #F2EBE1;
+  --color-brand-brown:      #4A3B32;
+  --color-brand-dark:       #4A3B32;
+  --color-brand-softbrown:  #7C6E65;
+  --color-brand-gold:       #8E4A59;
+  --color-brand-gold-muted: #A85D6D;
+  --color-brand-border:     #E5DDD3;
+
+  /* Mode-aware gold for TEXT specifically (badges, labels, prices).
+     Resolves through --text-accent, which is darkened in day mode
+     for AA contrast on light backgrounds and stays vivid in night
+     mode. Use text-brand-gold-text for text; keep text-brand-gold /
+     bg-brand-gold / border-brand-gold for backgrounds, borders, and
+     icons where the vivid static gold is safe to use as-is. */
+  --color-brand-gold-text:  var(--text-accent);
+
+}
+
+
+/* ══════════════════════════════════════════════════════
+   ALL DESIGN-SYSTEM RULES BELOW LIVE IN @layer base.
+   Tailwind utility classes are emitted in @layer utilities,
+   which — per the CSS Cascade Layers spec — always wins over
+   ANY rule in an earlier-declared layer, regardless of
+   selector specificity. Without this wrapper, plain element
+   selectors below (h1-h6, p, a, label, th, td, svg, etc.)
+   were UNLAYERED, which beats every layered rule outright —
+   silently overriding text-color utility classes on headings,
+   paragraphs, and links everywhere in the app, including
+   inside always-dark cards/heroes. This is the fix.
+   ══════════════════════════════════════════════════════ */
+@layer base {
+
+
+/* ══════════════════════════════════════════════════════
+   2. DESIGN TOKEN DEFINITIONS
+   ══════════════════════════════════════════════════════ */
+
+/* ── DAY MODE tokens (default) — "dusty rose feather" cozy-reader palette ── */
+:root {
+  /* One light look everywhere; stops phones in system dark mode from
+     darkening native controls and scrollbars. */
+  color-scheme: light;
+  /* Page backgrounds */
+  /* 30 Sep: a white bookshop page (the owner's reference), with the old
+     cream kept for panels and insets so warmth stays in the details. */
+  --bg-page:          #FFFFFF;
+  --bg-page-alt:      #F6F1EA;
+
+  /* Surface backgrounds */
+  --bg-surface:       #FFFFFF;  /* Clean White (cards) */
+  --bg-surface-raised:#FFFFFF;
+  --bg-surface-inset: #F6F1EA;
+
+  /* Inverted surface (dark panels ON the light page: footer, hero strip) —
+     reuses the night palette's own page/surface tones so a dark panel looks
+     the same whether the page around it is in day or night mode. */
+  --bg-inverse:       #1E1B18;
+  --bg-inverse-alt:   #16130F;
+
+  /* Text */
+  --text-primary:     #221D1A;  /* warm near-black ink (30 Sep; was espresso #4A3B32) */
+  --text-secondary:   #221D1A;  /* same ink as primary — see contrast-audit note above */
+  --text-muted:       #6B5F57;  /* Warm Taupe — 6.2:1 on white */
+  --text-accent:      #8E4A59;  /* Dusty Mauve — passes AA (6.0:1+) as text on light bg */
+  --text-on-inverse:  #F0E9E2;
+  --text-on-inverse-secondary: #A39B94;
+
+  /* Borders */
+  --border-default:   #E5DDD3;
+  --border-strong:    #D6C9BC;
+  --border-subtle:    rgba(74,59,50,0.1);
+  --border-inverse:   rgba(142,74,89,0.25);
+
+  /* Buttons — primary (brand accent per the logo palette) */
+  --btn-primary-bg:   #8E4A59;
+  --btn-primary-fg:   #FFFFFF;
+  --btn-primary-hover-bg: #7A3E4B;
+
+  /* Buttons — outline */
+  --btn-outline-border: #8E4A59;
+  --btn-outline-fg:     #8E4A59;
+  --btn-outline-hover-bg: #8E4A59;
+  --btn-outline-hover-fg: #FFFFFF;
+
+  /* Inputs */
+  --input-bg:          #FFFFFF;
+  --input-fg:          #4A3B32;
+  --input-border:      #D6C9BC;
+  --input-placeholder: #7C6E65;
+  --input-focus-ring:  rgba(142,74,89,0.2);
+
+  /* Brand accent (buttons / links / active states) */
+  --gold: #8E4A59;
+
+  /* Shadows */
+  --shadow-soft:  0 4px 20px rgba(74,59,50,0.06);
+  --shadow-card:  0 8px 32px rgba(74,59,50,0.08);
+  --shadow-modal: 0 24px 70px rgba(74,59,50,0.14);
+}
+
+
+/* ══════════════════════════════════════════════════════
+   3. RESET & BASE
+   ══════════════════════════════════════════════════════ */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  tab-size: 4;
+}
+
+
+/* ══════════════════════════════════════════════════════
+   4. BODY — reads from tokens
+   ══════════════════════════════════════════════════════ */
+
+body {
+  background-color: var(--bg-page);
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-relaxed);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-synthesis-weight: none;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  transition: background-color 500ms ease, color 500ms ease;
+}
+
+body ::selection {
+  background: var(--gold);
+  /* --btn-primary-fg already flips light/dark per mode for AA contrast
+     against --gold, which is much lighter in night mode than day mode. */
+  color: var(--btn-primary-fg);
+}
+
+
+/* ══════════════════════════════════════════════════════
+   5. TYPOGRAPHY — reads from tokens
+   ══════════════════════════════════════════════════════ */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-tight);
+  line-height: var(--line-height-tight);
+  color: var(--text-primary);
+}
+
+h1, h2, h3, h4, .font-serif {
+  font-family: var(--font-display);
+  letter-spacing: var(--letter-spacing-tight);
+}
+.font-serif { font-weight: var(--font-weight-medium); }
+
+h1 { font-size: var(--font-size-4xl); }
+h2 { font-size: var(--font-size-3xl); }
+h3 { font-size: var(--font-size-2xl); line-height: var(--line-height-snug); }
+h4 { font-size: var(--font-size-xl);  line-height: var(--line-height-snug); }
+h5 { font-size: var(--font-size-lg);  line-height: var(--line-height-snug); }
+h6 { font-size: var(--font-size-md);  line-height: var(--line-height-snug); }
+
+p {
+  color: var(--text-secondary);
+  line-height: var(--line-height-relaxed);
+}
+
+small, .helper-text {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* Semantic type roles — use these (or the text-* utilities) in new
+   screens instead of picking a pixel size. */
+.type-display  { font-family: var(--font-display); font-size: var(--font-size-5xl); font-weight: var(--font-weight-medium); line-height: var(--line-height-tight); letter-spacing: var(--letter-spacing-tight); }
+.type-h1       { font-family: var(--font-display); font-size: var(--font-size-4xl); font-weight: var(--font-weight-medium); line-height: var(--line-height-tight); letter-spacing: var(--letter-spacing-tight); }
+.type-h2       { font-family: var(--font-display); font-size: var(--font-size-3xl); font-weight: var(--font-weight-medium); line-height: var(--line-height-tight); letter-spacing: var(--letter-spacing-tight); }
+.type-h3       { font-family: var(--font-display); font-size: var(--font-size-2xl); font-weight: var(--font-weight-medium); line-height: var(--line-height-snug); }
+.type-lead     { font-family: var(--font-body); font-size: var(--font-size-lg); line-height: var(--line-height-relaxed); }
+.type-body     { font-family: var(--font-body); font-size: var(--font-size-md); line-height: var(--line-height-relaxed); }
+.type-caption  { font-family: var(--font-ui); font-size: var(--font-size-sm); line-height: var(--line-height-normal); color: var(--text-muted); }
+.type-eyebrow  { font-family: var(--font-ui); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); letter-spacing: var(--letter-spacing-caps); text-transform: uppercase; }
+.type-button   { font-family: var(--font-ui); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); letter-spacing: var(--letter-spacing-wide); }
+.type-price    { font-family: var(--font-ui); font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); font-variant-numeric: tabular-nums; }
+
+/* letter-spacing reset for interactive elements */
+p, li, label, input, textarea, select, button {
+  letter-spacing: var(--letter-spacing-normal);
+}
+
+
+/* ══════════════════════════════════════════════════════
+   6. LINKS
+   ══════════════════════════════════════════════════════ */
+
+a {
+  color: var(--text-secondary);
+  text-underline-offset: 3px;
+  transition: color 200ms ease;
+}
+a:hover { color: var(--text-primary); }
+a:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.link-magical {
+  position: relative;
+  display: inline-block;
+}
+.link-magical::after {
+  content: '';
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-start: 0;
+  width: 100%;
+  height: 1px;
+  background: var(--gold);
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 300ms ease;
+}
+.link-magical:hover::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+
+/* ══════════════════════════════════════════════════════
+   7. FORM ELEMENTS — all read from input tokens
+   ══════════════════════════════════════════════════════ */
+
+input, textarea, select {
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: 12px;
+  font-family: var(--font-body);
+  font-size: var(--font-size-md);
+  line-height: 1.5;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--input-placeholder);
+  opacity: 1;
+}
+
+select { cursor: pointer; }
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--input-focus-ring);
+}
+
+label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.input-classic {
+  display: block;
+  width: 100%;
+  padding: 0.875rem 1rem;
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: 14px;
+  font-size: var(--font-size-md);
+  line-height: 1.5;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.input-classic::placeholder {
+  color: var(--input-placeholder);
+  opacity: 1;
+}
+.input-classic:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--input-focus-ring);
+}
+
+
+/* ══════════════════════════════════════════════════════
+   8. SVG & ICONS
+   ══════════════════════════════════════════════════════ */
+
+svg { color: var(--text-muted); flex-shrink: 0; }
+svg.lucide { flex-shrink: 0; }
+
+
+/* ══════════════════════════════════════════════════════
+   9. TABLES
+   ══════════════════════════════════════════════════════ */
+
+table { border-collapse: collapse; width: 100%; }
+
+th {
+  color: var(--text-primary);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wide);
+  background: var(--bg-surface-inset);
+  padding: 0.75rem 1rem;
+  border-bottom: 2px solid var(--border-default);
+}
+
+td {
+  color: var(--text-secondary);
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+}
+
+tr:last-child td { border-bottom: none; }
+
+
+/* ══════════════════════════════════════════════════════
+   10. BUTTONS — read from button tokens
+   ══════════════════════════════════════════════════════ */
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.75rem;
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wide);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 200ms ease, transform 150ms ease;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn-primary:hover {
+  background: var(--btn-primary-hover-bg);
+  color: var(--btn-primary-fg);
+  transform: translateY(-0.5px);
+}
+.btn-primary:active { transform: scale(0.98); }
+
+.btn-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.75rem;
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wide);
+  background: transparent;
+  color: var(--btn-outline-fg);
+  border: 1px solid var(--btn-outline-border);
+  cursor: pointer;
+  transition: background 200ms ease, color 200ms ease, border-color 200ms ease, transform 150ms ease;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn-outline:hover {
+  background: var(--btn-outline-hover-bg);
+  color: var(--btn-outline-hover-fg);
+  transform: translateY(-0.5px);
+}
+.btn-outline:active { transform: scale(0.97); }
+
+
+/* ══════════════════════════════════════════════════════
+   11. CARDS, MODALS, PANELS
+   All read from surface tokens. This is the ONE place
+   card colours are defined — night mode token swap does
+   the rest automatically.
+   ══════════════════════════════════════════════════════ */
+
+.card,
+.modal,
+.classic-card,
+.night-card,
+.night-modal,
+.night-panel {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-soft);
+}
+
+/* classic-card gets hover lift */
+.classic-card {
+  border-radius: 1rem;
+  overflow: hidden;
+  transition: box-shadow 300ms ease, transform 300ms ease;
+}
+.classic-card:hover {
+  box-shadow: var(--shadow-card);
+  transform: translateY(-2px);
+}
+
+
+/* ══════════════════════════════════════════════════════
+   12. NAVIGATION
+   ══════════════════════════════════════════════════════ */
+
+nav {
+  background-color: rgba(249,246,240,0.92);
+  border-bottom: 1px solid var(--border-default);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: background-color 400ms ease, border-color 400ms ease;
+}
+
+nav a, nav button, nav span {
+  color: var(--text-secondary);
+  transition: color 200ms ease;
+}
+nav a:hover { color: var(--text-primary); }
+
+
+/* ══════════════════════════════════════════════════════
+   13. FOOTER
+   ══════════════════════════════════════════════════════ */
+
+footer {
+  background: var(--bg-inverse);
+  color: var(--text-on-inverse);
+  border-top: 1px solid var(--border-inverse);
+}
+
+footer h1, footer h2, footer h3,
+footer h4, footer h5, footer h6 {
+  color: var(--text-on-inverse);
+}
+
+footer p, footer li, footer span,
+footer a, footer small {
+  color: var(--text-on-inverse-secondary);
+}
+
+footer a:hover { color: var(--text-on-inverse); }
+
+footer svg { color: var(--text-on-inverse-secondary); }
+
+
+/* ══════════════════════════════════════════════════════
+   14. DARK INVERSE SECTIONS (Hero strip, Manifesto, etc.)
+   Scoped to structural elements that have explicit inverse
+   background assigned in JSX via data-theme="inverse"
+   or the .section-inverse class.
+   NO class-name inference. NO [class*="bg-"] selectors.
+   ══════════════════════════════════════════════════════ */
+
+[data-theme="inverse"],
+.section-inverse {
+  background: var(--bg-inverse);
+  color: var(--text-on-inverse);
+}
+
+[data-theme="inverse"] h1, [data-theme="inverse"] h2,
+[data-theme="inverse"] h3, [data-theme="inverse"] h4,
+[data-theme="inverse"] h5, [data-theme="inverse"] h6,
+.section-inverse h1, .section-inverse h2,
+.section-inverse h3, .section-inverse h4,
+.section-inverse h5, .section-inverse h6 {
+  color: var(--text-on-inverse);
+}
+
+[data-theme="inverse"] p, [data-theme="inverse"] li,
+[data-theme="inverse"] span, [data-theme="inverse"] small,
+.section-inverse p, .section-inverse li,
+.section-inverse span, .section-inverse small {
+  color: var(--text-on-inverse-secondary);
+}
+
+[data-theme="inverse"] a,
+.section-inverse a {
+  color: var(--text-on-inverse-secondary);
+}
+[data-theme="inverse"] a:hover,
+.section-inverse a:hover {
+  color: var(--text-on-inverse);
+}
+
+[data-theme="inverse"] svg,
+.section-inverse svg {
+  color: var(--text-accent);
+}
+
+[data-theme="inverse"] .btn-primary,
+.section-inverse .btn-primary {
+  background: var(--gold);
+  /* This panel is always dark, but --gold itself is the lighter, pastel
+     rose in night mode and the deeper mauve in day mode — each needs an
+     opposite-toned label to stay AA-readable, exactly what
+     --btn-primary-fg already provides. */
+  color: var(--btn-primary-fg);
+  border-color: transparent;
+}
+[data-theme="inverse"] .btn-outline,
+.section-inverse .btn-outline {
+  /* Always-dark panel — anchor to the night-mode accent tint (the vivid
+     rose reads well on a dark background in either page mode). */
+  border-color: rgba(208,140,157,0.6);
+  color: var(--text-on-inverse);
+  background: rgba(208,140,157,0.08);
+}
+[data-theme="inverse"] .btn-outline:hover,
+.section-inverse .btn-outline:hover {
+  background: rgba(208,140,157,0.2);
+  color: var(--text-on-inverse);
+}
+
+
+/* ══════════════════════════════════════════════════════
+   15. SURFACE UTILITY CLASSES
+   For explicitly-scoped light/dark insets
+   ══════════════════════════════════════════════════════ */
+
+.surface-light {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+.surface-light h1, .surface-light h2, .surface-light h3,
+.surface-light h4, .surface-light h5, .surface-light h6 {
+  color: var(--text-primary);
+}
+.surface-light small, .surface-light .helper-text,
+.surface-light .muted { color: var(--text-muted); }
+
+
+/* ══════════════════════════════════════════════════════
+   16. SPECIFIC COMPONENT FIXES
+
+   Each component is fixed directly here rather than
+   through global overrides.
+   ══════════════════════════════════════════════════════ */
+
+/* ── Dropdown / Select menus ── */
+select option {
+  background: var(--input-bg);
+  color: var(--input-fg);
+}
+
+/* ── Badges ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  background: var(--bg-surface-inset);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+}
+
+/* ── Night-panel (standalone light inset, not inside a card) ── */
+.night-panel {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-inverse);
+}
+
+/* ── book-meta-value (specific content component) ── */
+.book-meta-value,
+.book-meta-value span {
+  color: var(--text-secondary);
+}
+
+
+/* ══════════════════════════════════════════════════════
+   17. CURRENT-READ PAGE (specialised light surface)
+   ══════════════════════════════════════════════════════ */
+
+.current-read-page { isolation: isolate; }
+
+.current-read-form-card,
+.current-read-page article,
+.current-read-page aside {
+  background-color: #FFFFFF;
+  color: #4A3B32;
+}
+
+.current-read-form-card {
+  background: #FFFFFF;
+  border-color: #E5DDD3;
+  box-shadow: 0 24px 70px rgba(74,59,50,0.12);
+}
+
+.current-read-page h1, .current-read-page h2,
+.current-read-page h3, .current-read-page h4,
+.current-read-page h5, .current-read-page h6 {
+  color: #4A3B32;
+}
+
+.current-read-page p,
+.current-read-page span,
+.current-read-page label,
+.current-read-page small {
+  color: #7C6E65;
+}
+
+.current-read-input,
+.current-read-page .input-classic {
+  background-color: #FFFFFF;
+  color: #4A3B32;
+  border-color: #E5DDD3;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
+  caret-color: #8E4A59;
+}
+.current-read-input::placeholder,
+.current-read-page .input-classic::placeholder {
+  color: #7C6E65;
+  opacity: 1;
+}
+
+.current-read-page select,
+.current-read-page option,
+.current-read-page textarea { color: #4A3B32; }
+
+.current-read-submit {
+  background: #8E4A59;
+  color: #FFFFFF;
+  border: 1px solid #8E4A59;
+  box-shadow: 0 14px 32px rgba(74,59,50,0.18);
+}
+.current-read-submit:hover {
+  background: #7A3E4B;
+  color: #FFFFFF;
+}
+
+
+/* ══════════════════════════════════════════════════════
+   18. MOBILE TOAST
+   ══════════════════════════════════════════════════════ */
+
+.mobile-toast { color: #FFFFFF; }
+.mobile-toast * { color: #FFFFFF; }
+
+
+/* ══════════════════════════════════════════════════════
+   19. SHADOWS & MISC UTILITIES
+   ══════════════════════════════════════════════════════ */
+
+.shadow-editorial { box-shadow: 0 40px 100px -20px rgba(74,59,50,0.06); }
+.shadow-soft      { box-shadow: var(--shadow-soft); }
+
+/* Gold accent always readable */
+.text-accent { color: var(--gold); }
+
+
+/* ══════════════════════════════════════════════════════
+   20. GRAIN TEXTURE OVERLAY
+   ══════════════════════════════════════════════════════ */
+
+.grain-overlay::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.07;
+  mix-blend-mode: multiply;
+}
+
+
+/* ══════════════════════════════════════════════════════
+   21. DECORATIVE ANIMATIONS
+   ══════════════════════════════════════════════════════ */
+
+.reading-lamp-glow,
+.floating-page-lines,
+.bookish-sparkle,
+.page-turn-line { pointer-events: none; }
+
+.reading-lamp-glow {
+  position: absolute;
+  inset: -20% auto auto 50%;
+  width: min(420px, 70vw);
+  height: min(420px, 70vw);
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(142,74,89,0.22), rgba(142,74,89,0.07) 42%, transparent 70%);
+  opacity: 0.55;
+  filter: blur(4px);
+  animation: readingLampPulse 9s ease-in-out infinite;
+}
+
+.floating-page-lines {
+  position: absolute;
+  width: 130px; height: 92px;
+  opacity: 0.18;
+  background:
+    linear-gradient(90deg, transparent 0 12%, rgba(142,74,89,0.8) 12% 14%, transparent 14% 100%),
+    repeating-linear-gradient(180deg, rgba(142,74,89,0.7) 0 1px, transparent 1px 15px);
+  border-radius: 18px;
+  transform: rotate(-5deg);
+  animation: pageLinesFloat 12s ease-in-out infinite;
+}
+
+.bookish-sparkle {
+  position: absolute;
+  width: 7px; height: 7px;
+  border-radius: 999px;
+  background: var(--gold);
+  opacity: 0.32;
+  box-shadow: 22px 14px 0 rgba(142,74,89,0.22), -18px 28px 0 rgba(142,74,89,0.16);
+  animation: bookishSparkle 7s ease-in-out infinite;
+}
+
+.cozy-page-mark, .cozy-leaf-mark, .cozy-bookmark-mark {
+  position: fixed; z-index: 0; pointer-events: none; opacity: 0.12;
+}
+.cozy-page-mark {
+  width: 118px; height: 152px;
+  border: 1px solid rgba(142,74,89,0.45);
+  border-radius: 18px 26px 18px 18px;
+  background:
+    linear-gradient(135deg, transparent 0 78%, rgba(142,74,89,0.18) 78% 100%),
+    repeating-linear-gradient(180deg, rgba(74,59,50,0.18) 0 1px, transparent 1px 18px);
+  transform: rotate(-8deg);
+}
+.cozy-leaf-mark {
+  width: 132px; height: 132px;
+  border-radius: 100% 0 100% 0;
+  border: 1px solid rgba(168,93,109,0.35);
+  transform: rotate(28deg);
+}
+.cozy-leaf-mark::after {
+  content: "";
+  position: absolute;
+  left: 16px; top: 64px;
+  width: 108px; height: 1px;
+  background: rgba(168,93,109,0.3);
+  transform: rotate(-28deg);
+}
+.cozy-bookmark-mark {
+  width: 58px; height: 154px;
+  border-radius: 16px 16px 8px 8px;
+  background: rgba(142,74,89,0.18);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 78%, 0 100%);
+  transform: rotate(10deg);
+}
+
+/* Quill scene */
+.quill-guide-visual {
+  min-height: 340px;
+  display: grid;
+  place-items: center;
+}
+.quill-scene {
+  position: relative;
+  width: min(360px, 78vw);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 42px;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(255,247,234,0.95), transparent 28%),
+    radial-gradient(circle at 20% 80%, rgba(142,74,89,0.24), transparent 35%),
+    linear-gradient(145deg, rgba(246,235,216,0.95), rgba(234,216,190,0.72));
+  border: 1px solid rgba(74,59,50,0.12);
+  box-shadow: 0 24px 70px rgba(74,59,50,0.14);
+}
+.quill-scene::after {
+  content: "";
+  position: absolute; inset: 0;
+  opacity: 0.12;
+  background:
+    repeating-linear-gradient(0deg,   rgba(74,59,50,0.16) 0 1px, transparent 1px 18px),
+    repeating-linear-gradient(90deg, rgba(74,59,50,0.08) 0 1px, transparent 1px 22px);
+  mix-blend-mode: multiply;
+}
+.quill-glow {
+  position: absolute; inset: 8%;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(232,196,206,0.62), rgba(142,74,89,0.18) 45%, transparent 70%);
+  filter: blur(7px);
+  animation: quillGlow 8s ease-in-out infinite;
+}
+.quill-illustration {
+  position: relative;
+  z-index: 2;
+  width: 94%;
+  height: 94%;
+}
+.quill-svg-glow {
+  transform-origin: 180px 172px;
+  animation: quillGlow 8s ease-in-out infinite;
+}
+.quill-ground-shadow {
+  transform-origin: 178px 300px;
+  animation: quillShadowBreathe 5.8s ease-in-out infinite;
+}
+.quill-mascot {
+  transform-origin: 170px 205px;
+  animation: quillMascotFloat 5.8s ease-in-out infinite;
+}
+.quill-page-face {
+  transform-origin: 170px 198px;
+  animation: quillBookBreathing 5.8s ease-in-out infinite;
+}
+.quill-book-cover {
+  transform-origin: 170px 200px;
+  animation: quillCoverBreathing 5.8s ease-in-out infinite;
+}
+.quill-eyes,
+.quill-expression {
+  transform-origin: 173px 214px;
+  animation: quillFaceWarmth 5.8s ease-in-out infinite;
+}
+.quill-eye-open,
+.quill-pupil {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: quillEyeBlinkOpen 3.8s ease-in-out infinite;
+}
+.quill-eye-closed {
+  opacity: 0;
+  animation: quillEyeBlinkClosed 3.8s ease-in-out infinite;
+}
+.quill-spectacles {
+  transform-origin: 173px 201px;
+  animation: quillSpectaclesSettle 5.8s ease-in-out infinite;
+}
+.quill-spectacle-shine {
+  animation: quillSpectacleShine 3.8s ease-in-out infinite;
+}
+.quill-bookmark-ribbon {
+  transform-origin: 180px 272px;
+  animation: quillRibbonSway 4.8s ease-in-out infinite;
+}
+.quill-feather-pen {
+  transform-origin: 282px 214px;
+  animation: quillFeatherPenFloat 6.2s ease-in-out infinite;
+}
+.quill-svg-sparkle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: quillSvgSparkle 4.8s ease-in-out infinite;
+}
+.quill-svg-sparkle-two { animation-delay: .8s; }
+.quill-svg-sparkle-three { animation-delay: 1.5s; }
+.quill-svg-sparkle-four { animation-delay: 2.1s; }
+.quill-bookmark-ribbon,
+.quill-feather-pen,
+.quill-spectacle-shine,
+.quill-svg-sparkle,
+.quill-page-face,
+.quill-book-cover,
+.quill-svg-glow,
+.quill-ground-shadow,
+.quill-mascot,
+.quill-eyes,
+.quill-expression,
+.quill-spectacles {
+  will-change: transform, opacity;
+}
+.quill-paper {
+  position: absolute; z-index: 1;
+  width: 48px; height: 62px;
+  border-radius: 10px 14px 12px 10px;
+  background: linear-gradient(145deg, #FFFFFF, #F2EBE1);
+  border: 1px solid rgba(74,59,50,0.12);
+  opacity: 0.78;
+  box-shadow: 0 10px 22px rgba(74,59,50,0.08);
+}
+.quill-paper::before, .quill-paper::after {
+  content: "";
+  position: absolute; left: 11px; right: 11px; height: 1px;
+  background: rgba(124,110,101,0.35);
+}
+.quill-paper::before { top: 21px; }
+.quill-paper::after  { top: 33px; }
+.quill-paper-one   { left:22px;  top:38px;    transform:rotate(-12deg); animation:quillPageDrift 10s ease-in-out infinite; }
+.quill-paper-two   { right:24px; top:50px;    transform:rotate(10deg);  animation:quillPageDrift 12s ease-in-out infinite reverse; }
+.quill-paper-three { left:48px;  bottom:54px; width:38px; height:50px; transform:rotate(7deg); animation:quillPageDrift 11s ease-in-out infinite; }
+.quill-sparkle {
+  position: absolute; z-index: 3;
+  width: 7px; height: 7px;
+  border-radius: 999px;
+  background: var(--gold);
+  opacity: 0.3;
+  box-shadow: 0 0 18px rgba(142,74,89,0.42);
+  animation: quillSpark 7.5s ease-in-out infinite;
+}
+.quill-sparkle-one   { top:58px;    left:48%; }
+.quill-sparkle-two   { top:118px;   right:38px; animation-delay:1.4s; }
+.quill-sparkle-three { bottom:88px; left:44px;  animation-delay:2.2s; }
+.page-turn-line {
+  position: absolute;
+  width: 170px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(142,74,89,0.55), transparent);
+  opacity: 0.28;
+  animation: pageTurnLine 8s ease-in-out infinite;
+}
+
+/* ── Keyframes ── */
+@keyframes readingLampPulse {
+  0%,100% { transform:translateX(-50%) scale(1);    opacity:.42; }
+  50%     { transform:translateX(-50%) scale(1.08); opacity:.62; }
+}
+@keyframes pageLinesFloat {
+  0%,100% { transform:translate3d(0,0,0)   rotate(-5deg); }
+  50%     { transform:translate3d(0,10px,0) rotate(-2deg); }
+}
+@keyframes bookishSparkle {
+  0%,100% { transform:translateY(0)    scale(1);    opacity:.2;  }
+  45%     { transform:translateY(-8px) scale(1.18); opacity:.38; }
+}
+@keyframes quillFloat {
+  0%,100% { transform:translateY(0)    rotate(0deg);    }
+  50%     { transform:translateY(-7px) rotate(-1.6deg); }
+}
+@keyframes quillMascotFloat {
+  0%,100% { transform:translateY(0) scale(1); }
+  50%     { transform:translateY(-8px) scale(1.012); }
+}
+@keyframes quillBookBreathing {
+  0%,100% { transform:scale(1); }
+  50%     { transform:scale(1.018); }
+}
+@keyframes quillCoverBreathing {
+  0%,100% { transform:scale(1); }
+  50%     { transform:scale(1.01); }
+}
+@keyframes quillShadowBreathe {
+  0%,100% { transform:scaleX(1); opacity:.72; }
+  50%     { transform:scaleX(.86); opacity:.48; }
+}
+@keyframes quillFaceWarmth {
+  0%,100% { transform:translateY(0); }
+  50%     { transform:translateY(1.5px); }
+}
+@keyframes quillEyeBlinkOpen {
+  0%, 86%, 100% { transform:scaleY(1); opacity:1; }
+  89%, 93%      { transform:scaleY(.08); opacity:.12; }
+  96%           { transform:scaleY(1); opacity:1; }
+}
+@keyframes quillEyeBlinkClosed {
+  0%, 86%, 100% { opacity:0; }
+  89%, 93%      { opacity:1; }
+  96%           { opacity:0; }
+}
+@keyframes quillSpectaclesSettle {
+  0%,100% { transform:translateY(0); }
+  50%     { transform:translateY(.8px); }
+}
+@keyframes quillSpectacleShine {
+  0%, 52%, 100% { opacity:.18; transform:translateX(-7px); }
+  62%           { opacity:.9;  transform:translateX(2px); }
+  72%           { opacity:.24; transform:translateX(8px); }
+}
+@keyframes quillRibbonSway {
+  0%,100% { transform:rotate(0deg); }
+  50%     { transform:rotate(2.8deg); }
+}
+@keyframes quillFeatherPenFloat {
+  0%,100% { transform:translateY(0) rotate(0deg); }
+  50%     { transform:translateY(-7px) rotate(2deg); }
+}
+@keyframes quillSvgSparkle {
+  0%,100% { transform:translateY(0) scale(.82); opacity:.26; }
+  50%     { transform:translateY(-7px) scale(1.12); opacity:.75; }
+}
+@keyframes quillGlow {
+  0%,100% { transform:scale(.96); opacity:.52; }
+  50%     { transform:scale(1.06); opacity:.80; }
+}
+@keyframes quillSpark {
+  0%,100% { transform:translateY(0)    scale(1);    opacity:.16; }
+  50%     { transform:translateY(-6px) scale(1.26); opacity:.42; }
+}
+@keyframes quillPageDrift {
+  0%,100% { translate:0 0;     }
+  50%     { translate:0 -10px; }
+}
+@keyframes quillBookBreathe {
+  0%,100% { transform:translateY(0);  }
+  50%     { transform:translateY(2px); }
+}
+@keyframes quillInkSettle {
+  0%,100% { transform:translateY(0);  }
+  50%     { transform:translateY(1px); }
+}
+@keyframes pageTurnLine {
+  0%,100% { transform:translateX(-8px) scaleX(.78); opacity:.14; }
+  50%     { transform:translateX(10px) scaleX(1);   opacity:.32; }
+}
+
+/* ── Reduced Motion ── */
+@media (prefers-reduced-motion: reduce) {
+  .reading-lamp-glow, .floating-page-lines, .bookish-sparkle,
+  .page-turn-line, .quill-mascot, .quill-page-face,
+  .quill-book-cover, .quill-eyes, .quill-expression, .quill-eye-open,
+  .quill-pupil, .quill-eye-closed,
+  .quill-spectacles, .quill-spectacle-shine, .quill-bookmark-ribbon,
+  .quill-feather-pen, .quill-svg-sparkle, .quill-svg-glow, .quill-ground-shadow,
+  .quill-paper, .quill-sparkle, .quill-glow, .page-turn-line {
+    animation: none;
+    transition: none;
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════
+   22. QUILL MOBILE WIDGET
+   ══════════════════════════════════════════════════════ */
+
+.quill-trigger { color: var(--text-secondary); }
+.quill-icon { color: var(--text-secondary); }
+
+
+/* ══════════════════════════════════════════════════════
+   23. RESPONSIVE — MOBILE
+   ══════════════════════════════════════════════════════ */
+
+@media (max-width: 640px) {
+  html, body, #root { width:100%; max-width:100%; overflow-x:hidden; }
+  body { font-size: var(--font-size-md); }
+
+  .grain-overlay::before { opacity: 0.03; }
+
+  main {
+    width: 100%;
+    padding-inline: 1rem;
+    padding-top: 1.5rem;
+  }
+
+  img, video, iframe, canvas, svg { max-width: 100%; }
+
+  h1,h2,h3,h4,h5,h6,
+  p, a, button, label, span { overflow-wrap: anywhere; }
+
+  /* Card radii moved to §24, which takes them further (18px) and
+     covers the whole rounded-* range rather than the five largest. */
+
+  .classic-card:hover { transform: none !important; }
+
+  .btn-primary, .btn-outline {
+    min-height: 44px;
+    padding-inline: 1rem;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
+  }
+
+  button, a, label { touch-action: manipulation; }
+
+  /* Prevent iOS zoom on focus */
+  input, textarea, select, .input-classic { min-height: 44px; font-size: var(--font-size-md); }
+
+  .current-read-page { padding-top: 1rem; }
+  .current-read-page section { padding-inline: 0.75rem; }
+
+  .current-read-form-card { border-radius: 22px !important; padding: 1rem !important; }
+
+  .current-read-form-card {
+    max-width: calc(100vw - 1.5rem);
+    margin-inline: auto;
+  }
+  .current-read-form-card h2 { font-size: var(--font-size-2xl) !important; line-height: 1.15 !important; }
+
+  .current-read-form {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) !important;
+    gap: 0.875rem !important;
+    padding-bottom: max(5rem, env(safe-area-inset-bottom));
+  }
+
+  .current-read-input,
+  .current-read-page .input-classic {
+    min-height: 50px;
+    border-radius: 16px !important;
+    padding: 0.875rem 1rem !important;
+  }
+  textarea.current-read-input,
+  .current-read-page textarea.input-classic { min-height: 108px; }
+
+  .current-read-submit { min-height: 52px; width: 100%; letter-spacing: var(--letter-spacing-caps) !important; }
+
+  .quill-mobile {
+    /* Cleared to sit above the fixed mobile bottom navigation bar (~56px
+       tall) plus the device's safe-area inset, instead of the page edge. */
+    bottom: calc(4.5rem + env(safe-area-inset-bottom)) !important;
+    left: 0.5rem !important;
+    z-index: 80;
+  }
+  .quill-mobile.quill-readers-circle {
+    bottom: calc(4.5rem + env(safe-area-inset-bottom) + 1.25rem) !important;
+    left: 0.5rem !important;
+  }
+  .quill-mobile.quill-form-open { display: none !important; }
+  /* Café: above the message box, so Quill is there without covering it. */
+  .quill-mobile.quill-cafe { bottom: calc(4.5rem + env(safe-area-inset-bottom) + 76px) !important; }
+
+  .quill-trigger { gap: 0 !important; padding: 0.25rem !important; }
+  .quill-icon    { width: 2.75rem !important; height: 2.75rem !important; }
+  .quill-label   { display: none !important; }
+  .quill-mobile aside {
+    width: min(19rem, calc(100vw - 1.5rem)) !important;
+    border-radius: 22px !important;
+    padding: 1rem !important;
+  }
+
+  .mobile-toast {
+    top: max(0.5rem, env(safe-area-inset-top)) !important;
+    width: max-content;
+    max-width: calc(100vw - 1.5rem);
+    border-radius: 14px !important;
+    padding: 0.75rem 0.875rem !important;
+    font-size: var(--font-size-sm) !important;
+  }
+
+  textarea.input-classic, textarea { min-height: 96px; }
+
+  main section, main > div { scroll-margin-top: 5rem; }
+
+  /* Section rhythm, card padding and block margins all moved to §24,
+     which sets a fuller scale. Two blocks were competing for the same
+     properties and, because both used !important, the one that won was
+     decided by layer order rather than by intent. */
+
+  .fixed.inset-0 { overscroll-behavior: contain; }
+
+  .fixed.inset-0 > .relative {
+    width: 100%;
+    overflow-y: auto;
+    /* Width, height, radius and padding now come from §24, which turns
+       these dialogs into bottom sheets on a phone. */
+  }
+  .fixed.inset-0 > .relative form {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+  .fixed.inset-0 > .relative h2,
+  .fixed.inset-0 > .relative h3 { font-size: var(--font-size-2xl) !important; line-height: 1.15 !important; }
+
+  .fixed.inset-0 > .relative .grid.grid-cols-2,
+  .fixed.inset-0 > .relative .grid.grid-cols-3,
+  .fixed.inset-0 > .relative .grid.grid-cols-5 {
+    grid-template-columns: minmax(0,1fr) !important;
+  }
+  .fixed.inset-0 > .relative [class*="p-8"],
+  .fixed.inset-0 > .relative [class*="p-10"],
+  .fixed.inset-0 > .relative [class*="p-12"] { padding: 1rem !important; }
+  .fixed.inset-0 > .relative [class*="mb-10"],
+  .fixed.inset-0 > .relative [class*="mb-12"] { margin-bottom: 1.5rem !important; }
+  .fixed.inset-0 > .relative [class*="gap-6"],
+  .fixed.inset-0 > .relative [class*="space-y-6"] { gap: 1rem !important; }
+
+  table { min-width: 640px; }
+  th, td { white-space: nowrap; }
+}
+
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   ACCESSIBILITY
+   ───────────────────────────────────────────────────────────────────
+   SwapSutra is for every reader, including ones who navigate by
+   keyboard, use a screen reader, enlarge text, or find motion
+   uncomfortable. These rules are additive — they don't change the
+   look of the site for anyone else.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Skip link (index.html). Hidden until focused, then lands as a real
+   control at the top-left so keyboard users can jump past the nav. */
+.skip-to-content {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 9999;
+  padding: 0.85rem 1.4rem;
+  background: var(--bg-surface, #FFF8EF);
+  color: var(--text-primary, #3B241C);
+  border: 2px solid var(--gold, #C8A97E);
+  border-radius: 0 0 14px 0;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  text-decoration: none;
+}
+.skip-to-content:focus {
+  left: 0;
+}
+
+/* Visible keyboard focus on everything interactive, not just links.
+   Without this, a keyboard user genuinely cannot tell where they are. */
+button:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--gold, #C8A97E);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* Screen-reader-only text, for labelling icon-only controls. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Reduced motion.
+   The existing block below covers the named Quill/decorative classes,
+   but not Tailwind's animate-* utilities or Framer Motion's inline
+   transforms — which is most of the movement on the site. For a reader
+   with vestibular sensitivity, a page that keeps moving is a page they
+   have to leave. Content still appears; it just stops animating. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-bounce,
+  .animate-pulse,
+  .animate-spin,
+  .animate-ping {
+    animation: none !important;
+  }
+}
+
+/* Comfortable tap targets on touch devices. Below roughly 40px, small
+   icon buttons become a genuine problem for anyone with less precise
+   motor control — and for everyone on a moving bus. */
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  a.btn-primary,
+  a.btn-outline {
+    min-height: 40px;
+  }
+}
+
+/* Honour the reader's own font-size preference instead of overriding
+   it — text scales with the browser setting rather than being pinned. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   READER EMPTY STATES + LIVE SURFACES
+   ───────────────────────────────────────────────────────────────────
+   An empty shelf should still feel like somewhere, not like a failure.
+   These are the shared surfaces for the illustrated empty states, the
+   loading skeletons, and the restrained motion on book covers.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.reader-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.9rem;
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: 32px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--bg-surface-inset) 0%, transparent 70%),
+    var(--bg-surface);
+}
+.reader-empty--panel {
+  padding: 2rem 1.25rem;
+  border-radius: 24px;
+  gap: 0.5rem;
+}
+.reader-scene {
+  color: var(--text-primary);
+  opacity: 0.9;
+}
+.reader-empty__title {
+  margin: 0.25rem 0 0;
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-regular);
+  line-height: 1.25;
+  color: var(--text-primary);
+  text-wrap: balance;
+}
+.reader-empty__body {
+  margin: 0;
+  max-width: 34ch;
+  font-size: var(--font-size-sm);
+  line-height: 1.65;
+  color: var(--text-muted);
+  /* Stops a one-word orphan on the last line of a centred paragraph. */
+  text-wrap: pretty;
+}
+.reader-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+  margin-top: 0.65rem;
+}
+
+/* ── Loading skeletons ──
+   An abrupt blank screen reads as "broken"; a shelf-shaped placeholder
+   reads as "arriving". Shape matches what is about to land. */
+.sk {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-surface-inset);
+  border-radius: 10px;
+}
+.sk::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  animation: sk-sweep 1.6s ease-in-out infinite;
+}
+@keyframes sk-sweep { to { transform: translateX(100%); } }
+
+.sk-book { display: flex; flex-direction: column; gap: 0.7rem; }
+.sk-book__cover { aspect-ratio: 2 / 3; border-radius: 14px; }
+.sk-book__line { height: 0.7rem; border-radius: 999px; }
+.sk-book__line--short { width: 55%; }
+
+/* ── Book covers: a small, physical lift ──
+   Books should feel like objects you can pick up. One transform, no
+   glow, no colour change — restraint is what keeps it premium. */
+.book-cover-lift {
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+.book-cover-lift:hover,
+.book-cover-lift:focus-within {
+  transform: translateY(-6px);
+  box-shadow: var(--shadow-card);
+}
+
+/* ── Availability marks ──
+   A reader should be able to tell at a glance whether a copy can travel,
+   is already spoken for, or is only on someone's shelf. Colour alone is
+   never the signal — each carries its own words. */
+.avail-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  white-space: nowrap;
+}
+.avail-pill--open {
+  border-color: var(--text-accent);
+  color: var(--text-accent);
+}
+.avail-pill__dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* Reduced motion: the shimmer and the lift are the first things to go.
+   The skeleton stays visible, it just stops moving. */
+@media (prefers-reduced-motion: reduce) {
+  .sk::after { animation: none; }
+  .book-cover-lift { transition: none; }
+  .book-cover-lift:hover,
+  .book-cover-lift:focus-within { transform: none; }
+}
+
+/* On a phone the empty state should be a calm panel, not a screenful.
+   Same content, less air. */
+@media (max-width: 640px) {
+  .reader-empty { padding: 2.25rem 1.25rem; border-radius: 26px; }
+  .reader-empty--panel { padding: 1.5rem 1rem; }
+  .reader-empty__body { max-width: 30ch; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   READER'S CAFÉ
+   ───────────────────────────────────────────────────────────────────
+   A real chat screen, laid out as one column that owns its height:
+
+       .cafe-room        flex column, height: 100%
+         __bar           fixed
+         .cafe-rail      fixed (stories)
+         __log           flex: 1, the only scrolling element
+         __counter       fixed, pinned above the mobile nav
+
+   The previous version capped the log at 62vh and let the whole room
+   flow down the page, which on a phone pushed the composer below the
+   fold with no way to reach it. Nothing here has a viewport-relative
+   max-height any more; the parent gives the room its height and the log
+   takes whatever is left.
+
+   The ergonomics are the ones every reader already has in their thumbs
+   — bubbles, day dividers, an emoji key, a round send button. The paper,
+   the lamp and the palette stay SwapSutra's, and every colour still
+   derives from the shared tokens, so the room follows day/night with
+   the rest of the site.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.cafe-room {
+  position: relative;
+  /* Never let the room push the page sideways: inside a grid or flex
+     parent a child defaults to min-width:auto and can outgrow the
+     viewport on a narrow phone. */
+  min-width: 0;
+  max-width: 100%;
+  /* Own the height handed down by the page, and let the log absorb the
+     slack. min-height:0 is what actually permits the log to shrink. */
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-default);
+  border-radius: 28px;
+  background: var(--bg-page);
+  overflow: hidden;
+}
+
+/* ── The bar ──
+   Solid and slightly raised, so the conversation appears to scroll
+   underneath it rather than alongside it. */
+.cafe-room__bar {
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: 0 1px 6px color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+.cafe-room__back {
+  flex: 0 0 auto;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+}
+.cafe-room__mark {
+  flex: 0 0 auto;
+  width: 2.6rem;
+  height: 2.6rem;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-surface-inset);
+  border: 1px solid color-mix(in srgb, var(--text-accent) 26%, transparent);
+}
+.cafe-room__mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 3px;
+}
+.cafe-room__ident { min-width: 0; flex: 1 1 auto; }
+.cafe-room__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-md);
+  line-height: 1.2;
+  color: var(--text-primary);
+  overflow-wrap: break-word;
+}
+.cafe-room__life {
+  margin: 0.1rem 0 0;
+  font-size: var(--font-size-2xs);
+  line-height: 1.4;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cafe-room__tools { position: relative; flex: 0 0 auto; }
+.cafe-room__tool {
+  width: 2.25rem;
+  height: 2.25rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+}
+.cafe-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 12;
+  min-width: 12.5rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.3rem;
+  border-radius: 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--text-primary) 20%, transparent);
+}
+.cafe-menu button {
+  text-align: left;
+  padding: 0.6rem 0.7rem;
+  border-radius: 10px;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: none;
+  border: none;
+}
+.cafe-menu button:hover { background: var(--bg-surface-inset); }
+
+/* ── Pinned house note ── */
+.cafe-pinned {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cafe-pinned__icon { flex: 0 0 auto; color: var(--text-accent); padding-top: 0.15rem; }
+.cafe-pinned__body { min-width: 0; flex: 1 1 auto; }
+.cafe-pinned__label {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-accent);
+}
+.cafe-pinned__text {
+  margin: 0.1rem 0 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--text-primary);
+  /* Collapsed to one line until asked, so the note never eats the room. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cafe-pinned.is-open .cafe-pinned__text { white-space: normal; overflow: visible; }
+.cafe-pinned__toggle {
+  flex: 0 0 auto;
+  width: 1.9rem;
+  height: 1.9rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+}
+
+.cafe-room__aside {
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-accent);
+  padding: 0.5rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text-accent) 30%, transparent);
+  background: transparent;
+}
+
+/* ── Stories rail ── */
+.cafe-rail {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-surface-inset) 45%, var(--bg-surface));
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.cafe-rail::-webkit-scrollbar { display: none; }
+.cafe-rail__track {
+  display: flex;
+  gap: 0.9rem;
+  margin: 0;
+  padding: 0.7rem 1rem;
+  list-style: none;
+  width: max-content;
+  min-width: 100%;
+}
+.cafe-rail__item {
+  width: 4.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+.cafe-rail__ring {
+  position: relative;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 999px;
+  padding: 2px;
+  background: linear-gradient(140deg,
+    var(--text-accent),
+    color-mix(in srgb, var(--text-accent) 40%, var(--bg-surface)));
+  border: none;
+  display: grid;
+  place-items: center;
+}
+/* Already watched: the ring goes quiet rather than disappearing. */
+.cafe-rail__ring.is-seen {
+  background: var(--border-default);
+}
+.cafe-rail__face {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  font-size: var(--font-size-xl);
+  background: var(--bg-surface-inset);
+  border: 2px solid var(--bg-surface);
+}
+.cafe-rail__face img { width: 100%; height: 100%; object-fit: cover; }
+.cafe-rail__clip { font-size: var(--font-size-sm); color: var(--text-accent); }
+.cafe-rail__plus {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  color: var(--bg-surface);
+  background: var(--text-accent);
+  border: 2px solid var(--bg-surface);
+}
+.cafe-rail__name {
+  max-width: 100%;
+  font-size: var(--font-size-2xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cafe-rail__quiet {
+  font-size: var(--font-size-2xs);
+  color: var(--text-muted);
+  align-self: center;
+  padding: 0.8rem 0.2rem;
+}
+
+/* ── The conversation ── */
+.cafe-room__log {
+  /* The only scroller in the room. flex:1 + min-height:0 is what lets it
+     shrink instead of pushing the composer off-screen. */
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  /* ── Wallpaper ──
+     Drawn, not photographed. A photo behind a chat is the usual way to
+     get this look, but it costs hundreds of kilobytes, fixes one light
+     temperature into a themeable UI, and fights the text for contrast.
+     This is a ~1KB SVG tile of leaves, cups and open books at low
+     opacity over the room's own paper, so it scales, themes, and never
+     competes with a message. */
+  background-color: var(--bg-page);
+  background-image:
+    radial-gradient(120% 70% at 50% 0%,
+      color-mix(in srgb, var(--text-accent) 7%, transparent) 0%,
+      transparent 60%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cg fill='none' stroke='%238E4A59' stroke-opacity='0.10' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 30c0-7 6-13 13-13 0 7-6 13-13 13Zm0 0v9'/%3E%3Cpath d='M104 26h18v12h-18z'/%3E%3Cpath d='M108 26v12M113 26v12'/%3E%3Cpath d='M56 96c-6 0-11 2-14 4v18c3-2 8-4 14-4s11 2 14 4v-18c-3-2-8-4-14-4Zm0 4v18'/%3E%3Cpath d='M124 104h14a4 4 0 0 1 0 8h-2m-12-8v10a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4v-10z'/%3E%3Cpath d='M128 100c0-2 1-3 1-4M133 100c0-2 1-3 1-4'/%3E%3Cpath d='M28 128c0-6 5-11 11-11 0 6-5 11-11 11Zm0 0v7'/%3E%3Cpath d='M74 42h12v10H74z'/%3E%3Ccircle cx='140' cy='62' r='5'/%3E%3Cpath d='M14 70c4-3 9-3 13 0'/%3E%3C/g%3E%3C/svg%3E");
+  background-repeat: no-repeat, repeat;
+  background-size: auto, 160px 160px;
+  padding: 1rem 0.9rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cafe-day {
+  align-self: center;
+  margin: 0.75rem 0 0.5rem;
+}
+.cafe-day span {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-surface-inset) 85%, transparent);
+  border: 1px solid var(--border-subtle);
+}
+
+.cafe-line {
+  display: flex;
+  /* Top-aligned: the avatar belongs beside the sender's NAME, not down
+     by the timestamp. Bottom-aligning it left the face level with the
+     reaction chips, which read as belonging to the wrong message. */
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: 100%;
+}
+.cafe-line--mine { justify-content: flex-end; }
+/* Consecutive messages from the same reader tuck under the first, with
+   the avatar column preserved so the bubbles stay aligned. */
+/* Matches the avatar column exactly (2.1rem seat + 0.5rem gap), so a
+   grouped message lines up under the first one. */
+.cafe-line--grouped:not(.cafe-line--mine) { padding-left: 2.6rem; }
+.cafe-line__seat {
+  flex: 0 0 auto;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  /* Colour comes from the speaker, set inline — see speakerColour(). */
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+}
+/* Bubble + its reaction row travel together. */
+.cafe-line__stack {
+  min-width: 0;
+  max-width: min(80%, 34rem);
+  display: flex;
+  flex-direction: column;
+}
+.cafe-line--mine .cafe-line__stack { align-items: flex-end; }
+
+.cafe-bubble {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.5rem 0.75rem 1.15rem;
+  border-radius: 16px 16px 16px 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  /* A touch more lift than before: the bubbles now sit on a patterned
+     ground and need to read as paper laid on top of it. */
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+/* Your own words sit warmer and on the right — the one place a colour
+   difference genuinely helps you find yourself in a long thread. */
+.cafe-bubble--mine {
+  border-radius: 16px 16px 5px 16px;
+  background: color-mix(in srgb, var(--text-accent) 13%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--text-accent) 28%, transparent);
+}
+.cafe-bubble--ghost { height: 3rem; border: none; box-shadow: none; }
+
+.cafe-bubble__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.2rem;
+  flex-wrap: wrap;
+}
+.cafe-bubble__who {
+  font-family: var(--font-display);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  /* Colour set inline, per speaker. */
+}
+/* Says "this one has a spoiler in it" before the blur has to explain it. */
+.cafe-bubble__flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-accent);
+  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
+}
+.cafe-bubble__flag svg { width: 12px; height: 12px; }
+/* Being spoken to should be visible at a glance in a busy room. */
+.cafe-bubble__mention {
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-accent);
+}
+.cafe-bubble__text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.cafe-bubble__when {
+  position: absolute;
+  right: 0.7rem;
+  bottom: 0.35rem;
+  font-size: var(--font-size-2xs);
+  letter-spacing: var(--letter-spacing-wide);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.cafe-bubble__spoiler {
+  display: block;
+  width: 100%;
+  text-align: left;
+  filter: blur(5px);
+  user-select: none;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+}
+.cafe-bubble__spoilerHint {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-accent);
+}
+
+/* ── Reactions ──
+   Chips tucked under the bubble, overlapping it slightly so they read as
+   attached to that message rather than floating between two. */
+.cafe-reacts {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin: -0.5rem 0 0.15rem;
+  padding-left: 0.4rem;
+}
+.cafe-line--mine .cafe-reacts { padding-left: 0; padding-right: 0.4rem; justify-content: flex-end; }
+
+.cafe-react {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  min-height: 1.6rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+/* Your own reaction is marked, so tapping again to remove it is obvious. */
+.cafe-react.is-mine {
+  background: color-mix(in srgb, var(--text-accent) 14%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--text-accent) 40%, transparent);
+}
+.cafe-react__n {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.cafe-react.is-mine .cafe-react__n { color: var(--text-accent); }
+.cafe-react:disabled { opacity: 1; }
+.cafe-react--add { color: var(--text-muted); padding: 0.12rem 0.4rem; }
+
+.cafe-react-pick {
+  position: absolute;
+  bottom: calc(100% + 0.3rem);
+  left: 0.4rem;
+  z-index: 8;
+  display: flex;
+  gap: 0.1rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text-primary) 20%, transparent);
+}
+.cafe-line--mine .cafe-react-pick { left: auto; right: 0.4rem; }
+.cafe-react-pick button {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  background: none;
+  border: none;
+}
+.cafe-react-pick button:hover { background: var(--bg-surface-inset); }
+
+/* ── The counter (composer / invitation) ── */
+.cafe-room__counter {
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-page);
+  padding: 0.6rem 0.7rem calc(0.6rem + env(safe-area-inset-bottom));
+}
+
+.cafe-compose {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.45rem;
+}
+/* One rounded field holding the controls, the way a phone's own chat
+   app does it — rather than four loose buttons crowding the input. */
+.cafe-compose__pill {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.1rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: 24px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+.cafe-compose__key {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+}
+.cafe-compose__key:hover { background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.cafe-compose__key--flag.is-on {
+  background: color-mix(in srgb, var(--text-accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--text-accent) 35%, transparent);
+}
+.cafe-compose__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  /* 16px keeps iOS from zooming the whole page when the field is
+     focused — the single most common cause of a "broken" mobile chat. */
+  font-size: var(--font-size-md);
+  line-height: 1.45;
+  padding: 0.6rem 0.35rem;
+  max-height: 120px;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+}
+.cafe-compose__input:focus { outline: none; }
+.cafe-compose__input::placeholder { color: var(--text-muted); }
+
+/* THE ROOT CAUSE of the unreachable composer.
+   index.css carries two global mobile rules —
+     input, textarea, select, .input-classic { min-height: 44px }
+     textarea.input-classic, textarea       { min-height: 96px }
+   — which are right for a form field and fatal for a chat composer. They
+   forced the café's message box to 96px, and with the old spoiler row and
+   block button underneath it the whole counter ran past the bottom of the
+   screen with no way to scroll to it. A chat input sizes itself to what
+   has been typed, so it opts out by name; `textarea.cafe-compose__input`
+   outranks the bare-element rules above. */
+textarea.cafe-compose__input {
+  min-height: 2.6rem;
+}
+.cafe-compose__send {
+  flex: 0 0 auto;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: var(--font-size-md);
+  color: #FFFFFF;
+  background: var(--text-accent);
+  border: none;
+}
+.cafe-compose__send:disabled { opacity: 0.45; }
+
+.cafe-compose__flag {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 12px;
+  font-size: var(--font-size-2xs);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-accent) 10%, transparent);
+}
+.cafe-compose__flag button {
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-caps);
+  font-size: var(--font-size-2xs);
+  color: var(--text-accent);
+  background: none;
+  border: none;
+}
+
+.cafe-invite {
+  text-align: center;
+  padding: 0.75rem 0.5rem 0.5rem;
+}
+.cafe-invite__line {
+  margin: 0 auto 0.85rem;
+  max-width: 38ch;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+/* ── Emoji picker ── */
+.cafe-emoji {
+  margin-bottom: 0.5rem;
+  border-radius: 18px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.cafe-emoji__tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cafe-emoji__tab {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 12px;
+  font-size: var(--font-size-md);
+  background: transparent;
+  border: 1px solid transparent;
+}
+.cafe-emoji__tab.is-active {
+  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--text-accent) 30%, transparent);
+}
+.cafe-emoji__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.4rem, 1fr));
+  gap: 0.15rem;
+  padding: 0.5rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.cafe-emoji__cell {
+  height: 2.4rem;
+  border-radius: 10px;
+  font-size: var(--font-size-xl);
+  background: transparent;
+  border: none;
+}
+.cafe-emoji__cell:hover { background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+
+/* ── Story viewer ── */
+.cafe-story {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  background: #14100E;
+  color: #F4EEE8;
+}
+.cafe-story__bars {
+  display: flex;
+  gap: 3px;
+  padding: 0.6rem 0.7rem 0.2rem;
+  padding-top: calc(0.6rem + env(safe-area-inset-top));
+}
+.cafe-story__bar {
+  flex: 1 1 0;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  overflow: hidden;
+}
+.cafe-story__barFill {
+  display: block;
+  height: 100%;
+  background: #FFFFFF;
+}
+.cafe-story__head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.9rem 0.6rem;
+}
+.cafe-story__seat {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--font-size-sm);
+  background: rgba(255, 255, 255, 0.16);
+}
+.cafe-story__seat--small { width: 1.6rem; height: 1.6rem; font-size: var(--font-size-2xs); }
+.cafe-story__who { font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
+.cafe-story__left {
+  margin-left: auto;
+  font-size: var(--font-size-2xs);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.cafe-story__close {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  font-size: var(--font-size-2xl);
+  line-height: 1;
+  color: inherit;
+  background: transparent;
+  border: none;
+}
+.cafe-story__stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.cafe-story__media {
+  max-width: 100%;
+  max-height: 100%;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border: none;
+}
+/* The tap zones sit above the media but below the caption, so advancing
+   never means accidentally hitting a link in someone's words. */
+.cafe-story__tap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 32%;
+  z-index: 2;
+  background: transparent;
+  border: none;
+}
+.cafe-story__tap--back { left: 0; }
+.cafe-story__tap--next { right: 0; width: 68%; }
+.cafe-story__caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  margin: 0;
+  padding: 3.5rem 1.1rem 1.1rem;
+  font-size: var(--font-size-md);
+  line-height: 1.55;
+  color: #FFFFFF;
+  /* Three stops rather than two: a caption sits ABOVE the darkest part of
+     a two-stop gradient, which is exactly where it is least readable. */
+  background: linear-gradient(to top,
+    rgba(0, 0, 0, 0.82) 0%,
+    rgba(0, 0, 0, 0.68) 45%,
+    transparent 100%);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.cafe-story__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+}
+.cafe-story__seen,
+.cafe-story__remove {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  padding: 0.6rem 1rem;
+  border-radius: 999px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.14);
+  border: none;
+}
+.cafe-story__remove { margin-left: auto; background: transparent; opacity: 0.7; }
+
+.cafe-story__sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  max-height: 62%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 22px 22px 0 0;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.cafe-story__sheetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cafe-story__sheetHead h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+}
+.cafe-story__sheetHead button {
+  font-size: var(--font-size-xl);
+  line-height: 1;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+}
+.cafe-story__sheetList {
+  margin: 0;
+  padding: 0.5rem 0.6rem 1rem;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.cafe-story__sheetList li {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.5rem;
+  font-size: var(--font-size-sm);
+}
+.cafe-story__sheetList .cafe-story__seat {
+  background: var(--bg-surface-inset);
+  color: var(--text-primary);
+}
+.cafe-story__sheetQuiet {
+  margin: 0;
+  padding: 1.4rem 1.1rem;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+
+/* ── Story composer ── */
+.cafe-post {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: end center;
+  background: color-mix(in srgb, #14100E 62%, transparent);
+  padding: 0;
+}
+.cafe-post__panel {
+  width: min(100%, 34rem);
+  max-height: 92vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 24px 24px 0 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.cafe-post__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cafe-post__head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  color: var(--text-primary);
+}
+.cafe-post__head button {
+  font-size: var(--font-size-2xl);
+  line-height: 1;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+}
+.cafe-post__pick,
+.cafe-post__stage { padding: 1.1rem; display: grid; gap: 0.9rem; }
+.cafe-post__hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.cafe-post__choices { display: grid; gap: 0.6rem; }
+@media (min-width: 480px) {
+  .cafe-post__choices { grid-template-columns: 1fr 1fr; }
+}
+.cafe-post__choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 1.4rem 1rem;
+  border-radius: 18px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  background: var(--bg-surface-inset);
+  border: 1px solid var(--border-default);
+}
+.cafe-post__choice span { font-size: var(--font-size-2xl); }
+.cafe-post__limits {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.cafe-post__preview {
+  width: 100%;
+  max-height: 44vh;
+  object-fit: contain;
+  border-radius: 16px;
+  background: var(--bg-surface-inset);
+}
+.cafe-post__actions {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* On a phone the room is the screen: square off the outer edges so the
+   conversation uses every pixel it can. */
+@media (max-width: 768px) {
+  .cafe-room {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+  }
+  .cafe-bubble { max-width: 84%; }
+}
+
+/* ── The room is a screen, not a page section ──
+   THE BUG: §23 gives every <main> on mobile `padding-inline: 1rem` and a
+   top padding. That is right for a scrolling page and wrong for a chat:
+   it inset the café by 16px on each side, pushed it 20px down inside a
+   <main> of a FIXED height, and — because that main is overflow:hidden —
+   pushed the same 20px of composer off the bottom edge. The room takes
+   its own height from the page and manages its own gutters, so it opts
+   out by name. The element+class selector outranks the bare `main` rules
+   without needing !important. */
+main.cafe-main {
+  padding: 0;
+  /* Below the nav bar and above the tab bar there is nothing else on
+     screen — the room fills it exactly. */
+  display: block;
+}
+
+/* ── Phone density ──
+   Every rule here buys the conversation vertical or horizontal room. The
+   defaults above are sized for a desktop column; on a 360px phone they
+   left a 132px-wide message box (the placeholder wrapped onto a second
+   line, which then doubled the height of the composer) and a log with
+   more gutter than it could afford. */
+@media (max-width: 640px) {
+  /* The log keeps a small breathing gutter and nothing more. */
+  .cafe-room__log { padding: 0.6rem 0.5rem 0.75rem; gap: 0.35rem; }
+
+  /* Bubbles may run wider before the avatar column; the 80% cap was
+     leaving a fifth of a narrow screen permanently empty. */
+  /* Shrinkable, so a long message uses the space the avatar column
+     leaves instead of pushing past the gutter. */
+  .cafe-line__stack { max-width: min(88%, 34rem); flex: 0 1 auto; min-width: 0; }
+  .cafe-bubble { max-width: 100%; padding: 0.45rem 0.65rem 1.05rem; }
+  .cafe-bubble__text { font-size: var(--font-size-sm); line-height: 1.5; }
+
+  /* ── The stories rail is a strip, not a shelf ──
+     Sized in px on purpose. These are PICTURES, and they were in rem, so
+     on a phone with Android/Chrome text scaling turned up (a very common
+     setting) the avatars grew with the type and the rail alone took a
+     third of the chat. Sizing the boxes in px keeps the strip a strip;
+     the message text itself stays in rem and still scales for anyone who
+     needs it larger. */
+  .cafe-rail__track { gap: 10px; padding: 8px 10px; }
+  .cafe-rail__item { width: 58px; gap: 3px; }
+  .cafe-rail__ring { width: 48px; height: 48px; }
+  .cafe-rail__name { font-size: var(--font-size-2xs); }
+  .cafe-rail__quiet { font-size: var(--font-size-2xs); padding: 10px 4px; }
+
+  /* The bar loses the padding it does not need, and its mark — also a
+     picture — stops growing with the type for the same reason. */
+  .cafe-room__bar { padding: 0.55rem 0.6rem; gap: 0.55rem; }
+  .cafe-room__mark { width: 38px; height: 38px; }
+  .cafe-room__back { width: 30px; height: 30px; }
+  /* Scales with the reader's text size, but stops before it turns a
+     one-line header into three. */
+  .cafe-room__title { font-size: var(--font-size-xl); }
+  .cafe-room__life { font-size: var(--font-size-sm); }
+
+  /* ── The composer ──
+     Smaller keys and tighter padding, so the text box itself gets the
+     width back. Font-size stays at 16px: anything smaller makes iOS zoom
+     the whole page the moment the field is focused. */
+  .cafe-room__counter { padding: 0.4rem 0.5rem calc(0.4rem + env(safe-area-inset-bottom)); }
+  .cafe-compose { gap: 0.35rem; }
+  .cafe-compose__pill { padding: 0.1rem 0.2rem; gap: 0; }
+  .cafe-compose__key { width: 2rem; height: 2rem; }
+  .cafe-compose__key svg { width: 18px; height: 18px; }
+  .cafe-compose__input { padding: 0.45rem 0.3rem; }
+  textarea.cafe-compose__input { min-height: 2.25rem; }
+  .cafe-compose__send { width: 2.35rem; height: 2.35rem; }
+}
+
+/* The narrowest phones still in use (320–360px). One more notch down, so
+   the message box never falls back to two lines before a word is typed. */
+@media (max-width: 380px) {
+  .cafe-compose__key { width: 1.85rem; height: 1.85rem; }
+  .cafe-line__stack { max-width: min(91%, 34rem); }
+  .cafe-room__log { padding: 0.5rem 0.4rem 0.65rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cafe-room__log { scroll-behavior: auto; }
+}
+
+
+/* ── The code window ──
+   A login code is valid for about a minute, so the screen has to say so.
+   Silence would leave a reader typing a code that is already dead. */
+.otp-countdown {
+  margin: 0.75rem 0 0;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.otp-countdown strong { color: var(--text-primary); }
+.otp-countdown.is-urgent,
+.otp-countdown.is-urgent strong { color: var(--text-accent); }
+.otp-countdown.is-done { color: var(--text-accent); }
+
+.otp-expired {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 16px;
+  text-align: center;
+  background: color-mix(in srgb, var(--text-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-accent) 26%, transparent);
+}
+.otp-expired__line {
+  margin: 0 0 0.85rem;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+.otp-expired__note {
+  margin: 0.75rem 0 0;
+  font-size: var(--font-size-2xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AUTH — the waiting state
+   A login code has to be written to the sheet and then handed to Gmail,
+   so the button genuinely waits a second or two. It should look like it
+   is working rather than like it has stopped.
+   ═══════════════════════════════════════════════════════════════════ */
+.auth-spinner {
+  flex: 0 0 auto;
+  animation: auth-spin 0.8s linear infinite;
+}
+/* The label changes while the button is waiting, and a longer one must
+   not make the button grow under the reader's finger. */
+.btn-primary[aria-busy="true"],
+.btn-primary:has(.auth-spinner) {
+  min-height: 3.5rem;
+}
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
+}
+/* The global reduced-motion rule collapses every animation to 0.001ms,
+   which would freeze this mid-turn and read as broken. A spinner IS the
+   feedback, so it keeps turning — slowly, and without a bounce. */
+@media (prefers-reduced-motion: reduce) {
+  .auth-spinner { animation: auth-spin 1.6s linear infinite !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   FLOATING SHORTCUTS
+   ───────────────────────────────────────────────────────────────────
+   A bottom-right column, deliberately not centred. The single centred
+   button this replaces sat on top of the Café's message box and over
+   the middle item of the bottom nav.
+
+   Lanes, so nothing collides:
+     bottom-left   Quill
+     bottom-right  these
+     bottom edge   the nav itself
+   ═══════════════════════════════════════════════════════════════════ */
+.ss-fabs {
+  position: fixed;
+  z-index: 90;
+  right: 0.85rem;
+  /* Clear of the mobile nav (56px) and the phone's home indicator. */
+  bottom: calc(56px + env(safe-area-inset-bottom) + 0.75rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+@media (min-width: 1280px) {
+  /* No bottom nav at this width. */
+  .ss-fabs { right: 2rem; bottom: 2rem; }
+}
+
+.ss-fab {
+  /* 44px: smaller than the 56px it replaces, still the minimum a thumb
+     can hit reliably. The global coarse-pointer rule keeps it there. */
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  border: none;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--text-primary) 22%, transparent);
+  transition: transform 0.18s ease;
+}
+.ss-fab:hover { transform: scale(1.06); }
+
+/* The floating buttons (these and Quill) step aside while the footer is on
+   screen, so they never cover its links on a phone. */
+.ss-fabs,
+.quill-mobile {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.ss-fabs.is-tucked,
+.quill-mobile.is-tucked {
+  opacity: 0;
+  transform: translateY(0.75rem);
+  pointer-events: none;
+}
+
+/* <details> disclosures in forms: no default triangle, the label says it. */
+details > summary::-webkit-details-marker { display: none; }
+.ss-fab:active { transform: scale(0.94); }
+
+/* The primary action keeps the brand colour it already had.
+   White on it, not --text-primary: --color-brand-gold resolves to the
+   deep mauve #8E4A59, and dark brown on that is close to unreadable. */
+.ss-fab--list {
+  background: var(--color-brand-gold, #8E4A59);
+  color: #FFFFFF;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss-fab { transition: none; }
+  .ss-fab:hover, .ss-fab:active { transform: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   READER PROFILE
+   ───────────────────────────────────────────────────────────────────
+   What another reader sees. Shelves and history, never contact details
+   — the backend strips those, and this page never asks for them.
+   ═══════════════════════════════════════════════════════════════════ */
+.rp-page {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 0 0 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.rp-back {
+  align-self: flex-start;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  padding: 0.4rem 0;
+}
+.rp-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 24px;
+  padding: 1.4rem;
+}
+
+.rp-head { display: flex; gap: 1rem; align-items: flex-start; }
+.rp-avatar {
+  flex: 0 0 auto;
+  width: 4rem;
+  height: 4rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--font-size-2xl);
+  color: var(--text-accent);
+  background: color-mix(in srgb, var(--text-accent) 12%, var(--bg-surface-inset));
+  border: 1px solid color-mix(in srgb, var(--text-accent) 28%, transparent);
+}
+.rp-head__ident { min-width: 0; flex: 1 1 auto; }
+.rp-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-2xl);
+  line-height: 1.2;
+  color: var(--text-primary);
+  overflow-wrap: break-word;
+}
+.rp-meta {
+  margin: 0.35rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.8rem;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+.rp-bio {
+  margin: 0.7rem 0 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.65;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.rp-genres { margin: 0.7rem 0 0; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+
+.rp-tag {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: var(--bg-surface-inset);
+  border: 1px solid var(--border-default);
+}
+.rp-tag--member {
+  color: var(--text-accent);
+  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--text-accent) 30%, transparent);
+}
+.rp-tag--swap {
+  color: #2F6B4F;
+  background: #DCEBE1;
+  border-color: color-mix(in srgb, #2F6B4F 26%, transparent);
+}
+
+.rp-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.6rem;
+}
+@media (max-width: 520px) {
+  .rp-stats { grid-template-columns: repeat(2, 1fr); }
+}
+.rp-stat {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 18px;
+  padding: 0.9rem 0.6rem;
+  text-align: center;
+}
+.rp-stat__n {
+  display: block;
+  font-family: var(--font-display);
+  font-size: var(--font-size-2xl);
+  color: var(--text-accent);
+  font-variant-numeric: tabular-nums;
+}
+.rp-stat__l {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.rp-h2 {
+  margin: 0 0 0.9rem;
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-lg);
+  color: var(--text-primary);
+}
+
+.rp-badges {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.6rem;
+}
+.rp-badge {
+  padding: 0.7rem 0.8rem;
+  border-radius: 16px;
+  background: var(--bg-surface-inset);
+  border: 1px solid var(--border-default);
+}
+.rp-badge__name {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+.rp-badge__note {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: var(--font-size-2xs);
+  color: var(--text-muted);
+}
+
+.rp-shelf { margin-top: 1.1rem; }
+.rp-shelf:first-of-type { margin-top: 0; }
+.rp-shelf__title {
+  margin: 0 0 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.rp-shelf__count {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: var(--font-size-2xs);
+  color: var(--text-accent);
+  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
+}
+.rp-shelf__empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-style: italic;
+  color: var(--text-muted);
+}
+.rp-shelf__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.4rem; }
+.rp-book {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 14px;
+  background: var(--bg-surface-inset);
+  border: 1px solid var(--border-subtle);
+}
+.rp-book__title { font-size: var(--font-size-sm); color: var(--text-primary); overflow-wrap: anywhere; }
+.rp-book__author { font-size: var(--font-size-xs); color: var(--text-muted); }
+.rp-book__tags { margin-left: auto; display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.rp-more {
+  margin-top: 0.7rem;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-accent);
+  background: none;
+  border: none;
+  text-decoration: underline;
+}
+
+/* Public reader page: the 3-D shelf and its share button. */
+.rp-bookshelf__head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem; }
+.rp-bookshelf__head .rp-h2 { margin: 0; }
+.rp-share {
+  flex-shrink: 0;
+  padding: 0.55rem 1rem;
+  border-radius: 999px;
+  border: 0;
+  background: #4A3B32;
+  color: #F9F6F0;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.rp-bookshelf .ss-shelf { margin-top: 0.25rem; }
+
+.rp-journey { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.1rem; }
+.rp-journey__item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.rp-journey__item:last-child { border-bottom: none; }
+.rp-journey__what { flex: 1 1 auto; font-size: var(--font-size-sm); color: var(--text-primary); overflow-wrap: anywhere; }
+.rp-journey__when {
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-foot {
+  margin: 0;
+  padding: 0 0.5rem;
+  text-align: center;
+  font-size: var(--font-size-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* A name in the café is a door to a profile, and should look like one. */
+.cafe-bubble__who--link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+}
+.cafe-line__seat--link { cursor: pointer; }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   24. PHONE — THE APP LAYER
+   ───────────────────────────────────────────────────────────────────
+   §23 above made SwapSutra FIT a phone: nothing overflows, nothing is
+   unreachable, every target is thumb-sized. This section is the next
+   question — does it FEEL like an app once it fits?
+
+   It did not, and the reasons were all about scale rather than layout.
+   A page laid out for a 1440px monitor and then squeezed keeps its
+   desktop proportions: 80px of navigation bar, 6rem of air between
+   sections, a 48px serif headline, a gutter inside a gutter. On a
+   375px screen those proportions read as "a website someone opened on
+   a phone". Native apps are denser, quieter and flatter, and a reader
+   feels the difference before they can name it.
+
+   So this layer does four things, and deliberately nothing else:
+
+     1. CHROME    the top bar drops 80px → 56px, the tab bar 56px → 48px,
+                  both the heights a phone OS actually uses.
+     2. SCALE     display type is capped, micro-labels lose their wide
+                  desktop letter-spacing, and radii come down so cards
+                  read as rows in an app rather than as cards on a page.
+     3. DENSITY   section rhythm, card padding and the doubled-up
+                  gutter (px-4 on <main>, px-6 again on the section
+                  inside it) are all collapsed. This alone recovers
+                  roughly a third of the vertical scroll.
+     4. BEHAVIOUR tap highlights, rubber-band scroll past the ends,
+                  text selection on chrome, hover effects that fire on
+                  touch — the small tells that a surface is a web page.
+                  Modals become bottom sheets, which is where a thumb
+                  expects them.
+
+   WHAT IS DELIBERATELY LEFT ALONE
+   • Body copy stays at 15px. This is a reading community; shrinking
+     the prose to gain density would be the one saving that costs the
+     product something real. The air around the text goes, the text
+     does not.
+   • Form fields stay at 16px, because anything smaller makes iOS zoom
+     the viewport on focus.
+   • Tap targets stay at 44px. Density is about whitespace, not about
+     making things harder to hit.
+
+   MECHANICS
+   These rules are UNLAYERED, unlike §23 which sits inside @layer base.
+   Per the cascade-layers spec unlayered rules beat every layered rule,
+   including Tailwind's utilities — so this section can override a
+   utility class without the wall of !important that §23 needs. The
+   attribute selectors ([class*="py-24"]) match Tailwind's generated
+   class names and follow the precedent already set in §23; they are
+   spacing-only and never infer colour, per the design-system rule at
+   the top of this file.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* One number for the bottom tab bar, so the FAB column, the Quill
+     and any future floating thing all clear it by construction rather
+     than by three hand-tuned constants drifting apart. */
+  --app-tabbar-h: 3rem;
+}
+
+
+/* ── 24.1 Chrome: the two bars ──
+   Scoped to the width at which the mobile tab bar exists (xl:hidden →
+   below 1280px), so a tablet in portrait gets the same app shell the
+   phone does instead of a desktop bar over a mobile tab bar. */
+@media (max-width: 1279px) {
+
+  /* Top bar: 80px is a desktop masthead. iOS and Android both use ~56.
+     The height lives on the inner flex row, so this targets that. */
+  nav.sticky > div {
+    height: 3.5rem;
+    padding-inline: 0.875rem;
+  }
+  nav.sticky img {
+    height: 1.9rem;
+    width: auto;
+    max-width: 108px;
+  }
+
+  /* Both immersive screens size themselves against the old 80px bar.
+     Shrinking the bar without this leaves a 24px gap under the fold. */
+  main[class*="100vh-80px"] { height: calc(100vh - 3.5rem); }
+  main[class*="100dvh-80px"] {
+    height: calc(100dvh - 3.5rem - var(--app-tabbar-h) - env(safe-area-inset-bottom));
+  }
+
+  /* Bottom tab bar. A native tab bar is a hairline and 48-49pt of
+     content — not a raised card. The heavy upward shadow was the
+     single most "web" thing on the screen. */
+  nav[aria-label="Primary mobile navigation"] {
+    box-shadow: none;
+    border-top-width: 1px;
+  }
+  nav[aria-label="Primary mobile navigation"] button {
+    min-height: var(--app-tabbar-h);
+    padding-block: 0.3rem;
+    gap: 0.15rem;
+  }
+  nav[aria-label="Primary mobile navigation"] svg {
+    width: 20px;
+    height: 20px;
+  }
+  nav[aria-label="Primary mobile navigation"] button > span:last-child {
+    font-size: var(--font-size-2xs);
+    letter-spacing: var(--letter-spacing-wide);
+    line-height: 1;
+  }
+
+  /* Everything that floats now measures from the one tab-bar variable. */
+  .ss-fabs { bottom: calc(var(--app-tabbar-h) + env(safe-area-inset-bottom) + 0.6rem); }
+  .quill-mobile { bottom: calc(var(--app-tabbar-h) + env(safe-area-inset-bottom) + 0.6rem) !important; }
+  .quill-mobile.quill-readers-circle {
+    bottom: calc(var(--app-tabbar-h) + env(safe-area-inset-bottom) + 1.9rem) !important;
+  }
+}
+
+
+/* ── 24.2 Everything else, on a phone ── */
+@media (max-width: 767px) {
+
+  /* ── Behaviour: the tells ──
+     A grey flash on every tap, a page that rubber-bands past its own
+     end, a long-press that selects the label inside a button — these
+     are what a native surface does not do. */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* NOT setting overscroll-behavior on html/body.
+     Killing the rubber-band at the top and bottom of the page is a
+     small cosmetic win, and it is the one rule in this section that
+     can fight the browser's own scrolling — it behaves differently in
+     iOS Safari and in Android in-app webviews. Not worth the risk for a
+     bounce. Scroll containment stays where it is actually needed and
+     provably safe: inside the sheets and the chat log. */
+  nav, button, [role="button"], label,
+  .ss-fab, .quill-trigger {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* But a reader must still be able to copy an address, an AWB number,
+     a book title — anything that is content rather than chrome. */
+  p, h1, h2, h3, h4, h5, h6, li, td, th, span.font-mono, input, textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  /* Hover styling has no "off" state on a touchscreen: it latches after
+     a tap and stays until something else is tapped, which reads as a
+     stuck element. */
+  .classic-card:hover,
+  [class*="hover:scale"]:hover,
+  [class*="hover:-translate"]:hover,
+  [class*="hover:shadow"]:hover {
+    transform: none;
+    box-shadow: inherit;
+  }
+  /* Momentum, and no visible scrollbar on the horizontal rails of
+     chips and covers — a native rail has neither. */
+  [class*="overflow-x-auto"],
+  [class*="overflow-x-scroll"] {
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+  [class*="overflow-x-auto"]::-webkit-scrollbar,
+  [class*="overflow-x-scroll"]::-webkit-scrollbar { display: none; }
+  [class*="overflow-x-auto"] > *,
+  [class*="overflow-x-scroll"] > * { scroll-snap-align: start; }
+
+
+  /* ── Type on phones (30 Sep) ──
+     Headline sizes no longer need per-class overrides here: every size
+     token is fluid (clamp) and already smaller on a phone. What does
+     change on a narrow screen is letter spacing — wide editorial
+     tracking turns a three-word caps label into two lines — so the
+     tokens themselves are tightened, and every utility follows (the
+     phone letter-spacing tokens live next to the others, in §0). */
+
+  /* Radii. §23 already lands the biggest ones on 24px; on a phone an
+     app-shaped card is smaller still, and a rounded rectangle that is
+     nearly a stadium reads as decorative rather than structural. */
+  .classic-card,
+  .night-card, .night-panel, .night-modal,
+  .card,
+  [class*="rounded-3xl"],
+  [class*="rounded-[24px]"],
+  [class*="rounded-[28px]"],
+  [class*="rounded-[32px]"],
+  [class*="rounded-[36px]"],
+  [class*="rounded-[40px]"],
+  [class*="rounded-[44px]"],
+  [class*="rounded-[48px]"],
+  [class*="rounded-[60px]"],
+  [class*="rounded-[64px]"] { border-radius: 18px; }
+  [class*="rounded-2xl"] { border-radius: 14px; }
+
+  /* Flatter. Layered shadows are how a web page separates a card from
+     a page; an app separates a row from a list with a hairline. */
+  .classic-card, .card {
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--text-primary) 6%, transparent);
+  }
+
+
+  /* ── Density: the gutter ──
+     <main> already sets px-4. Sections inside it set px-6 or px-8
+     again, so content sat 40px from the edge on a 375px screen — the
+     doubled gutter was costing more width than any single element.
+     Only the inner one goes; <main>'s own stays. */
+  main section[class*="px-6"]:not([class*="border"]),
+  main section[class*="px-8"]:not([class*="border"]),
+  main > div > section[class*="px-4"],
+  main [class*="max-w-6xl"][class*="px-6"],
+  main [class*="max-w-5xl"][class*="px-6"],
+  main [class*="max-w-4xl"][class*="px-6"] { padding-inline: 0; }
+  /* Bordered cards keep their own inner padding — without it the
+     Library's "Find books around you" and filter cards had their
+     contents touching the card's border. */
+  main section.night-card[class*="border"] { padding-inline: 0.875rem; }
+
+  main { padding-top: 1.25rem; }
+  /* Clear of the tab bar and the home indicator, and no more. */
+  main[class*="pb-28"] {
+    padding-bottom: calc(var(--app-tabbar-h) + env(safe-area-inset-bottom) + 1.5rem);
+  }
+
+  /* ── Density: vertical rhythm ──
+     space-y-24 is 6rem between sections. On a monitor that is
+     composure; on a phone it is four thumb-flicks of nothing. */
+  [class*="space-y-24"] > * + * { margin-top: 2.5rem; }
+  [class*="space-y-20"] > * + * { margin-top: 2.25rem; }
+  [class*="space-y-16"] > * + * { margin-top: 2rem; }
+  [class*="space-y-12"] > * + * { margin-top: 1.75rem; }
+  [class*="space-y-10"] > * + * { margin-top: 1.5rem; }
+  [class*="space-y-8"]  > * + * { margin-top: 1.25rem; }
+  [class*="space-y-6"]  > * + * { margin-top: 1rem; }
+
+  main [class*="py-32"],
+  main [class*="py-28"],
+  main [class*="py-24"],
+  main [class*="py-20"] { padding-block: 2.25rem; }
+  main [class*="py-16"],
+  main [class*="py-12"] { padding-block: 1.75rem; }
+  main [class*="pt-10"], main [class*="pt-12"] { padding-top: 1.5rem; }
+  /* The hero's own pt-24 sat on top of <main>'s padding and the sticky
+     bar, so the first words of the site began 140px down a 844px
+     screen. A phone has no room for an overture. */
+  main [class*="pt-24"], main [class*="pt-20"], main [class*="pt-16"] { padding-top: 1.25rem; }
+  main [class*="pb-24"] { padding-bottom: 2rem; }
+  main [class*="mt-32"], main [class*="mt-24"], main [class*="mt-20"] { margin-top: 2.25rem; }
+  main [class*="mb-24"], main [class*="mb-20"] { margin-bottom: 2.25rem; }
+  main [class*="mb-16"], main [class*="mb-12"] { margin-bottom: 1.5rem; }
+
+  /* ── Density: inside the cards ── */
+  main [class*="gap-12"], main [class*="gap-10"] { gap: 1rem; }
+  main [class*="gap-8"] { gap: 0.875rem; }
+  main [class*="gap-6"] { gap: 0.75rem; }
+
+  /* p-16 and p-20 come here from §23, whose copy of this rule was
+     removed so that one section owns phone density. */
+  /* ~= and not *= for the bare p-N utilities, because *= is a plain
+     substring test and "gap-6" contains "p-6". A *= here would have
+     silently repadded every flex row with a gap on the whole site.
+     ~= matches a whole entry in the space-separated class list, which
+     is exactly what a utility class is. */
+  main [class~="p-20"], main [class~="p-16"], main [class~="p-12"],
+  main [class~="p-10"], main [class~="p-8"],
+  main [class~="sm:p-8"], main [class~="md:p-10"] { padding: 1.125rem; }
+  main [class~="p-6"], main [class~="sm:p-6"] { padding: 0.9rem; }
+  main [class*="px-8"]:not(section) { padding-inline: 1rem; }
+
+  /* Two-up grids that were written as one column on a phone: a phone
+     shows one book per screen where it could comfortably show four.
+     Restricted to the tight-gap card grids, so prose and form rows
+     are untouched. */
+  main [class*="grid-cols-2"][class*="gap-"] { gap: 0.6rem; }
+
+
+  /* ── Controls ── */
+  .btn-primary, .btn-outline {
+    font-size: var(--font-size-2xs);
+    padding-block: 0.7rem;
+    letter-spacing: var(--letter-spacing-wide);
+    /* §23 puts overflow-wrap:anywhere on every button so a long label
+       wraps instead of overflowing its card. Next to a full-width input
+       that same rule breaks the word itself: the pincode row's Search
+       button rendered as "SEAR / CH". A label wraps between words,
+       never inside one — and a button never shrinks below the word it
+       has to show. */
+    overflow-wrap: normal;
+    word-break: keep-all;
+  }
+  .flex > .btn-primary,
+  .flex > .btn-outline { flex-shrink: 0; }
+  .input-classic, input, textarea, select {
+    border-radius: 12px;
+    padding: 0.7rem 0.85rem;
+  }
+
+
+  /* ── Modals become bottom sheets ──
+     Every modal in the app is the same shape: a fixed full-screen flex
+     box that centres one child. Centred is a desktop convention — it
+     assumes a pointer that can reach the middle of the screen. A thumb
+     reaches the bottom, which is why every app on the phone puts its
+     dialogs there.
+
+     Excluded: the flex-col overlays (the boot and error screens, which
+     genuinely own the whole screen) and the pointer-events-none ones
+     (toasts, which are not dialogs at all). */
+  .fixed.inset-0.items-center.justify-center:not(.flex-col):not(.pointer-events-none) {
+    align-items: flex-end;
+    padding: 0;
+    /* The escape hatch. If a panel ever ends up taller than the space
+       it is given — an old browser that ignores the max-height below,
+       a phone with the keyboard open, a form that grew — the host
+       itself scrolls, so the top of the dialog is always reachable.
+       Without this, an over-tall sheet anchored to the bottom pushes
+       its own header off the top of the screen with no way to get to
+       it, which reads exactly like "the screen stopped scrolling". */
+    overflow-y: auto;
+  }
+  /* > * would also catch the full-bleed backdrop that most of these
+     dialogs render as their first child (absolute inset-0). Clamping
+     THAT to 92dvh left an undimmed strip across the top of the screen
+     and put a 20px radius on a backdrop. Only the panel — the child
+     that is actually in flow — becomes the sheet. */
+  .fixed.inset-0.items-center.justify-center:not(.flex-col):not(.pointer-events-none) > *:not(.absolute):not(.fixed) {
+    width: 100%;
+    max-width: 100%;
+    /* vh, with dvh added back in the @supports block below.
+       Safari under 15.4 and older Android WebViews treat `92dvh` as
+       invalid and drop it — and since §23's own max-height was removed
+       in favour of this one, such a browser would give the sheet NO
+       height limit at all. It would grow past the top of the screen,
+       taking its own close button with it, and there would be nothing
+       to scroll. That is the "screen won't scroll, no content" failure.
+
+       The usual two-declarations-in-one-rule trick does NOT survive
+       this build: the CSS minifier sees two `max-height` values in one
+       block and keeps only the last, deleting the fallback. A separate
+       @supports rule cannot be collapsed that way, so the fallback
+       actually ships. */
+    max-height: 92vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 20px 20px 0 0;
+    padding: 1.25rem 1.125rem max(1.25rem, env(safe-area-inset-bottom));
+  }
+  /* dvh where it exists: it measures the viewport as it actually is
+     with the address bar collapsed, so the sheet does not jump as the
+     bar hides. Kept in its own @supports block so the minifier cannot
+     merge it back into the rule above and drop the vh fallback. */
+  @supports (height: 100dvh) {
+    .fixed.inset-0.items-center.justify-center:not(.flex-col):not(.pointer-events-none) > *:not(.absolute):not(.fixed) {
+      max-height: 92dvh;
+    }
+  }
+}
+
+/* ── The shelf ───────────────────────────────────────────────────────────
+   Books standing on wooden shelves rather than floating in a grid of
+   cards, which is how a reader actually pictures a library.
+
+   How the planks stay under the books: the grid uses a FIXED row height
+   (--shelf-row) with no gap, so every row starts at an exact multiple of
+   it. A repeating gradient with that same period paints the last
+   --shelf-plank pixels of each row, which puts a plank under every row
+   with no per-row markup and nothing to fall out of alignment when the
+   column count changes at a breakpoint. Each book is bottom-aligned
+   inside its cell, so the covers stand ON the plank instead of floating
+   above it. */
+.ss-shelf {
+  /* 3-D bookcase with no wall behind it (owner's request, 22 Sep: the
+     beige backdrop went). What makes it read as a bookcase now is the
+     wood itself: a slim plank under every row — top face plus front
+     edge — with each book tilted on
+     its own axis so its page-block shows.
+     Columns follow the device: 2 on a phone, 3 on a tablet, 4 on a
+     laptop. Every cell paints its own stretch of plank and cells sit
+     edge to edge, so the stretches join into one continuous shelf. */
+  --plank-top: 8px;
+  --plank-front: 6px;
+  /* Real wood brown (owner's request, 23 Sep: the old greyish-brown read
+     as grey on phones). Walnut top face, lit teak lip. */
+  --wood-light: #B7804F;
+  --wood-mid: #8B5A32;
+  --wood-dark: #5A371D;
+  --shelf-plank: calc(var(--plank-top) + var(--plank-front));
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+/* The wooden uprights at the ends were removed on 22 Sep (owner's request). */
+@media (min-width: 640px) {
+  .ss-shelf { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 760px; --plank-top: 9px; --plank-front: 7px; }
+}
+@media (min-width: 1024px) {
+  .ss-shelf { grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: 1024px; }
+}
+
+/* Filler cells finish the last shelf so its plank runs the full width.
+   The page renders one set per column count; only the set matching the
+   current layout is shown. */
+.ss-shelf__book--fill3, .ss-shelf__book--fill4 { display: none !important; }
+@media (min-width: 640px) {
+  .ss-shelf__book--fill2 { display: none !important; }
+  .ss-shelf__book--fill3 { display: flex !important; }
+}
+@media (min-width: 1024px) {
+  .ss-shelf__book--fill3 { display: none !important; }
+  .ss-shelf__book--fill4 { display: flex !important; }
+}
+
+/* One cell = one book standing on its stretch of plank. */
+.ss-shelf__book {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 18px 12px var(--shelf-plank);
+  min-width: 0;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  perspective: 700px;
+  -webkit-tap-highlight-color: transparent;
+}
+.ss-shelf__book--empty { cursor: default; }
+@media (min-width: 640px) { .ss-shelf__book { padding: 24px 20px var(--shelf-plank); } }
+/* plank: top surface — dark at the back, lit at the front lip */
+.ss-shelf > .ss-shelf__book::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  bottom: var(--plank-front);
+  height: var(--plank-top);
+  background: linear-gradient(180deg, var(--wood-dark) 0%, var(--wood-mid) 45%, var(--wood-light) 100%);
+  z-index: 0;
+}
+/* plank: front edge, with a soft shadow cast below */
+.ss-shelf > .ss-shelf__book::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 0;
+  height: var(--plank-front);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0, rgba(255, 255, 255, 0) 2px),
+    linear-gradient(180deg, var(--wood-mid) 0%, var(--wood-dark) 100%);
+  box-shadow: 0 7px 10px -5px rgba(90, 55, 29, 0.5);
+  z-index: 0;
+}
+
+/* The book: a cover tilted a few degrees so its page-block and spine show. */
+.ss-shelf__tome {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  max-width: 190px;
+  aspect-ratio: 2 / 3;
+  transform-style: preserve-3d;
+  transform: rotateY(-16deg);
+  transform-origin: left center;
+  transition: transform 0.35s cubic-bezier(.2,.8,.2,1);
+  /* contact shadow on the plank */
+  filter: drop-shadow(10px 8px 8px rgba(74, 59, 50, 0.35));
+}
+.ss-shelf__book:nth-child(2n) .ss-shelf__tome { transform: rotateY(-10deg); }
+.ss-shelf__book:hover .ss-shelf__tome,
+.ss-shelf__book:focus-visible .ss-shelf__tome,
+.ss-shelf__book:active .ss-shelf__tome {
+  transform: rotateY(0deg) translateY(-8px) translateZ(20px);
+}
+/* page edges on the right, then the back board */
+.ss-shelf__pages {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  right: -9px;
+  width: 10px;
+  border-radius: 0 3px 3px 0;
+  background:
+    repeating-linear-gradient(180deg, #F9F6F0 0 1px, #E5DDD3 1px 2px),
+    #F2EBE1;
+  box-shadow: inset -2px 0 3px rgba(74, 59, 50, 0.12), 2px 0 0 rgba(124, 110, 101, 0.6);
+  transform: rotateY(40deg);
+  transform-origin: left center;
+}
+.ss-shelf__cover {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: 2px 5px 5px 2px;
+  overflow: hidden;
+  background: var(--bg-page);
+  box-shadow:
+    inset 4px 0 6px -3px rgba(0, 0, 0, 0.45),
+    0 1px 0 rgba(45, 41, 37, 0.25);
+}
+.ss-shelf__book:focus-visible { outline: none; }
+.ss-shelf__book:focus-visible .ss-shelf__cover {
+  outline: 2px solid var(--text-accent, #8a5a44);
+  outline-offset: 3px;
+}
+.ss-shelf__cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* spine hinge + a sheen across the cover, so it reads as a hardback */
+.ss-shelf__cover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.42) 0, rgba(0, 0, 0, 0.08) 6%, rgba(255, 255, 255, 0.16) 8%, rgba(255, 255, 255, 0) 12%),
+    linear-gradient(115deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0) 38%);
+  pointer-events: none;
+  z-index: 1;
+}
+.ss-shelf__plate {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 2;
+  padding: 16px 8px 7px;
+  background: linear-gradient(to top, rgba(28, 25, 22, 0.9), rgba(28, 25, 22, 0));
+  color: #fff;
+  font-size: var(--font-size-2xs);
+  line-height: 1.25;
+  text-align: center;
+  pointer-events: none;
+}
+.ss-shelf__plate b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: var(--font-weight-bold); }
+.ss-shelf__plate span { display: block; opacity: 0.85; font-size: var(--font-size-2xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (min-width: 640px) {
+  .ss-shelf__plate { font-size: var(--font-size-sm); }
+  .ss-shelf__plate span { font-size: var(--font-size-2xs); }
+}
+/* Partial listing ("More photos coming") — small and quiet on the cover. */
+.ss-shelf__tag {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  left: 8px;
+  max-width: calc(100% - 30px);
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(249, 246, 240, 0.94);
+  color: #4A3B32;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+@media (min-width: 640px) { .ss-shelf__tag { font-size: var(--font-size-2xs); } }
+.ss-shelf__dot {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  right: 7px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss-shelf__tome { transition: none; }
+}
+
+/* Owner mode: the cell holds the cover plus its own three-dot menu, so the
+   shelf stays a shelf instead of growing a pair of buttons under every book. */
+.ss-shelf__book--owner { position: relative; }
+.ss-shelf__book--bare { padding: 0; width: 100%; }
+.ss-shelf__menu {
+  position: absolute;
+  right: 12px;
+  bottom: calc(var(--shelf-plank) + 8px);
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(28, 25, 22, 0.72);
+  color: #fff;
+  cursor: pointer;
+}
+.ss-shelf__scrim { position: fixed; inset: 0; z-index: 4; }
+.ss-shelf__menu-panel {
+  position: absolute;
+  right: 6px;
+  bottom: calc(var(--shelf-plank) + 32px);
+  z-index: 5;
+  min-width: 128px;
+  padding: 5px;
+  border-radius: 12px;
+  border: 1px solid var(--brand-border, rgba(45, 41, 37, 0.14));
+  background: var(--bg-surface);
+  box-shadow: 0 12px 26px -10px rgba(45, 41, 37, 0.45);
+}
+.ss-shelf__menu-panel button {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-transform: uppercase;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.ss-shelf__menu-panel button:hover { background: var(--bg-page); }
+.ss-shelf__menu-panel button.is-danger { color: #b3261e; }
+.ss-shelf__menu-panel button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Horizontal chip rows scroll without a visible bar. Both names are used
+   in the markup and neither was ever defined. */
+.scrollbar-hide, .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.scrollbar-hide::-webkit-scrollbar, .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Quill on the Café (22 Sep): shown on every page now. On a phone it sits
+   above the Café's message box instead of hiding, and only the round face
+   shows so it never covers what readers type. */
+@media (max-width: 1279px) {
+  .quill-mobile.quill-cafe .quill-trigger > :not(:first-child) { display: none; }
+  .quill-mobile.quill-cafe .quill-trigger { padding: 4px; }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   COFFEE MUGS — /mugs shelf, custom mug enquiry, admin (30 Sep 2026)
+   Book café × editorial commerce: cream ground, hairline borders, serif
+   titles, generous space. No badges, gradients or urgency. Every size and
+   weight comes from the typography tokens (§0).
+   ════════════════════════════════════════════════════════════════════════ */
+@layer components {
+  .mugs { max-width: 72rem; margin: 0 auto; padding: 1rem 1rem 6rem; color: var(--text-primary); }
+  .mug-accent { color: var(--text-accent); }
+
+  .mugs-hero { display: grid; gap: 2rem; align-items: center; padding: 2.5rem 0 3rem; border-bottom: 1px solid var(--border-default); }
+  .mugs-hero__text { max-width: 36rem; }
+  .mugs-hero__text .type-h1 { margin: 0.75rem 0 1rem; }
+  .mugs-hero__lead { color: var(--text-muted); margin: 0 0 1.75rem; font-style: italic; }
+  .mugs-hero__ctas { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .mugs-hero__art { aspect-ratio: 5 / 4; border-radius: 1.25rem; overflow: hidden; }
+  @media (max-width: 639px) { .mugs-hero__art { aspect-ratio: 16 / 7; } .mugs-hero { padding-top: 1.5rem; } }
+  @media (min-width: 900px) {
+    .mugs-hero { grid-template-columns: 1.1fr 0.9fr; padding: 4.5rem 0 4rem; }
+  }
+
+  .mug-placeholder {
+    display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+    background: radial-gradient(circle at 30% 20%, #FFFDF8, var(--bg-page-alt));
+    color: var(--text-muted);
+  }
+
+  .mug-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+    min-height: 44px; padding: 0 1.25rem; border-radius: 999px;
+    font-family: var(--font-ui); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-wide); text-decoration: none; cursor: pointer;
+    transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+  }
+  .mug-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .mug-btn--solid { background: var(--btn-primary-bg); color: var(--btn-primary-fg); border: 1px solid var(--btn-primary-bg); }
+  .mug-btn--solid:hover:not(:disabled) { background: var(--btn-primary-hover-bg); color: var(--btn-primary-fg); }
+  .mug-btn--quiet { background: transparent; color: var(--text-primary); border: 1px solid var(--border-strong); }
+  .mug-btn--quiet:hover:not(:disabled) { border-color: var(--text-accent); color: var(--text-accent); }
+  .mug-btn--large { min-height: 52px; padding: 0 1.75rem; font-size: var(--font-size-md); }
+  .mug-link { background: none; border: 0; padding: 0; color: var(--text-accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; font-size: var(--font-size-sm); }
+
+  .mugs-cats { display: flex; gap: 0.75rem; overflow-x: auto; padding: 2rem 0 0.5rem; scroll-snap-type: x mandatory; }
+  .mugs-cat {
+    flex: 0 0 auto; width: 13rem; text-align: left; scroll-snap-align: start;
+    padding: 1rem 1.1rem; border: 1px solid var(--border-default); border-radius: 1rem; background: var(--bg-surface);
+    cursor: pointer; transition: border-color 200ms ease, background-color 200ms ease;
+  }
+  .mugs-cat:hover { border-color: var(--border-strong); }
+  .mugs-cat.is-on { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 6%, var(--bg-surface)); }
+  .mugs-cat__label { display: block; font-family: var(--font-display); font-size: var(--font-size-lg); font-weight: var(--font-weight-medium); color: var(--text-primary); }
+  .mugs-cat__count { font-family: var(--font-ui); font-size: var(--font-size-xs); color: var(--text-muted); }
+  .mugs-cat__blurb { display: block; margin-top: 0.25rem; font-size: var(--font-size-sm); line-height: var(--line-height-normal); color: var(--text-muted); }
+
+  .mugs-grid-wrap { padding: 2.5rem 0 1rem; scroll-margin-top: 6rem; }
+  .mugs-grid-wrap > .type-h2 { margin-bottom: 1.5rem; }
+  .mugs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem 1rem; }
+  @media (min-width: 900px) { .mugs-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.5rem 1.75rem; } }
+  @media (min-width: 1200px) { .mugs-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  .mugs-devnote {
+    margin: 0 0 1.25rem; padding: 0.6rem 0.9rem; border: 1px dashed #B45309; border-radius: 0.6rem;
+    color: #92400E; background: #FFFBEB; font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+  }
+  .mugs-empty { max-width: 34rem; padding: 2.5rem 0; }
+  .mugs-soon {
+    display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0 1.25rem;
+    border-radius: 999px; background: var(--bg-surface-inset); color: var(--text-primary);
+    font-family: var(--font-ui); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-caps); text-transform: uppercase;
+  }
+  .mugs-empty .type-body { color: var(--text-muted); margin: 0.5rem 0 1.25rem; }
+  .mugs-disclosure { margin-top: 2rem; max-width: 44rem; }
+
+  .mug-card { display: flex; flex-direction: column; min-width: 0; }
+  .mug-card__media {
+    display: block; width: 100%; aspect-ratio: 4 / 5; padding: 0; border: 0; border-radius: 0.9rem; overflow: hidden;
+    background: var(--bg-page-alt); cursor: pointer;
+  }
+  .mug-card__media img { width: 100%; height: 100%; object-fit: cover; transition: transform 400ms ease; }
+  .mug-card__media:hover img { transform: scale(1.03); }
+  .mug-card__body { padding-top: 0.8rem; display: flex; flex-direction: column; gap: 0.3rem; flex: 1; }
+  .mug-card__source { font-size: var(--font-size-xs); letter-spacing: var(--letter-spacing-wide); color: var(--text-muted); text-transform: uppercase; }
+  .mug-card__title { font-family: var(--font-display); font-size: var(--font-size-lg); font-weight: var(--font-weight-medium); line-height: var(--line-height-snug); color: var(--text-primary); }
+  .mug-card__desc {
+    font-size: var(--font-size-sm); line-height: var(--line-height-normal); color: var(--text-muted);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .mug-card__price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; margin-top: 0.2rem; }
+  .mug-card__price-na { font-size: var(--font-size-sm); color: var(--text-muted); }
+  .mug-card__mrp { font-size: var(--font-size-sm); color: var(--text-muted); }
+  .mug-card__off { font-size: var(--font-size-xs); color: var(--text-accent); }
+  .mug-card__rating { font-size: var(--font-size-xs); color: var(--text-muted); }
+  .mug-card__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: auto; padding-top: 0.6rem; }
+  .mug-card__actions .mug-btn { min-height: 40px; padding: 0 0.9rem; font-size: var(--font-size-xs); }
+  @media (max-width: 420px) { .mug-card__actions .mug-btn { flex: 1 1 100%; min-height: 44px; } }
+
+  .mugs-custom {
+    display: grid; gap: 1.5rem; align-items: center; margin-top: 3.5rem; padding: 2.25rem 1.5rem;
+    border-radius: 1.5rem; background: var(--bg-inverse); color: var(--text-on-inverse);
+  }
+  .mugs-custom .type-h2, .mugs-custom .type-lead { color: var(--text-on-inverse); }
+  .mugs-custom .type-lead { margin-top: 0.75rem; max-width: 40rem; color: var(--text-on-inverse-secondary); }
+  .mugs-custom .mug-accent { color: #E0B3BE; }
+  @media (min-width: 900px) { .mugs-custom { grid-template-columns: 1fr auto; padding: 3.5rem; } }
+
+  /* Modal: a sheet on desktop, the whole screen on a phone. */
+  .mug-modal {
+    position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
+    padding: 1.5rem; background: rgba(30, 27, 24, 0.45); backdrop-filter: blur(3px);
+  }
+  .mug-modal__sheet {
+    display: flex; flex-direction: column; width: 100%; max-width: 44rem; max-height: min(92vh, 56rem);
+    background: var(--bg-page); border-radius: 1.25rem; box-shadow: var(--shadow-modal); overflow: hidden;
+  }
+  .mug-detail { max-width: 34rem; }
+  .mug-detail__media { aspect-ratio: 4 / 3; border-radius: 1rem; overflow: hidden; margin-bottom: 1rem; }
+  .mug-detail__media img { width: 100%; height: 100%; object-fit: cover; }
+  @media (max-width: 639px) {
+    .mug-modal { padding: 0; align-items: stretch; }
+    .mug-modal__sheet { max-width: none; max-height: none; height: 100%; border-radius: 0; }
+  }
+  .mug-modal__head { display: flex; justify-content: space-between; gap: 1rem; padding: 1.25rem 1.5rem 0.75rem; }
+  .mug-modal__head .type-h3 { margin-top: 0.25rem; }
+  .mug-modal__close {
+    flex: 0 0 auto; width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--border-default);
+    background: var(--bg-surface); font-size: var(--font-size-xl); line-height: 1; color: var(--text-primary); cursor: pointer;
+  }
+  .mug-modal__body { flex: 1; overflow-y: auto; padding: 0.5rem 1.5rem 1.5rem; overscroll-behavior: contain; }
+  .mug-modal__foot {
+    display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.9rem 1.5rem calc(0.9rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border-default); background: var(--bg-surface);
+  }
+
+  .mug-steps { display: flex; gap: 0.25rem; list-style: none; margin: 0; padding: 0 1.5rem 0.75rem; border-bottom: 1px solid var(--border-default); }
+  .mug-steps__item { flex: 1; display: flex; align-items: center; gap: 0.4rem; min-width: 0; color: var(--text-muted); font-size: var(--font-size-xs); }
+  .mug-steps__num {
+    flex: 0 0 auto; width: 1.6rem; height: 1.6rem; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-strong); font-weight: var(--font-weight-semibold);
+  }
+  .mug-steps__item.is-current { color: var(--text-primary); font-weight: var(--font-weight-semibold); }
+  .mug-steps__item.is-current .mug-steps__num { border-color: var(--text-accent); color: var(--text-accent); }
+  .mug-steps__item.is-done .mug-steps__num { background: var(--text-accent); border-color: var(--text-accent); color: #fff; }
+  .mug-steps__label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 380px) { .mug-steps__item:not(.is-current) .mug-steps__label { display: none; } }
+
+  .mug-field { margin-top: 1.1rem; }
+  .mug-field__label { display: block; margin-bottom: 0.4rem; font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+  .mug-field__optional { font-weight: var(--font-weight-regular); color: var(--text-muted); }
+  .mug-field__hint { margin-top: 0.35rem; font-size: var(--font-size-sm); color: var(--text-muted); line-height: var(--line-height-normal); }
+  .mug-field__error { margin-top: 0.35rem; font-size: var(--font-size-sm); color: #9F1239; line-height: var(--line-height-normal); }
+  .mug-row { display: grid; gap: 0 1rem; }
+  @media (min-width: 640px) { .mug-row { grid-template-columns: 1fr 1fr; } }
+  .mug-input { width: 100%; min-height: 48px; padding: 0.7rem 0.9rem; font-size: var(--font-size-md); }
+  .mug-input[aria-invalid="true"] { border-color: #BE123C; }
+  .mug-input--short { max-width: 14rem; }
+  .mug-input--inline { width: auto; min-height: 40px; display: inline-block; }
+  .mug-textarea { resize: vertical; line-height: var(--line-height-normal); }
+  .mug-file { font-size: var(--font-size-sm); min-height: 44px; }
+  .mug-image { display: flex; gap: 0.9rem; align-items: center; }
+  .mug-image img { width: 5rem; height: 5rem; object-fit: cover; border-radius: 0.75rem; border: 1px solid var(--border-default); }
+  .mug-hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+  .mug-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .mug-chips[aria-invalid="true"] .mug-chip { border-color: #FDA4AF; }
+  .mug-chips--small { margin-top: 0.6rem; }
+  .mug-chip {
+    display: inline-flex; flex-direction: column; align-items: flex-start; justify-content: center; min-height: 44px;
+    padding: 0.45rem 0.9rem; border: 1px solid var(--border-strong); border-radius: 0.8rem; background: var(--bg-surface);
+    font-size: var(--font-size-sm); color: var(--text-primary); cursor: pointer; text-align: left;
+  }
+  .mug-chip.is-on { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 9%, var(--bg-surface)); box-shadow: inset 0 0 0 1px var(--text-accent); }
+  .mug-chip__hint { font-size: var(--font-size-xs); color: var(--text-muted); }
+  .mug-chips--small .mug-chip { min-height: 40px; font-size: var(--font-size-xs); }
+  .mug-segment { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 999px; padding: 3px; background: var(--bg-surface); margin-bottom: 0.6rem; }
+  .mug-segment__opt { min-height: 40px; padding: 0 1rem; border-radius: 999px; border: 0; background: none; font-size: var(--font-size-sm); color: var(--text-primary); cursor: pointer; }
+  .mug-segment__opt.is-on { background: var(--text-primary); color: var(--bg-page); }
+  .mug-money { display: flex; align-items: center; gap: 0.5rem; max-width: 16rem; }
+  .mug-money > span { font-size: var(--font-size-lg); color: var(--text-muted); }
+
+  .mug-review { padding-top: 0.5rem; }
+  .mug-review__idea {
+    margin: 0.75rem 0 1rem; padding: 0.9rem 1rem; border-left: 3px solid var(--text-accent); background: var(--bg-surface);
+    white-space: pre-wrap; font-size: var(--font-size-md); line-height: var(--line-height-relaxed);
+  }
+  .mug-review__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem 1rem; margin: 0 0 1rem; }
+  .mug-review__grid dt { font-size: var(--font-size-xs); letter-spacing: var(--letter-spacing-wide); text-transform: uppercase; color: var(--text-muted); }
+  .mug-review__grid dd { margin: 0.15rem 0 0; font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+  .mug-review__image { width: 8rem; border-radius: 0.75rem; margin: 0.75rem 0; border: 1px solid var(--border-default); }
+  .mug-review .type-caption { margin-top: 0.5rem; }
+  .mug-done { padding: 1.5rem 0; }
+  .mug-banner { margin: 0.75rem 0 0.25rem; padding: 0.7rem 0.9rem; border-radius: 0.75rem; background: #FFF1F2; border: 1px solid #FECDD3; color: #9F1239; font-size: var(--font-size-sm); }
+  .mug-done .type-caption { margin-top: 1rem; }
+
+  /* Admin */
+  .admin-mugs__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; justify-content: space-between; margin-bottom: 1rem; }
+  .admin-mugs__table-wrap { overflow-x: auto; border: 1px solid var(--border-default); border-radius: 1rem; }
+  .admin-mugs__table { width: 100%; border-collapse: collapse; font-size: var(--font-size-sm); }
+  .admin-mugs__table th { text-align: left; padding: 0.6rem 0.75rem; font-size: var(--font-size-xs); letter-spacing: var(--letter-spacing-wide); text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border-default); white-space: nowrap; }
+  .admin-mugs__table td { padding: 0.7rem 0.75rem; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+  .admin-mugs__table tr { cursor: pointer; }
+  .admin-mugs__table tr:hover td, .admin-mugs__table tr.is-open td { background: var(--bg-page-alt); }
+  .admin-mugs__id { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: var(--font-weight-semibold); }
+  .admin-mugs__idea { min-width: 14rem; }
+  .admin-mugs__status { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; border: 1px solid var(--border-strong); font-size: var(--font-size-xs); white-space: nowrap; }
+  .admin-mugs__status.is-new { border-color: var(--text-accent); color: var(--text-accent); }
+  .admin-mugs__detail { display: grid; gap: 1.5rem; margin-top: 1.5rem; }
+  @media (min-width: 1000px) { .admin-mugs__detail { grid-template-columns: 1.3fr 1fr; } }
+  .admin-mugs__brief pre {
+    white-space: pre-wrap; font-family: var(--font-ui); font-size: var(--font-size-sm); line-height: var(--line-height-normal);
+    padding: 1rem; border-radius: 0.9rem; background: var(--bg-surface); border: 1px solid var(--border-default);
+  }
+  .admin-mugs__edit { display: flex; flex-direction: column; gap: 0.4rem; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   BOOKSHOP LOOK (30 Sep 2026) — header, Library window, cover row
+   A quiet white header with plain links, a split editorial hero with a
+   big serif sentence on a painted panel, and real covers face-out.
+   ════════════════════════════════════════════════════════════════════════ */
+body { overflow-x: clip; }
+/* Unlayered on purpose: Tailwind's space-y-* (utilities layer) would
+   otherwise reset this margin. Pulls the window up to meet the header. */
+.lib-front { position: relative; z-index: 1; margin-top: -1.25rem !important; }
+@media (min-width: 640px) { .lib-front { margin-top: -3rem !important; } }
+
+@layer components {
+  .ss-bleed { margin-inline: calc(50% - 50vw); width: 100vw; }
+
+  .ss-header { background: #FFFFFF; border-bottom: 1px solid var(--border-default); }
+  .ss-header__brand { display: inline-flex; align-items: center; gap: 0.6rem; background: none; border: 0; padding: 0; cursor: pointer; min-height: 44px; }
+  .ss-header__logo { height: 2.25rem; width: auto; object-fit: contain; }
+  .ss-header__wordmark {
+    font-family: var(--font-display); font-size: var(--font-size-xl); font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-wide); text-transform: uppercase; color: var(--text-primary);
+  }
+  @media (max-width: 380px) { .ss-header__wordmark { font-size: var(--font-size-lg); } }
+  .ss-header__wordmark, .ss-header__text-btn { white-space: nowrap; }
+  /* Six tabs on a 360px phone: labels stay on one line. */
+  .ss-bottom-label { white-space: nowrap; letter-spacing: 0; text-transform: none; font-size: var(--font-size-2xs); }
+  .ss-header__links { gap: 1.6rem; }
+  .ss-header__link {
+    position: relative; background: none; border: 0; padding: 0.4rem 0; cursor: pointer;
+    font-family: var(--font-ui); font-size: var(--font-size-md); font-weight: var(--font-weight-regular); color: var(--text-primary);
+    white-space: nowrap;
+  }
+  .ss-header__link::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: currentColor;
+    transform: scaleX(0); transform-origin: left; transition: transform 250ms ease;
+  }
+  .ss-header__link:hover::after, .ss-header__link[aria-current="page"]::after { transform: scaleX(1); }
+  .ss-header__icon {
+    display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px;
+    border: 0; border-radius: 999px; background: none; color: var(--text-primary); cursor: pointer;
+  }
+  .ss-header__icon:hover { background: var(--bg-page-alt); }
+  .ss-header__text-btn {
+    min-height: 44px; padding: 0 0.5rem; background: none; border: 0; cursor: pointer;
+    font-family: var(--font-ui); font-size: var(--font-size-md); color: var(--text-primary);
+    text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px;
+  }
+  .ss-header__join {
+    align-items: center; min-height: 40px; padding: 0 1rem; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--text-primary); background: var(--text-primary); color: #FFFFFF;
+    font-family: var(--font-ui); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+  }
+  .ss-header__join:hover { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); }
+
+  /* The Library window */
+  .lib-hero { display: grid; grid-template-columns: 1fr; }
+  @media (min-width: 900px) { .lib-hero { grid-template-columns: 5fr 7fr; min-height: 32rem; } }
+  .lib-hero__panel {
+    display: flex; flex-direction: column; justify-content: center; gap: 1.75rem;
+    padding: 2.5rem 1.25rem 2.25rem; color: #FFFFFF;
+    background:
+      radial-gradient(120% 90% at 0% 0%, #C98B9B 0%, transparent 55%),
+      radial-gradient(90% 80% at 100% 20%, #E7B98A 0%, transparent 60%),
+      radial-gradient(100% 90% at 20% 100%, #6E4A6B 0%, transparent 60%),
+      linear-gradient(135deg, #8E4A59 0%, #B7705D 55%, #D59A6A 100%);
+  }
+  @media (min-width: 900px) { .lib-hero__panel { padding: 3.5rem 3rem 3.5rem max(3rem, calc((100vw - 80rem) / 2 + 1.5rem)); } }
+  .lib-hero__title {
+    margin: 0; color: #FFFFFF; font-family: var(--font-display); font-weight: var(--font-weight-medium);
+    font-size: var(--font-size-3xl); line-height: var(--line-height-tight); letter-spacing: var(--letter-spacing-tight);
+    text-shadow: 0 1px 18px rgba(40, 20, 20, 0.18);
+  }
+  .lib-hero__sub { margin: -0.75rem 0 0; color: rgba(255, 255, 255, 0.92); font-size: var(--font-size-lg); line-height: var(--line-height-normal); max-width: 30rem; }
+  .lib-hero__actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .lib-hero__cta {
+    display: inline-flex; align-items: center; min-height: 46px; padding: 0 1.4rem; border-radius: 999px; cursor: pointer;
+    background: #FFFFFF; color: var(--text-primary); border: 1px solid #FFFFFF;
+    font-family: var(--font-ui); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold);
+  }
+  .lib-hero__cta--ghost { background: transparent; color: #FFFFFF; }
+  .lib-hero__wall { background: #EFE7DC; display: flex; align-items: center; justify-content: center; padding: 1.25rem; overflow: hidden; }
+  @media (min-width: 900px) { .lib-hero__wall { padding: 2.5rem 3rem; } }
+  .lib-hero__covers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem 0.9rem; width: 100%; max-width: 44rem; }
+  .lib-hero__cover {
+    display: block; padding: 0; border: 0; background: #FFFFFF; cursor: pointer; aspect-ratio: 2 / 3; overflow: hidden;
+    box-shadow: 0 10px 22px -12px rgba(34, 29, 26, 0.55); transition: transform 300ms ease;
+  }
+  .lib-hero__cover:hover { transform: translateY(-4px); }
+  .lib-hero__cover img { width: 100%; height: 100%; object-fit: cover; }
+  @media (max-width: 899px) { .lib-hero__covers { grid-template-columns: repeat(4, minmax(0, 1fr)); } .lib-hero__cover:nth-child(n+5) { display: none; } }
+  .lib-hero__wall-empty img { width: 8rem; opacity: 0.8; }
+
+  .lib-row { padding: 2.5rem 0 0.5rem; }
+  .lib-row__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+  .lib-row__arrows { display: none; gap: 0.5rem; }
+  @media (min-width: 900px) { .lib-row__arrows { display: flex; } }
+  .lib-row__arrows button {
+    width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--border-strong); background: #FFFFFF;
+    font-size: var(--font-size-2xl); line-height: 1; color: var(--text-primary); cursor: pointer;
+  }
+  .lib-row__track {
+    display: flex; gap: 1.25rem; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 0.75rem;
+    scrollbar-width: none;
+  }
+  .lib-row__track::-webkit-scrollbar { display: none; }
+  .lib-row__item {
+    flex: 0 0 44%; scroll-snap-align: start; text-align: left; background: none; border: 0; padding: 0; cursor: pointer;
+    display: flex; flex-direction: column; gap: 0.35rem;
+  }
+  @media (min-width: 640px) { .lib-row__item { flex-basis: 28%; } }
+  @media (min-width: 1100px) { .lib-row__item { flex-basis: calc((100% - 3 * 1.25rem) / 4); } }
+  .lib-row__cover { display: block; aspect-ratio: 2 / 3; overflow: hidden; background: var(--bg-page-alt); }
+  .lib-row__cover img { width: 100%; height: 100%; object-fit: cover; transition: transform 400ms ease; }
+  .lib-row__item:hover .lib-row__cover img { transform: scale(1.03); }
+  .lib-row__title { margin-top: 0.4rem; font-family: var(--font-display); font-size: var(--font-size-lg); line-height: var(--line-height-snug); color: var(--text-primary); }
+  .lib-row__author { font-size: var(--font-size-sm); color: var(--text-muted); }
+}
