@@ -4199,3 +4199,20 @@ body { overflow-x: clip; }
   .cart-tab__count.is-zero { display: none; }
   .cart-tab__count { min-width: 1.15rem; height: 1.15rem; padding: 0 0.25rem; }
 }
+
+/* Header on small phones (1 Oct): logo, wordmark and four icons on one
+   line at 360px without spilling past the edge. Unlayered so it beats the
+   Tailwind gap/padding utilities on the same elements. */
+@media (max-width: 400px) {
+  .ss-header__inner { padding-left: 0.75rem !important; padding-right: 0.5rem !important; gap: 0.5rem !important; }
+  .ss-header__brand { gap: 0.35rem; min-width: 0; }
+  .ss-header__logo { height: 1.9rem; }
+  .ss-header__wordmark { letter-spacing: 0.03em; }
+  .ss-header__tools { gap: 0 !important; }
+  .ss-header__icon { width: 40px; height: 40px; }
+  .ss-header__text-btn { padding: 0 0.35rem; }
+}
+
+/* 1 Oct (owner's request): no "Ask Quill" on the Chat (Readers' Café) page,
+   at any width — it covered the chat summary and the composer. */
+.quill-mobile.quill-cafe { display: none !important; }
