@@ -4,6 +4,10 @@ import { MUG_CATEGORIES } from '../../data/mugCategories';
 import type { MugCategoryId, MugProduct } from '../../types/mugs';
 import MugProductCard, { MugPlaceholder, formatInr, sourceLabel } from './MugProductCard';
 import CustomMugEnquiry from './CustomMugEnquiry';
+import {
+  PRICE_BANDS, SORT_OPTIONS, EMPTY_FILTERS, applyMugFilters, bandCounts, discountOf,
+  filtersActive, sellersOn, type MugFilterState, type MugSort,
+} from '../../utils/mugFilters';
 
 /**
  * /mugs — "SwapSutra's little secret mug shelf for readers" (30 Sep 2026).
@@ -31,6 +35,7 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
   const [category, setCategory] = useState<MugCategoryId | 'all'>('all');
   const [viewing, setViewing] = useState<MugProduct | null>(null);
   const [enquiryOpen, setEnquiryOpen] = useState(false);
+  const [filters, setFilters] = useState<MugFilterState>(EMPTY_FILTERS);
   const gridRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -59,7 +64,14 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
   }, []);
 
   const items = loaded.state === 'ready' ? loaded.items : [];
-  const shown = useMemo(() => (category === 'all' ? items : items.filter((p) => p.category === category)), [items, category]);
+  const inCategory = useMemo(() => (category === 'all' ? items : items.filter((p) => p.category === category)), [items, category]);
+  const shown = useMemo(() => applyMugFilters(inCategory, filters), [inCategory, filters]);
+  const counts_ = useMemo(() => bandCounts(inCategory, filters), [inCategory, filters]);
+  const sellers = useMemo(() => sellersOn(items), [items]);
+  const anyOnSale = useMemo(() => inCategory.some((p) => discountOf(p) > 0), [inCategory]);
+  const anyPriced = useMemo(() => inCategory.some((p) => !!p.price), [inCategory]);
+  const active = filtersActive(filters);
+  const setF = (patch: Partial<MugFilterState>) => setFilters((f) => ({ ...f, ...patch }));
   const counts = useMemo(() => Object.fromEntries(MUG_CATEGORIES.map((c) => [c.id, items.filter((p) => p.category === c.id).length])), [items]);
   const external = items.some((p) => p.sourceMarketplace || p.affiliateUrl);
   // Open as soon as one real (or, on a developer's machine, sample) mug is live.
@@ -113,11 +125,74 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
         {loaded.state === 'ready' && loaded.dev && (
           <p className="mugs-devnote" role="note">DEVELOPMENT ONLY — sample cards, not real products. They are not included in the live site.</p>
         )}
+        {/* ── Filters ─────────────────────────────────────── */}
+        {inCategory.length > 0 && (
+          <div className="mugs-filters" role="group" aria-label="Filter and sort mugs">
+            {anyPriced && (
+              <div className="mugs-filters__row">
+                <span className="mugs-filters__label" id="mugs-price-label">Price</span>
+                <div className="mugs-chips" role="group" aria-labelledby="mugs-price-label">
+                  <button type="button" className={`mugs-chip ${filters.bandId === null ? 'is-on' : ''}`}
+                    aria-pressed={filters.bandId === null} onClick={() => setF({ bandId: null })}>Any price</button>
+                  {PRICE_BANDS.filter((b) => counts_[b.id] > 0 || filters.bandId === b.id).map((b) => (
+                    <button key={b.id} type="button" className={`mugs-chip ${filters.bandId === b.id ? 'is-on' : ''}`}
+                      aria-pressed={filters.bandId === b.id}
+                      onClick={() => setF({ bandId: filters.bandId === b.id ? null : b.id })}>
+                      {b.label} <span className="mugs-chip__count">{counts_[b.id]}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {(anyOnSale || sellers.length > 1) && (
+              <div className="mugs-filters__row">
+                <span className="mugs-filters__label" id="mugs-more-label">Show</span>
+                <div className="mugs-chips" role="group" aria-labelledby="mugs-more-label">
+                  {anyOnSale && (
+                    <button type="button" className={`mugs-chip ${filters.onSale ? 'is-on' : ''}`}
+                      aria-pressed={filters.onSale} onClick={() => setF({ onSale: !filters.onSale })}>On sale</button>
+                  )}
+                  {sellers.length > 1 && sellers.map((sel) => (
+                    <button key={sel || 'swapsutra'} type="button" className={`mugs-chip ${filters.seller === sel ? 'is-on' : ''}`}
+                      aria-pressed={filters.seller === sel}
+                      onClick={() => setF({ seller: filters.seller === sel ? null : sel })}>
+                      {sel ? `Sold on ${sel}` : 'From SwapSutra'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="mugs-filters__bar">
+              <p className="mugs-filters__result" role="status">
+                {shown.length} {shown.length === 1 ? 'mug' : 'mugs'}
+                {active && (
+                  <button type="button" className="mugs-filters__clear" onClick={() => setFilters((f) => ({ ...EMPTY_FILTERS, sort: f.sort }))}>
+                    Clear filters
+                  </button>
+                )}
+              </p>
+              <label className="mugs-sort">
+                <span>Sort by</span>
+                <select value={filters.sort} onChange={(e) => setF({ sort: e.target.value as MugSort })}>
+                  {SORT_OPTIONS.filter((o) => o.id !== 'discount' || anyOnSale).map((o) => (
+                    <option key={o.id} value={o.id}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+        )}
         {loaded.state === 'loading' ? (
           <p className="type-caption" role="status">Dusting the shelf…</p>
         ) : shown.length ? (
           <div className="mugs-grid">
             {shown.map((p) => <MugProductCard key={p.id} product={p} onView={setViewing} />)}
+          </div>
+        ) : inCategory.length ? (
+          <div className="mugs-empty" data-testid="mugs-filter-empty">
+            <p className="type-h3">No mugs match these filters.</p>
+            <p className="type-body">Try another price range, or clear the filters to see the whole shelf.</p>
+            <button type="button" className="mug-btn mug-btn--quiet" onClick={() => setFilters((f) => ({ ...EMPTY_FILTERS, sort: f.sort }))}>Clear filters</button>
           </div>
         ) : (
           <div className="mugs-empty" data-testid="mugs-empty">
