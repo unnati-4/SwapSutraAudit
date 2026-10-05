@@ -3282,10 +3282,10 @@ export const MembershipGateContent = memo(({
           <Icons.BookOpen size={24} />
         </div>
         <h2 className="text-3xl md:text-4xl font-serif text-[var(--text-primary)] tracking-tight">
-          Join SwapSutra — it's free
+          Join SwapSutra
         </h2>
         <p className="text-xs md:text-sm text-[var(--text-secondary)] max-w-lg mx-auto leading-relaxed font-serif italic">
-          Your name, email and phone number. Nothing to pay to join, and nothing expires.
+          All you need is your name, email and phone number.
         </p>
         {reason && (
           <div className="inline-block bg-brand-gold/10 border border-brand-gold/20 px-4 py-2 rounded-xl text-xs text-[var(--text-primary)] font-medium mt-2">
@@ -3314,7 +3314,7 @@ export const MembershipGateContent = memo(({
           disabled={isRegisteringFree}
           className="w-full py-3.5 bg-brand-brown hover:bg-brand-softbrown text-white text-xs font-bold uppercase tracking-eyebrow rounded-xl transition-all shadow hover:shadow-md disabled:opacity-50"
         >
-          Join free
+          Join
         </button>
       </div>
     </div>
@@ -3915,7 +3915,7 @@ const BookDetailModal = memo(({
                           if (userTier === 'pending') {
                             setShowBookDetail(null);
                             if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Join SwapSutra free to request swaps.");
+                              onPromptMembershipGate("Join SwapSutra to request swaps.");
                             } else {
                               onMembershipRequired();
                             }
@@ -3951,7 +3951,7 @@ const BookDetailModal = memo(({
                           if (userTier === 'pending') {
                             setShowBookDetail(null);
                             if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Join SwapSutra free to request a rental.");
+                              onPromptMembershipGate("Join SwapSutra to request a rental.");
                             } else {
                               onMembershipRequired();
                             }
@@ -3987,7 +3987,7 @@ const BookDetailModal = memo(({
                           if (userTier === 'pending') {
                             setShowBookDetail(null);
                             if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Join SwapSutra free to express buy interest.");
+                              onPromptMembershipGate("Join SwapSutra to express buy interest.");
                             } else {
                               onMembershipRequired();
                             }
@@ -4095,13 +4095,13 @@ const MembershipGate = memo(({
         <h2 className="text-3xl md:text-4xl font-serif text-[var(--text-primary)] tracking-tight">
           {isAwaitingApproval
             ? "Waiting for Admin Approval"
-            : (isAuthenticated && isMembershipPending ? "Join SwapSutra — it's free" : title)}
+            : (isAuthenticated && isMembershipPending ? "Join SwapSutra" : title)}
         </h2>
         <p className="text-[var(--text-secondary)] font-medium italic opacity-85 max-w-lg mx-auto leading-relaxed text-sm">
           {isAwaitingApproval
             ? "Your registration has been received successfully. We're reviewing your account and will activate your SwapSutra access once it is approved."
             : (isAuthenticated && isMembershipPending
-              ? "Add your name and phone number and you're in. Nothing to pay to join."
+              ? "Add your name and phone number and you're in."
               : reason)}
         </p>
       </div>
@@ -4136,7 +4136,7 @@ const MembershipGate = memo(({
             disabled={isRegisteringFree}
             className="w-full py-3.5 bg-brand-brown text-white text-xs font-bold uppercase tracking-wider rounded-xl hover:bg-brand-softbrown transition-all disabled:opacity-50"
           >
-            Join free
+            Join
           </button>
         </div>
       ) : (
@@ -4145,7 +4145,7 @@ const MembershipGate = memo(({
            <ul className="text-left space-y-3.5 text-xs font-medium text-[var(--text-secondary)]">
               <li className="flex items-center gap-3">
                 <Icons.Check className="text-green-500 shrink-0" size={14} /> 
-                <span>Free to join — nothing expires</span>
+                <span>Join with your name, email and phone number</span>
               </li>
               <li className="flex items-center gap-3">
                 <Icons.Check className="text-green-500 shrink-0" size={14} /> 
@@ -9600,7 +9600,7 @@ export default function App() {
             setActiveSubscription(null);
             setIsListerActive(false);
             setShowMembershipGateModal(true);
-            setErrorMessage(trialResult.message || "We couldn't finish setting up your account automatically. Please tap Join free below.");
+            setErrorMessage(trialResult.message || "We couldn't finish setting up your account automatically. Please tap Join below.");
           }
         } else if (data.isRegistered === false || data.membershipStatus === 'pending') {
           // Brand new visitor: Verified OTP, but NOT a registered member yet!
@@ -14315,7 +14315,7 @@ export default function App() {
                 <div className="space-y-3">
                   <h2 className="font-serif text-3xl leading-tight text-[var(--text-primary)]">You're almost inside the reader circle ✨</h2>
                   <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
-                    Join free with your name, email and phone number to list books, find readers near you, and swap, lend, rent or sell.
+                    Join with your name, email and phone number to list books, find readers near you, and swap, lend, rent or sell.
                   </p>
                 </div>
                 <div className="rounded-2xl border border-brand-gold/20 bg-[var(--bg-surface)]/70 p-4 text-xs font-medium leading-relaxed text-[var(--text-secondary)]">
@@ -14438,7 +14438,7 @@ export default function App() {
                 }}
                 className="ss-header__join inline-flex"
               >
-                Join free
+                Join
               </button>
             )}
             <button type="button" aria-label="Open menu" onClick={() => setIsMobileMenuOpen(true)} className="ss-header__icon">
@@ -16228,7 +16228,7 @@ export default function App() {
                                                   scene="shelf"
                                                   title="The Library is quiet right now"
                                                   body="Every community library starts with one shelf. Add a book you have finished, and readers near you will find it."
-                                                  actionLabel={activeUserEmail ? 'List a book' : 'Join free'}
+                                                  actionLabel={activeUserEmail ? 'List a book' : 'Join'}
                                                   onAction={() => {
                                                     if (!activeUserEmail) { setLoginStep('choice'); setShowLoginModal(true); return; }
                                                     openListingForm();
@@ -16255,7 +16255,7 @@ export default function App() {
                 <h2 className="text-4xl md:text-5xl font-serif text-[var(--text-secondary)] mb-16 tracking-tight">The Ritual of Swapping</h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
                   {[
-                    {step: '01', title: 'Curate', desc: 'Join free and list up to 20 books from your shelf. ₹20 once lifts the limit.' },
+                    {step: '01', title: 'Curate', desc: 'Join and list up to 20 books from your shelf. ₹20 once lifts the limit.' },
                     {step: '02', title: 'Discover', desc: 'Browse the collective library. Temporary swaps are fixed for 1 month.' },
                     {step: '03', title: 'Connect', desc: 'Once the owner accepts, you each pay a ₹10 platform fee and your chat opens. Temporary swaps also need a 60% MRP refundable deposit.' },
                   ].map(s => (
@@ -16480,10 +16480,10 @@ export default function App() {
                       checkFailed={membershipCheckFailed}
                       onRetryCheck={() => { if (activeUserEmail) syncUserSession(activeUserEmail, { force: true }); }}
                       isExpiredTrial={userTier === 'expired'}
-                      title={userTier === 'expired' ? 'This account is paused' : "Join SwapSutra — it's free"}
+                      title={userTier === 'expired' ? 'This account is paused' : "Join SwapSutra"}
                       reason={userTier === 'expired'
                         ? 'Contact SwapSutra to restore access.'
-                        : "Add your name and phone number and you're in. Nothing to pay to join."}
+                        : "Add your name and phone number and you're in."}
                     />
                   </div>
                 ) : (() => {
@@ -17817,7 +17817,7 @@ export default function App() {
                 <span className="text-2xs font-bold uppercase tracking-eyebrow text-brand-gold-text mb-3 block">Reader Circle Entry</span>
                 <h3 className="text-3xl font-serif text-[var(--text-primary)] tracking-tight">Join SwapSutra</h3>
                 <p className="mt-4 text-sm leading-relaxed text-[var(--text-secondary)]">
-                  Free, and it stays free. List up to 20 books, find readers nearby, and swap, lend, rent or sell.
+                  List your books, find readers nearby, and swap, lend, rent or sell.
                 </p>
               </div>
 
@@ -17873,10 +17873,10 @@ export default function App() {
                 
                 <div className="space-y-4">
                   <button type="submit" disabled={submitting} className="w-full btn-primary !py-6 uppercase tracking-eyebrow font-bold text-xs shadow-lg hover:shadow-xl transition-all">
-                    {submitting ? 'Joining…' : 'Join SwapSutra — free'}
+                    {submitting ? 'Joining…' : 'Join SwapSutra'}
                   </button>
                   <p className="text-center text-2xs text-[var(--text-secondary)]/85 italic leading-relaxed">
-                    We'll email you a code to confirm it's you. No payment, no card, no UPI.
+                    We'll email you a code to confirm it's you.
                   </p>
                 </div>
               </form>

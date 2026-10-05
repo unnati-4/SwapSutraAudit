@@ -315,8 +315,8 @@ check('62. Three distinct reasons are handled, not one catch-all',
 // joining is free.
 check('63. A paused member is told their chair is still there',
   /Your chair is still here\. Your account is paused/.test(cafe));
-check('64. A registered-but-not-yet-joined reader is offered free joining',
-  /Almost in\. Join free and the table is yours\./.test(cafe));
+check('64. A registered-but-not-yet-joined reader is offered joining',
+  /Almost in\. Join and the table is yours\./.test(cafe));
 check('65. A true visitor gets the register invitation',
   /Pull up a chair\. Become a SwapSutra reader to join the conversation\./.test(cafe));
 check('66. The app passes the real reason from userTier',

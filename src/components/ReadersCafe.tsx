@@ -833,7 +833,7 @@ const ReadersCafe = ({
               {inviteReason === 'expired'
                 ? 'Your chair is still here. Your account is paused — contact SwapSutra to rejoin.'
                 : inviteReason === 'pending'
-                  ? 'Almost in. Join free and the table is yours.'
+                  ? 'Almost in. Join and the table is yours.'
                   : 'Pull up a chair. Become a SwapSutra reader to join the conversation.'}
             </p>
             <button
@@ -844,7 +844,7 @@ const ReadersCafe = ({
               {inviteReason === 'expired'
                 ? 'Contact SwapSutra'
                 : inviteReason === 'pending'
-                  ? 'Join free'
+                  ? 'Join'
                   : 'Register to join'}
             </button>
           </div>

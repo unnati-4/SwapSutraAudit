@@ -57,7 +57,7 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
           <div className="lib-hero__actions">
             <button type="button" className="lib-hero__cta" onClick={onBrowse}>Browse the shelves</button>
             {showJoin && onJoin && (
-              <button type="button" className="lib-hero__cta lib-hero__cta--ghost" onClick={onJoin}>Join free</button>
+              <button type="button" className="lib-hero__cta lib-hero__cta--ghost" onClick={onJoin}>Join</button>
             )}
           </div>
         </div>
