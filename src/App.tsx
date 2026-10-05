@@ -149,6 +149,10 @@ const AdminSecurityFeeQueue = lazyScreen<any>(
   () => import('./components/AdminSecurityFeeQueue'),
   'Opening the security fee queue'
 );
+const AdminListingUnlockQueue = lazyScreen<any>(
+  () => import('./components/AdminListingUnlockQueue'),
+  'Opening listing unlocks'
+);
 // Community badges handed out after meetups. Admin-only, so it is split out
 // of the main bundle like the other console screens.
 const AdminReaderBadges = lazyScreen<any>(
@@ -184,6 +188,7 @@ import DeleteAccount from './components/DeleteAccount';
 import PhotoViewer from './components/PhotoViewer';
 import NewsletterPage from './components/NewsletterPage';
 import ReadingTracker, { type TrackerBook, type TrackerChanges } from './components/ReadingTracker';
+import ListingUnlockPanel, { fetchListingAllowance, type ListingAllowance } from './components/ListingUnlockPanel';
 
 // --- CONFIGURATION ---
 const API_URL = apiUrl('/api/swapsutra');
@@ -3276,14 +3281,11 @@ export const MembershipGateContent = memo(({
         <div className="w-12 h-12 rounded-full bg-brand-gold/10 border border-brand-gold/30 flex items-center justify-center mx-auto text-brand-gold-text">
           <Icons.BookOpen size={24} />
         </div>
-        <span className="text-2xs font-bold uppercase tracking-eyebrow text-brand-gold-text block">
-          SWAPSUTRA MEMBERSHIP
-        </span>
         <h2 className="text-3xl md:text-4xl font-serif text-[var(--text-primary)] tracking-tight">
-          Experience Complete SwapSutra
+          Join SwapSutra — it's free
         </h2>
         <p className="text-xs md:text-sm text-[var(--text-secondary)] max-w-lg mx-auto leading-relaxed font-serif italic">
-          Every reader enjoys a 30-day complimentary full-access trial, continuing at ₹49/month.
+          Your name, email and phone number. Nothing to pay to join, and nothing expires.
         </p>
         {reason && (
           <div className="inline-block bg-brand-gold/10 border border-brand-gold/20 px-4 py-2 rounded-xl text-xs text-[var(--text-primary)] font-medium mt-2">
@@ -3292,112 +3294,28 @@ export const MembershipGateContent = memo(({
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-        {/* Free Trial Card */}
-        <div className="relative bg-[var(--bg-surface)] p-7 md:p-8 border border-brand-border/80 rounded-2xl flex flex-col justify-between space-y-6 shadow-sm hover:border-brand-brown/40 transition-all duration-300">
-          <div className="space-y-5">
-            <div className="border-b border-brand-border/40 pb-4 flex items-center justify-between">
-              <div>
-                <span className="text-2xs font-bold uppercase tracking-eyebrow text-brand-gold-text block mb-1">
-                  01 / NEW READERS
-                </span>
-                <h3 className="font-serif text-2xl text-[var(--text-primary)]">1-Month Free Trial</h3>
-              </div>
-              <span className="text-2xs font-bold uppercase tracking-wider px-2.5 py-1 bg-emerald-500/10 text-emerald-700 border border-emerald-500/20 rounded-full">
-                30 Days Free
-              </span>
-            </div>
-
-            <p className="text-xs text-[var(--text-secondary)] font-serif italic leading-relaxed">
-              Full access to explore the complete SwapSutra platform for your first 30 days.
-            </p>
-
-            <ul className="space-y-2.5 pt-2 border-t border-brand-border/30">
-              {[
-                'Full access to all 4 book services (Swap, Rent, Lend, Sell)',
-                'Complete Reading Space & reading tracking (TBR, Want to Read, Completed)',
-                'Book discovery & nearby reader connections',
-                'Community chat & Reading Circles participation',
-                'No credit card or upfront payment required',
-                '30 full days of uninterrupted reading'
+      <div className="max-w-md mx-auto bg-[var(--bg-surface)] p-7 md:p-8 border border-brand-border/80 rounded-2xl space-y-6 shadow-sm">
+        <ul className="space-y-3">
+          {[
+                'Swap, lend, rent or sell physical books with readers near you',
+                'List up to 20 books free — ₹20 once if you want more',
+                'Reading Space, reading circles and the Café',
+                'When an exchange is accepted, each reader pays a ₹10 platform fee'
               ].map((item, idx) => (
-                <li key={idx} className="flex items-start gap-2.5 text-xs text-[var(--text-secondary)] leading-snug">
-                  <span className="text-brand-gold-text font-bold mt-0.5 text-xs">✓</span>
-                  <span>{item}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="pt-4 border-t border-brand-border/40">
-            <button
-              type="button"
-              onClick={onSelectFree}
-              disabled={isRegisteringFree}
-              className="w-full py-3.5 bg-brand-brown hover:bg-brand-softbrown text-white text-xs font-bold uppercase tracking-eyebrow rounded-xl transition-all shadow hover:shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {isRegisteringFree ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Starting your 30-day free trial...</span>
-                </>
-              ) : (
-                'Start 1-Month Free Trial'
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* SwapSutra Chapters Card */}
-        <div className="relative bg-[#191E1A] p-7 md:p-8 border border-brand-gold/40 rounded-2xl flex flex-col justify-between space-y-6 shadow-xl hover:border-brand-gold transition-all duration-300">
-          <div className="space-y-5">
-            <div className="border-b border-white/10 pb-4 flex items-center justify-between">
-              <div>
-                <span className="text-2xs font-bold uppercase tracking-eyebrow text-brand-gold block mb-1">
-                  02 / CHAPTERS PATRON
-                </span>
-                <h3 className="font-serif text-2xl text-[#F8F5EE]">Chapters Membership</h3>
-              </div>
-              <div className="text-right">
-                <span className="text-lg font-serif text-brand-gold font-bold">₹49</span>
-                <span className="text-2xs text-[#B3A68F] uppercase tracking-wider block font-bold">/ Month</span>
-              </div>
-            </div>
-
-            <p className="text-xs text-[#B3A68F] font-serif italic leading-relaxed">
-              Ongoing sustaining membership after your free trial or subscribe directly.
-            </p>
-
-            <ul className="space-y-2.5 pt-2 border-t border-white/10">
-              {[
-                'Up to 500 book listings across all 4 services',
-                'Unlimited book swap, rent, lend & sell requests',
-                'Direct reader messaging & chat sanctuary',
-                'Exclusive Reading Circles & private nooks',
-                'Verified Premium Reader Badge ✨ on profile',
-                'Priority swap matching & community support'
-              ].map((item, idx) => (
-                <li key={idx} className="flex items-start gap-2.5 text-xs text-[#F8F5EE] leading-snug">
-                  <span className="text-brand-gold font-bold mt-0.5 text-xs">★</span>
-                  <span>{item}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="pt-4 border-t border-white/10 space-y-3">
-            <button
-              type="button"
-              onClick={onSelectChapters}
-              className="w-full py-3.5 bg-brand-gold hover:bg-[var(--bg-surface)] hover:text-[#191E1A] text-[#191E1A] text-xs font-bold uppercase tracking-eyebrow rounded-xl transition-all shadow-md font-sans"
-            >
-              Subscribe / Renew — ₹49
-            </button>
-            <p className="text-2xs text-[#B3A68F] text-center italic">
-              Manual UPI activation verified within 12-24 hours.
-            </p>
-          </div>
-        </div>
+            <li key={idx} className="flex items-start gap-2.5 text-sm text-[var(--text-secondary)] leading-snug">
+              <span className="text-brand-gold-text font-bold mt-0.5">✓</span>
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+        <button
+          type="button"
+          onClick={onSelectFree}
+          disabled={isRegisteringFree}
+          className="w-full py-3.5 bg-brand-brown hover:bg-brand-softbrown text-white text-xs font-bold uppercase tracking-eyebrow rounded-xl transition-all shadow hover:shadow-md disabled:opacity-50"
+        >
+          Join free
+        </button>
       </div>
     </div>
   );
@@ -3997,7 +3915,7 @@ const BookDetailModal = memo(({
                           if (userTier === 'pending') {
                             setShowBookDetail(null);
                             if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Please select your Free Reader or Chapters membership to request swaps.");
+                              onPromptMembershipGate("Join SwapSutra free to request swaps.");
                             } else {
                               onMembershipRequired();
                             }
@@ -4033,7 +3951,7 @@ const BookDetailModal = memo(({
                           if (userTier === 'pending') {
                             setShowBookDetail(null);
                             if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Please select your Free Reader or Chapters membership to request a rental.");
+                              onPromptMembershipGate("Join SwapSutra free to request a rental.");
                             } else {
                               onMembershipRequired();
                             }
@@ -4069,7 +3987,7 @@ const BookDetailModal = memo(({
                           if (userTier === 'pending') {
                             setShowBookDetail(null);
                             if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Please select your Free Reader or Chapters membership to express buy interest.");
+                              onPromptMembershipGate("Join SwapSutra free to express buy interest.");
                             } else {
                               onMembershipRequired();
                             }
@@ -4177,13 +4095,13 @@ const MembershipGate = memo(({
         <h2 className="text-3xl md:text-4xl font-serif text-[var(--text-primary)] tracking-tight">
           {isAwaitingApproval
             ? "Waiting for Admin Approval"
-            : (isAuthenticated && isMembershipPending ? "Become a SwapSutra Member" : title)}
+            : (isAuthenticated && isMembershipPending ? "Join SwapSutra — it's free" : title)}
         </h2>
         <p className="text-[var(--text-secondary)] font-medium italic opacity-85 max-w-lg mx-auto leading-relaxed text-sm">
           {isAwaitingApproval
             ? "Your registration has been received successfully. We're reviewing your account and will activate your SwapSutra access once it is approved."
             : (isAuthenticated && isMembershipPending
-              ? "Choose your reader membership to continue your journey with SwapSutra."
+              ? "Add your name and phone number and you're in. Nothing to pay to join."
               : reason)}
         </p>
       </div>
@@ -4198,54 +4116,28 @@ const MembershipGate = memo(({
           </span>
         </div>
       ) : isAuthenticated && isMembershipPending ? (
-        <div className="bg-[var(--bg-surface)] p-8 sm:p-10 rounded-[36px] border border-brand-border shadow-editorial max-w-2xl mx-auto space-y-8">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-left">
-            {/* Free Reader Card */}
-            <div className="p-6 bg-[var(--bg-surface)] rounded-2xl border border-brand-border flex flex-col justify-between space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-2xs font-bold text-brand-gold-text uppercase tracking-widest">01 / Free Trial</span>
-                  <span className="text-2xs font-bold uppercase tracking-wider px-2 py-0.5 bg-emerald-500/10 text-emerald-700 rounded-full">30 days free</span>
-                </div>
-                <h4 className="font-serif text-xl text-[var(--text-primary)]">Free Reader</h4>
-                <p className="text-xs text-[var(--text-secondary)] font-serif italic mt-1">Full access free for 30 days, then ₹49/month. New readers only.</p>
-              </div>
-              <button
-                type="button"
-                onClick={onSelectFree}
-                disabled={isRegisteringFree}
-                className="w-full py-3 bg-brand-brown text-white text-xs font-bold uppercase tracking-wider rounded-xl hover:bg-brand-softbrown transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {isRegisteringFree ? (
-                  <>
-                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>Starting your 30-day free trial...</span>
-                  </>
-                ) : (
-                  'Continue as Free Reader'
-                )}
-              </button>
-            </div>
-
-            {/* Chapters Card */}
-            <div className="p-6 bg-[#191E1A] rounded-2xl border border-brand-gold/40 flex flex-col justify-between space-y-4 shadow-md">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-2xs font-bold text-brand-gold uppercase tracking-widest">02 / Patron</span>
-                  <span className="text-xs font-serif text-brand-gold font-bold">₹49 / 30 Days</span>
-                </div>
-                <h4 className="font-serif text-xl text-[#F8F5EE]">SwapSutra Chapters</h4>
-                <p className="text-xs text-[#B3A68F] font-serif italic mt-1">Up to 500 listings, unlimited swaps, direct 1-on-1 reader chat.</p>
-              </div>
-              <button
-                type="button"
-                onClick={onSelectChapters}
-                className="w-full py-3 bg-brand-gold text-[#191E1A] text-xs font-bold uppercase tracking-wider rounded-xl hover:bg-[var(--bg-surface)] transition-all font-sans"
-              >
-                Join Chapters — ₹49
-              </button>
-            </div>
-          </div>
+        <div className="bg-[var(--bg-surface)] p-8 sm:p-10 rounded-[36px] border border-brand-border shadow-editorial max-w-md mx-auto space-y-6 text-left">
+          <ul className="space-y-3">
+            {[
+                'Swap, lend, rent or sell physical books with readers near you',
+                'List up to 20 books free — ₹20 once if you want more',
+                'Reading Space, reading circles and the Café',
+                'When an exchange is accepted, each reader pays a ₹10 platform fee'
+              ].map((item, idx) => (
+              <li key={idx} className="flex items-start gap-2.5 text-sm text-[var(--text-secondary)] leading-snug">
+                <span className="text-brand-gold-text font-bold mt-0.5">✓</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            onClick={onSelectFree}
+            disabled={isRegisteringFree}
+            className="w-full py-3.5 bg-brand-brown text-white text-xs font-bold uppercase tracking-wider rounded-xl hover:bg-brand-softbrown transition-all disabled:opacity-50"
+          >
+            Join free
+          </button>
         </div>
       ) : (
         <div className="bg-[var(--bg-surface)] p-10 sm:p-12 rounded-[40px] border border-brand-border shadow-editorial max-w-md mx-auto space-y-8">
@@ -4253,7 +4145,7 @@ const MembershipGate = memo(({
            <ul className="text-left space-y-3.5 text-xs font-medium text-[var(--text-secondary)]">
               <li className="flex items-center gap-3">
                 <Icons.Check className="text-green-500 shrink-0" size={14} /> 
-                <span>Free for your first 30 days as a new reader</span>
+                <span>Free to join — nothing expires</span>
               </li>
               <li className="flex items-center gap-3">
                 <Icons.Check className="text-green-500 shrink-0" size={14} /> 
@@ -4265,7 +4157,7 @@ const MembershipGate = memo(({
               </li>
               <li className="flex items-center gap-3">
                 <Icons.Check className="text-green-500 shrink-0" size={14} /> 
-                <span>Then just ₹49/month to keep full access</span>
+                <span>List up to 20 books free</span>
               </li>
            </ul>
            <button 
@@ -4294,7 +4186,7 @@ const MembershipGate = memo(({
   );
 });
 
-const QuillPromptModal = memo(({ isOpen, onClose, title, message, confirmText = "Explore Chapters", cancelText = "Stay a Free Explorer", onConfirm }: any) => {
+const QuillPromptModal = memo(({ isOpen, onClose, title, message, confirmText = "Continue", cancelText = "Not now", onConfirm }: any) => {
   if (!isOpen) return null;
   return (
     <AnimatePresence>
@@ -4697,7 +4589,7 @@ const ManagementConsole = memo(() => {
     { id: 'members', label: 'Members', icon: Users },
     { id: 'readerBadges', label: 'Badges', icon: Star },
     { id: 'disputes', label: 'Disputes', icon: AlertTriangle },
-    { id: 'securityFeeQueue', label: 'Security Fee Queue', icon: Shield },
+    { id: 'securityFeeQueue', label: 'Payments to verify', icon: Shield },
     { id: 'customMugs', label: 'Mugs', icon: Gift },
   ];
 
@@ -5087,7 +4979,12 @@ const ManagementConsole = memo(() => {
         )}
 
         {tab === 'securityFeeQueue' && (
-          <AdminSecurityFeeQueue />
+          <div className="space-y-12">
+            {/* Exchange payments (deposit + platform fee) — approved one at a time inside each exchange. */}
+            <AdminSecurityFeeQueue />
+            {/* ₹20 "unlimited listings" payments, and verified platform revenue. */}
+            <AdminListingUnlockQueue />
+          </div>
         )}
 
         {tab === 'readerBadges' && (
@@ -7038,7 +6935,12 @@ export default function App() {
   // address is already proven, so the reader is not sent back through an
   // emailed code they signed in with Google precisely to avoid.
   const [googleSignupPrefill, setGoogleSignupPrefill] = useState<{ email: string; name: string } | null>(null);
-  const [subFormTier, setSubFormTier] = useState<'free' | 'premium'>('premium');
+  // Joining is free (Oct 2026): the paid tier is gone, so the form is only
+  // ever the free one. The 'premium' branches below are kept inert.
+  const [subFormTier, setSubFormTier] = useState<'free' | 'premium'>('free');
+  // Listing allowance: 20 free, then ₹20 once or a coupon for unlimited.
+  const [listingAllowance, setListingAllowance] = useState<ListingAllowance | null>(null);
+  const [showListingUnlock, setShowListingUnlock] = useState(false);
   const [showMembershipNudge, setShowMembershipNudge] = useState(false);
   const [showListingForm, setShowListingForm] = useState<Subscription | null>(null);
 
@@ -7612,24 +7514,6 @@ export default function App() {
 
   const [trialDaysRemaining, setTrialDaysRemaining] = useState<number>(30);
 
-  // The expiry warning can be dismissed, but only for the rest of the
-  // day — the whole point is that it reaches the reader before their
-  // shelf comes down, so a single dismissal must not silence it for the
-  // remaining week.
-  const [expiryNoticeDismissedAt, setExpiryNoticeDismissedAt] = useState<string | null>(() => {
-    try { return localStorage.getItem('swapsutraExpiryNoticeDismissedOn'); } catch { return null; }
-  });
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const expiryNoticeDismissed = expiryNoticeDismissedAt === todayKey;
-  const setExpiryNoticeDismissed = (dismissed: boolean) => {
-    const value = dismissed ? todayKey : null;
-    setExpiryNoticeDismissedAt(value);
-    try {
-      if (value) localStorage.setItem('swapsutraExpiryNoticeDismissedOn', value);
-      else localStorage.removeItem('swapsutraExpiryNoticeDismissedOn');
-    } catch { /* dismissal simply won't persist */ }
-  };
-
   const [showMembershipGateModal, setShowMembershipGateModal] = useState(false);
   const [membershipGateReason, setMembershipGateReason] = useState<string | null>(null);
   const [isRegisteringFree, setIsRegisteringFree] = useState(false);
@@ -7670,6 +7554,15 @@ export default function App() {
     return userTier === 'trial' || userTier === 'premium';
   }, [activeUserEmail, isAdmin, userRole, userTier]);
 
+  // Keep the listing allowance current for a signed-in member, so the
+  // listing form can say "12 of 20 free listings used" before they start.
+  useEffect(() => {
+    if (!activeUserEmail || !isRegisteredMember) { setListingAllowance(null); return; }
+    let cancelled = false;
+    fetchListingAllowance().then(a => { if (!cancelled && a) setListingAllowance(a); });
+    return () => { cancelled = true; };
+  }, [activeUserEmail, isRegisteredMember]);
+
   /**
    * The one way to add a book to SwapSutra.
    *
@@ -7690,13 +7583,17 @@ export default function App() {
   // membership form directly, which is the step that page existed to lead to.
   // Signing up as a NEW reader never went through it (handleBecomeMemberClick
   // opens the membership gate), so nothing about joining changes.
+  // Oct 2026: membership is free, so there is nothing to upgrade to. The
+  // one paid thing left is lifting the 20-book listing limit, so every
+  // old "upgrade" entry point now leads there — or to the free sign-up for
+  // someone who hasn't joined yet.
   const openMembershipUpgrade = () => {
     if (!activeUserEmail) { setShowLoginModal(true); return; }
     setShowMembershipGateModal(false);
     setMembershipGateReason(null);
     setShowMembershipNudge(false);
-    setSubFormTier('premium');
-    setShowSubForm(true);
+    if (!isRegisteredMember) { setSubFormTier('free'); setShowSubForm(true); return; }
+    setShowListingUnlock(true);
   };
 
   // Listing funnel: count every time the form actually opens, whichever
@@ -7708,18 +7605,18 @@ export default function App() {
     listingFormWasOpenRef.current = open;
   }, [showListingForm]);
 
-  const openListingForm = () => {
+  const openListingForm = async () => {
     if (!activeUserEmail) { setShowLoginModal(true); return; }
     if (!isRegisteredMember) { handleBecomeMemberClick(); return; }
     if (userTier === 'expired') { openMembershipActivation(); return; }
     if (!isListerActive) { promptMembershipGate(); return; }
-    // Matches the backend's real per-tier cap (createBook: 500 for
-    // Chapters/premium, 10 for trial).
-    const listingLimit = userTier === 'premium' ? 500 : 10;
-    if (activeSubscription && activeSubscription.booksListedCount >= listingLimit) {
-      setErrorMessage(userTier === 'premium' ? 'Listing limit reached.' : "You've reached your 10-book trial listing limit. Upgrade to SwapSutra Chapters to list up to 500 books.");
-      return;
-    }
+    // 20 books free, then a one-time ₹20 or a coupon (createBook enforces
+    // the same allowance server-side). Ask the server rather than trusting
+    // a count that may be a few listings stale; if it can't be reached,
+    // open the form and let createBook have the final word.
+    const allowance = await fetchListingAllowance();
+    if (allowance) setListingAllowance(allowance);
+    if (allowance && !allowance.canList) { setShowListingUnlock(true); return; }
     setShowListingForm(activeSubscription || profileData?.subscription || ({ email: activeUserEmail } as any));
   };
 
@@ -9703,7 +9600,7 @@ export default function App() {
             setActiveSubscription(null);
             setIsListerActive(false);
             setShowMembershipGateModal(true);
-            setErrorMessage(trialResult.message || "We couldn't activate your free trial automatically. Please choose your membership below.");
+            setErrorMessage(trialResult.message || "We couldn't finish setting up your account automatically. Please tap Join free below.");
           }
         } else if (data.isRegistered === false || data.membershipStatus === 'pending') {
           // Brand new visitor: Verified OTP, but NOT a registered member yet!
@@ -9713,7 +9610,7 @@ export default function App() {
           setIsListerActive(false);
           setSessionVerified(true);
           setShowMembershipGateModal(true);
-          setSuccessMessage("Identity verified! Please choose how you'd like to be part of the community.");
+          setSuccessMessage("Email verified! Add your name and phone number to finish joining.");
         } else {
           // Existing member
           const mStatus = (data.membershipStatus || (data.role === 'admin' ? 'premium' : 'free')) as any;
@@ -10005,7 +9902,7 @@ export default function App() {
 
         loginUser(email, trialSub);
         fetchUserProfile(email);
-        setSuccessMessage('Welcome to SwapSutra! Your 1-Month Free Trial is now active with full access.');
+        setSuccessMessage('Welcome to SwapSutra! You can list up to 20 books free — start with one you have finished.');
         return { success: true };
       }
       return { success: false, message: data.message };
@@ -10032,10 +9929,12 @@ export default function App() {
     setIsRegisteringFree(false);
   };
 
-  const handleSelectChaptersMembership = () => {
+  // Kept under its old name for the components that still pass it as
+  // onSelectChapters. There is no paid tier any more: it opens free sign-up.
+  const openFreeSignupForm = () => {
     setShowMembershipGateModal(false);
     setMembershipGateReason(null);
-    setSubFormTier('premium');
+    setSubFormTier('free');
     setShowSubForm(true);
   };
 
@@ -11227,7 +11126,13 @@ export default function App() {
           // re-prove the same fact would be the exact friction they chose
           // Google to avoid. The address is compared explicitly rather than
           // trusting the (read-only) form field.
-          if (googleSignupPrefill && normalizeEmail(newAccountEmail) === normalizeEmail(googleSignupPrefill.email)) {
+          // The same holds for a reader who is already signed in (they
+          // verified this address with an email code moments ago and simply
+          // had no account yet): their session already proves ownership.
+          const alreadyVerified =
+            (googleSignupPrefill && normalizeEmail(newAccountEmail) === normalizeEmail(googleSignupPrefill.email))
+            || (!!activeUserEmail && normalizeEmail(newAccountEmail) === normalizeEmail(activeUserEmail));
+          if (alreadyVerified) {
             setShowSubForm(false);
             setPaymentScreenshotName('');
             setPaymentScreenshotError(null);
@@ -11240,7 +11145,7 @@ export default function App() {
             if (!activation.success) {
               // The account row exists either way — only the trial did not
               // start, so say that rather than implying they must sign up again.
-              setErrorMessage(activation.message || 'Your account is created, but the trial could not be started. Please open My Profile and try again.');
+              setErrorMessage(activation.message || 'Your account is created, but we could not finish setting it up. Please open My Profile and try again.');
             }
             return;
           }
@@ -11621,6 +11526,7 @@ export default function App() {
         resetIsbnFlowState();
         // Only the shelf needs re-reading, not events/testimonials/settings.
         void refreshBooks();
+        void fetchListingAllowance().then(a => { if (a) setListingAllowance(a); });
 
         // Onboarding Step 4 -> 5
         if (!onboardingCompleted && onboardingStep === 4) {
@@ -11628,6 +11534,13 @@ export default function App() {
           localStorage.setItem('swapsutraOnboardingCompleted', 'true');
           advanceOnboarding(5);
         }
+      } else if (data.error === 'LISTING_LIMIT_REACHED') {
+        // Free limit reached (20 books). Offer the way past it rather than
+        // a dead-end error; the form's contents are lost either way, but
+        // the reader learns exactly what to do next.
+        if (data.allowance) setListingAllowance(data.allowance);
+        setShowListingForm(null);
+        setShowListingUnlock(true);
       } else {
         setErrorMessage(data.message || 'Listing failed.');
       }
@@ -12317,7 +12230,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         trackOnce('first_request_sent', { serviceType: 'SWAP' });
-        setSuccessMessage('Swap request sent successfully. The owner must accept before your private chat opens. You can track this in My Profile → Swap Requests.');
+        setSuccessMessage('Swap request sent. If the owner accepts, you each pay a ₹10 platform fee from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.');
         
         // Dispatch Notification to Book Owner
         if (showSwapModal.ownerEmail) {
@@ -12386,8 +12299,8 @@ export default function App() {
         trackOnce('first_request_sent', { serviceType });
         setSuccessMessage(
           serviceType === 'RENT'
-            ? 'Rent request sent successfully. The owner must accept before your private chat opens. You can track this in My Profile → Swap Requests.'
-            : 'Buy interest sent successfully. The owner must accept before your private chat opens. You can track this in My Profile → Swap Requests.'
+            ? 'Rent request sent. If the owner accepts, you each pay a ₹10 platform fee (plus your refundable deposit) from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
+            : 'Buy interest sent. If the owner accepts, you each pay a ₹10 platform fee from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
         );
 
         if (book.ownerEmail) {
@@ -14402,11 +14315,11 @@ export default function App() {
                 <div className="space-y-3">
                   <h2 className="font-serif text-3xl leading-tight text-[var(--text-primary)]">You're almost inside the reader circle ✨</h2>
                   <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
-                    Activate your ₹49 Premium membership to list unlimited books, discover nearby readers, and unlock exclusive circles.
+                    Join free with your name, email and phone number to list books, find readers near you, and swap, lend, rent or sell.
                   </p>
                 </div>
                 <div className="rounded-2xl border border-brand-gold/20 bg-[var(--bg-surface)]/70 p-4 text-xs font-medium leading-relaxed text-[var(--text-secondary)]">
-                  To keep SwapSutra safe for genuine readers, membership is required before this action.
+                  To keep SwapSutra safe for genuine readers, you need an account before you can do this.
                 </div>
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <button onClick={openMembershipActivation} className="btn-primary !py-4 px-8 text-2xs uppercase tracking-widest">
@@ -14465,26 +14378,15 @@ export default function App() {
             >
               <Icons.Search size={21} />
             </button>
-            {activeUserEmail && userTier === 'trial' && (
-              <button
-                onClick={handleBecomeMemberClick}
-                title="You're on a 1-month free trial. Continue after it ends for ₹49/month."
-                className="flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 sm:px-3 py-1.5 text-2xs sm:text-2xs font-bold uppercase tracking-widest text-emerald-800 hover:bg-emerald-100 transition-colors"
-              >
-                <span>🌱</span>
-                <span className="hidden sm:inline">{trialDaysRemaining}d left in free trial</span>
-                <span className="sm:hidden">{trialDaysRemaining}d left</span>
-              </button>
-            )}
             {activeUserEmail && userTier === 'expired' && (
               <button
-                onClick={handleBecomeMemberClick}
-                title="Your free trial has ended. Subscribe for ₹49/month to continue."
-                className="flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 sm:px-3 py-1.5 text-2xs sm:text-2xs font-bold uppercase tracking-widest text-red-700 hover:bg-red-100 transition-colors animate-pulse"
+                onClick={() => window.open(WHATSAPP_URL, '_blank')}
+                title="This account is paused. Message SwapSutra to sort it out."
+                className="flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 sm:px-3 py-1.5 text-2xs sm:text-2xs font-bold uppercase tracking-widest text-red-700 hover:bg-red-100 transition-colors"
               >
                 <span>🔒</span>
-                <span className="hidden sm:inline">Trial ended · ₹49/mo to continue</span>
-                <span className="sm:hidden">Trial ended</span>
+                <span className="hidden sm:inline">Account paused · Contact us</span>
+                <span className="sm:hidden">Paused</span>
               </button>
             )}
             <button
@@ -14564,22 +14466,13 @@ export default function App() {
               </button>
             </div>
 
-            {activeUserEmail && userTier === 'trial' && (
-              <button
-                onClick={() => { handleBecomeMemberClick(); setIsMobileMenuOpen(false); }}
-                className="mx-6 flex items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-emerald-800"
-              >
-                <span>🌱</span>
-                <span>{trialDaysRemaining} days left in your free trial · then ₹49/mo</span>
-              </button>
-            )}
             {activeUserEmail && userTier === 'expired' && (
               <button
-                onClick={() => { handleBecomeMemberClick(); setIsMobileMenuOpen(false); }}
+                onClick={() => { window.open(WHATSAPP_URL, '_blank'); setIsMobileMenuOpen(false); }}
                 className="mx-6 flex items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-red-700"
               >
                 <span>🔒</span>
-                <span>Free trial ended · Subscribe for ₹49/mo</span>
+                <span>Account paused · Contact SwapSutra</span>
               </button>
             )}
 
@@ -14666,7 +14559,7 @@ export default function App() {
                     <div className="p-6 bg-[var(--bg-surface)] rounded-3xl border border-brand-border/20 shadow-sm">
                       <p className="text-2xs font-bold text-[var(--text-secondary)] uppercase tracking-widest truncate mb-1">{activeUserEmail}</p>
                       <p className={`text-2xs font-medium uppercase tracking-eyebrow ${isRegisteredMember ? 'text-green-600' : 'text-brand-gold-text'}`}>
-                        {isRegisteredMember ? `• Active ${userTier === 'premium' ? 'Chapters Patron' : '1-Month Free Trial'} •` : '• Membership Selection Pending •'}
+                        {isRegisteredMember ? '• Member •' : '• Not joined yet •'}
                       </p>
                     </div>
                     {!isRegisteredMember && (
@@ -14849,52 +14742,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Membership expiry warning.
-          When a membership lapses the backend stops returning that owner's
-          listings, so their whole shelf leaves the Library at once. That is
-          what membership buys — but it used to happen with no warning, which
-          reads as "my books vanished" rather than "my trial ended". This says
-          what is about to happen, and what it will cost, while there is still
-          time to act. A matching email goes out from
-          sendMembershipExpiryReminders() in the backend. */}
-      {activeUserEmail
-        && (userTier === 'trial' || userTier === 'premium')
-        && trialDaysRemaining <= 7
-        && !expiryNoticeDismissed && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-6">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-4 rounded-[24px] border border-amber-300/70 bg-amber-50 px-5 py-4">
-            <div className="flex-1 space-y-1">
-              <p className="text-2xs font-bold uppercase tracking-eyebrow text-amber-800">
-                {trialDaysRemaining <= 0
-                  ? (userTier === 'premium' ? 'Membership ends today' : 'Trial ends today')
-                  : `${trialDaysRemaining} ${trialDaysRemaining === 1 ? 'day' : 'days'} left`}
-              </p>
-              <p className="font-serif text-base leading-snug text-[var(--text-primary)]">
-                {myListedBookCount > 0
-                  ? <>Your {userTier === 'premium' ? 'membership' : 'free trial'} is ending. When it does, your {myListedBookCount === 1 ? 'listed book comes' : `${myListedBookCount} listed books come`} out of the Library until you renew — nothing is deleted.</>
-                  : <>Your {userTier === 'premium' ? 'membership' : 'free trial'} is ending. When it does, you won't be able to list books, request swaps, or message readers until you renew.</>}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={handleBecomeMemberClick}
-                className="btn-primary !py-2.5 px-6 text-2xs uppercase tracking-widest font-bold"
-              >
-                Renew · ₹49/mo
-              </button>
-              <button
-                type="button"
-                onClick={() => setExpiryNoticeDismissed(true)}
-                aria-label="Dismiss this reminder for now"
-                className="p-2 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-              >
-                <Icons.Close size={18} />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* The membership-expiry warning lived here. Memberships no longer
+          expire (Oct 2026), so there is nothing to warn about. */}
 
       {/* Main Content. id is the target of the skip link in index.html —
           it lets keyboard and screen-reader users jump straight here
@@ -15209,6 +15058,7 @@ export default function App() {
                   onRetry={() => fetchCafe()}
                   onRequestJoin={() => {
                     if (!activeUserEmail) { setLoginStep('choice'); setShowLoginModal(true); return; }
+                    if (userTier === 'expired') { window.open(WHATSAPP_URL, '_blank'); return; }
                     handleBecomeMemberClick();
                   }}
                   /* The 24-hour story wall. Passing all four handlers is
@@ -15558,20 +15408,9 @@ export default function App() {
                                          navigateTo('newsletter');
                                          return;
                                       }
-                                      const isPremiumEvent = ev.title?.toLowerCase().includes('premium') || ev.title?.toLowerCase().includes('masterclass') || ev.title?.toLowerCase().includes('salon') || ev.title?.toLowerCase().includes('workshop');
-                                      if (isPremiumEvent && userTier !== 'premium' && !isAdmin) {
-                                        setQuillPromptModal({
-                                          isOpen: true,
-                                          title: "An Elegant Gathering 🌸",
-                                          message: "Quill says: 'This gathering is an exclusive Literary Salon, reserved for our verified Chapter members. To secure your seat, continue your reading journey, and join dedicated readers in our private salons, won't you join SwapSutra Chapters?'",
-                                          confirmText: "Explore Chapters",
-                                          onConfirm: () => {
-                                            setQuillPromptModal(prev => ({ ...prev, isOpen: false }));
-                                            openMembershipUpgrade();
-                                          }
-                                        });
-                                        return;
-                                      }
+                                      // Events used to be locked to ₹49 "Chapters" members by title
+                                      // (salon/workshop/masterclass). Membership is free now, so any
+                                      // member may register.
                                       setRegisteringFor(ev);
                                       setEventForm({...eventForm, eventId: ev.eventId});
                                       setEventRegistered(false);
@@ -16409,9 +16248,9 @@ export default function App() {
                 <h2 className="text-4xl md:text-5xl font-serif text-[var(--text-secondary)] mb-16 tracking-tight">The Ritual of Swapping</h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
                   {[
-                    {step: '01', title: 'Curate', desc: 'Verify your membership and select titles from your shelf to share. 10 treasures allowed.' },
+                    {step: '01', title: 'Curate', desc: 'Join free and list up to 20 books from your shelf. ₹20 once lifts the limit.' },
                     {step: '02', title: 'Discover', desc: 'Browse the collective library. Temporary swaps are fixed for 1 month.' },
-                    {step: '03', title: 'Connect', desc: 'Once approved, exchange books. Temporary swaps require a 60% MRP refundable security fee.' },
+                    {step: '03', title: 'Connect', desc: 'Once the owner accepts, you each pay a ₹10 platform fee and your chat opens. Temporary swaps also need a 60% MRP refundable deposit.' },
                   ].map(s => (
                     <div key={s.step} className="text-center group">
                       <div className="text-6xl font-serif text-brand-beige group-hover:text-brand-gold-text/20 transition-colors duration-500 mb-6">{s.step}</div>
@@ -16429,7 +16268,7 @@ export default function App() {
                   <div className="space-y-6">
                     <p className="flex gap-4">
                       <span className="text-brand-gold-text font-bold">I.</span>
-                      <span>Membership requires manual verification. Access allows listing up to 10 books.</span>
+                      <span>Joining is free and never expires. List up to 20 books free; a one-time ₹20 lifts the limit.</span>
                     </p>
                     <p className="flex gap-4">
                       <span className="text-brand-gold-text font-bold">II.</span>
@@ -16438,7 +16277,9 @@ export default function App() {
                     <div className="bg-[var(--bg-surface-inset)]/60 p-6 rounded-2xl border border-brand-border space-y-4">
                       <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Financial Transparency</p>
                       <ul className="text-xs space-y-2 font-medium">
-                        <li>• Membership activation fee applies</li>
+                        <li>• Joining: free</li>
+                        <li>• Platform fee: ₹10 from each reader when an exchange is accepted (swap, lend, rent or sell)</li>
+                        <li>• More than 20 listings: ₹20, once</li>
                         <li>• Temporary swap security: 60% refundable security fee, collected only after admin approval</li>
                       </ul>
                     </div>
@@ -16450,13 +16291,13 @@ export default function App() {
                     </p>
                     <p className="flex gap-4">
                       <span className="text-brand-gold-text font-bold">IV.</span>
-                      <span>SwapSutra is a non-monetary community. We facilitate connections, not transactions.</span>
+                      <span>SwapSutra connects readers. Rent and sale money passes directly between readers; SwapSutra only collects its platform fee and holds refundable deposits.</span>
                     </p>
                     <div className="bg-[var(--bg-surface)] p-6 rounded-2xl border border-brand-border shadow-sm space-y-6">
                       <div>
                         <p className="text-xs font-bold uppercase tracking-widest text-brand-gold-text mb-3">FAQ corner</p>
                         <p className="text-xs font-bold text-[var(--text-primary)]">Q: Is there a fee for requesting a swap?</p>
-                        <p className="text-xs opacity-70 mt-1">A: No separate platform fee is charged for requesting swaps. Active members can request swaps freely. Temporary swaps may require a refundable security fee after approval.</p>
+                        <p className="text-xs opacity-70 mt-1">A: Requesting is free. If the owner accepts, each of you pays a ₹10 platform fee by UPI, and your chat opens once SwapSutra verifies both payments. Temporary swaps also need a refundable deposit.</p>
                       </div>
                       <div>
                         <p className="text-xs font-bold text-[var(--text-primary)]">Q: Is there a fee for temporary swaps?</p>
@@ -16616,26 +16457,26 @@ export default function App() {
                   <div className="max-w-4xl mx-auto">
                     {userTier === 'expired' && (
                       <div className="mb-8 rounded-2xl border border-red-200 bg-red-50 px-6 py-5 text-center space-y-1">
-                        <p className="text-2xs font-bold uppercase tracking-widest text-red-700">🔒 Your free trial has expired</p>
-                        <p className="text-sm text-red-800">Click below to register and become an active member of SwapSutra.</p>
+                        <p className="text-2xs font-bold uppercase tracking-widest text-red-700">🔒 This account is paused</p>
+                        <p className="text-sm text-red-800">Message SwapSutra on WhatsApp or at swapsutra@gmail.com and we'll sort it out.</p>
                       </div>
                     )}
                     <MembershipGate
                       onNavigate={navigateTo}
                       onShowLoginModal={setShowLoginModal}
                       onPromptMembershipGate={promptMembershipGate}
-                      onSelectFree={handleRegisterFreeReader}
-                      onSelectChapters={handleSelectChaptersMembership}
+                      onSelectFree={openFreeSignupForm}
+                      onSelectChapters={openFreeSignupForm}
                       isRegisteringFree={isRegisteringFree}
                       isAuthenticated={Boolean(activeUserEmail)}
                       isMembershipPending={true}
                       checkFailed={membershipCheckFailed}
                       onRetryCheck={() => { if (activeUserEmail) syncUserSession(activeUserEmail, { force: true }); }}
                       isExpiredTrial={userTier === 'expired'}
-                      title={userTier === 'expired' ? 'Your Free Trial Has Expired' : 'Become a SwapSutra Member'}
+                      title={userTier === 'expired' ? 'This account is paused' : "Join SwapSutra — it's free"}
                       reason={userTier === 'expired'
-                        ? 'Your 30-day free trial has ended. Register to become an active member of SwapSutra and continue swapping books.'
-                        : 'Register as a free explorer to start your 30-day free trial and unlock the full SwapSutra experience.'}
+                        ? 'Contact SwapSutra to restore access.'
+                        : "Add your name and phone number and you're in. Nothing to pay to join."}
                     />
                   </div>
                 ) : (() => {
@@ -16659,31 +16500,33 @@ export default function App() {
                                   <span>Verified Premium Reader</span>
                                 </span>
                               ) : userTier === 'trial' ? (
+                                // Every registered reader. Membership is free and permanent,
+                                // so the badge shows the one thing that has a limit: listings.
                                 <div className="flex flex-wrap items-center gap-2">
                                   <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-2xs font-bold uppercase tracking-widest flex items-center gap-1">
                                     <span>🌱</span>
-                                    <span>1-Month Free Trial ({trialDaysRemaining}d left)</span>
+                                    <span>
+                                      {listingAllowance?.unlimited
+                                        ? 'Member · Unlimited listings'
+                                        : listingAllowance
+                                          ? `Member · ${listingAllowance.used} of ${listingAllowance.limit} free listings`
+                                          : 'Member'}
+                                    </span>
                                   </span>
-                                  <button 
-                                    onClick={openMembershipActivation} 
-                                    className="inline-flex items-center gap-1 px-3 py-1 bg-brand-gold text-[var(--text-primary)] rounded-full text-2xs uppercase tracking-widest font-black shadow-sm hover:bg-brand-brown transition-colors"
-                                  >
-                                    <span>✨ Subscribe / Renew — ₹49</span>
-                                  </button>
+                                  {listingAllowance && !listingAllowance.unlimited && (
+                                    <button
+                                      onClick={() => setShowListingUnlock(true)}
+                                      className="inline-flex items-center gap-1 px-3 py-1 bg-brand-gold text-[var(--text-primary)] rounded-full text-2xs uppercase tracking-widest font-black shadow-sm hover:bg-brand-brown transition-colors"
+                                    >
+                                      {listingAllowance.pendingUnlock ? 'Unlock being verified' : 'List unlimited — ₹20'}
+                                    </button>
+                                  )}
                                 </div>
                               ) : (
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="px-3 py-1 bg-red-50 text-red-800 border border-red-200 rounded-full text-2xs font-bold uppercase tracking-widest flex items-center gap-1">
-                                    <span>⚠️</span>
-                                    <span>Trial Expired</span>
-                                  </span>
-                                  <button 
-                                    onClick={openMembershipActivation} 
-                                    className="inline-flex items-center gap-1 px-3 py-1 bg-brand-gold text-[var(--text-primary)] rounded-full text-2xs uppercase tracking-widest font-black shadow-sm hover:bg-brand-brown transition-colors"
-                                  >
-                                    <span>✨ Renew Access — ₹49/mo</span>
-                                  </button>
-                                </div>
+                                <span className="px-3 py-1 bg-red-50 text-red-800 border border-red-200 rounded-full text-2xs font-bold uppercase tracking-widest flex items-center gap-1">
+                                  <span>🔒</span>
+                                  <span>Account paused</span>
+                                </span>
                               )}
                             </div>
                           </div>
@@ -16784,8 +16627,8 @@ export default function App() {
                               onNavigate={navigateTo} 
                               onShowLoginModal={setShowLoginModal} 
                               onPromptMembershipGate={promptMembershipGate}
-                              onSelectFree={handleRegisterFreeReader}
-                              onSelectChapters={handleSelectChaptersMembership}
+                              onSelectFree={openFreeSignupForm}
+                              onSelectChapters={openFreeSignupForm}
                               isRegisteringFree={isRegisteringFree}
                               isAuthenticated={Boolean(activeUserEmail)}
                               isMembershipPending={membershipStatus === 'pending' || !isRegisteredMember}
@@ -16932,52 +16775,42 @@ export default function App() {
                               </div>
                             </div>
 
-                            {/* Dynamic Upgrade/Limits Cue */}
+                            {/* Listing allowance — the only limit left now that joining is free. */}
                             <div className="classic-card bg-[var(--bg-surface)] p-6 border border-brand-gold/25 flex flex-col justify-between space-y-4">
                               <div className="flex items-center justify-between">
-                                <span className="text-2xs font-bold text-brand-gold-text uppercase tracking-widest">Membership Status</span>
+                                <span className="text-2xs font-bold text-brand-gold-text uppercase tracking-widest">Your listings</span>
                                 <Icons.Award size={16} className="text-brand-gold-text" />
                               </div>
-                              {userTier === 'premium' ? (
+                              {userTier === 'expired' ? (
+                                <p className="text-2xs text-red-800 leading-relaxed">
+                                  This account is paused. Contact SwapSutra to restore access.
+                                </p>
+                              ) : listingAllowance?.unlimited || userTier === 'premium' ? (
                                 <div className="space-y-2">
-                                  <p className="text-xs font-serif text-[var(--text-primary)]">Chapters Patron Active ✨</p>
-                                  <p className="text-2xs text-[var(--text-secondary)] leading-relaxed italic">
-                                    "You have unlocked unlimited bookshelf listings, all 4 book services, and direct reader chats. Thank you for sustaining SwapSutra!"
+                                  <p className="text-xs font-serif text-[var(--text-primary)]">Unlimited listings</p>
+                                  <p className="text-2xs text-[var(--text-secondary)] leading-relaxed">
+                                    You've listed {listingAllowance?.used ?? myListedBookCount} {(listingAllowance?.used ?? myListedBookCount) === 1 ? 'book' : 'books'}. Add as many as you like.
                                   </p>
-                                </div>
-                              ) : userTier === 'trial' ? (
-                                <div className="space-y-3">
-                                  <div className="flex justify-between text-xs font-bold text-[var(--text-primary)]">
-                                    <span>30-Day Free Trial</span>
-                                    <span className="text-emerald-700 font-bold">{trialDaysRemaining} Days Remaining</span>
-                                  </div>
-                                  <div className="w-full bg-brand-border/30 h-1.5 rounded-full overflow-hidden">
-                                    <div 
-                                      className="bg-emerald-600 h-full rounded-full transition-all duration-500" 
-                                      style={{ width: `${Math.max(5, Math.min(100, (trialDaysRemaining / 30) * 100))}%` }}
-                                    />
-                                  </div>
-                                  <button 
-                                    onClick={openMembershipActivation}
-                                    className="w-full py-2 bg-brand-gold text-[var(--text-primary)] text-2xs font-bold uppercase tracking-widest rounded-xl hover:bg-brand-brown transition-colors"
-                                  >
-                                    Subscribe Chapters — ₹49/mo ✨
-                                  </button>
                                 </div>
                               ) : (
                                 <div className="space-y-3">
-                                  <div className="flex justify-between text-xs font-bold text-red-800">
-                                    <span>Access Status</span>
-                                    <span>Trial Ended</span>
+                                  <div className="flex justify-between text-xs font-bold text-[var(--text-primary)]">
+                                    <span>Free listings</span>
+                                    <span className="tabular-nums">{listingAllowance ? `${listingAllowance.used} of ${listingAllowance.limit}` : 'Up to 20'}</span>
                                   </div>
-                                  <p className="text-2xs text-[var(--text-secondary)] leading-relaxed italic">
-                                    Your 30-day free trial has concluded. Renew to continue listing and exchanging books.
-                                  </p>
-                                  <button 
-                                    onClick={openMembershipActivation}
+                                  {listingAllowance && listingAllowance.limit ? (
+                                    <div className="w-full bg-brand-border/30 h-1.5 rounded-full overflow-hidden">
+                                      <div
+                                        className="bg-emerald-600 h-full rounded-full transition-all duration-500"
+                                        style={{ width: `${Math.max(3, Math.min(100, (listingAllowance.used / listingAllowance.limit) * 100))}%` }}
+                                      />
+                                    </div>
+                                  ) : null}
+                                  <button
+                                    onClick={() => setShowListingUnlock(true)}
                                     className="w-full py-2 bg-brand-gold text-[var(--text-primary)] text-2xs font-bold uppercase tracking-widest rounded-xl hover:bg-brand-brown transition-colors"
                                   >
-                                    Renew Membership — ₹49 ✨
+                                    {listingAllowance?.pendingUnlock ? 'Unlock payment being verified' : 'List unlimited — ₹20 once'}
                                   </button>
                                 </div>
                               )}
@@ -17288,30 +17121,22 @@ export default function App() {
                                   <span>SwapSutra Reader Credential</span>
                                 </div>
                                 <h3 className="font-serif text-3xl md:text-4xl text-[var(--text-primary)]">
-                                  {userTier === 'premium' ? '✨ Verified Chapters Patron' : userTier === 'trial' ? `🌱 1-Month Free Trial (${trialDaysRemaining}d remaining)` : '⚠️ Trial Ended'}
+                                  {userTier === 'expired' ? '🔒 Account paused' : '🌱 SwapSutra member'}
                                 </h3>
                                 <p className="max-w-xl text-sm leading-relaxed text-[var(--text-secondary)]">
-                                  {userTier === 'premium'
-                                    ? 'Your membership is active and verified. You have complete privileges with unlimited book listings across all 4 services, direct reader chats, unlimited swaps, and exclusive circles.'
-                                    : userTier === 'trial'
-                                    ? 'Your 30-day complimentary full-access pass is active. Enjoy complete access to swap, rent, lend, sell, reading space, and circles. Continue seamlessly at ₹49/month anytime.'
-                                    : 'Your 30-day free trial has expired. Subscribe to Chapters for ₹49/month to continue listing, exchanging, and connecting with readers.'}
+                                  {userTier === 'expired'
+                                    ? 'This account is paused. Message SwapSutra on WhatsApp or at swapsutra@gmail.com to restore access.'
+                                    : 'Membership is free and never expires. Swap, lend, rent and sell with readers near you. When an exchange is accepted, each reader pays a ₹10 platform fee before the chat opens.'}
                                 </p>
                               </div>
                               <div className="flex shrink-0 flex-col items-center justify-center rounded-3xl border border-brand-border bg-[var(--bg-surface)]/80 p-6 text-center shadow-sm backdrop-blur-md">
                                 <span className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">Status</span>
                                 <span className={`mt-2 rounded-full px-4 py-1.5 text-xs font-black uppercase tracking-widest ${
-                                  userTier === 'premium'
-                                    ? 'bg-gradient-to-r from-amber-100 via-amber-50 to-amber-100 text-amber-900 border border-amber-300'
-                                    : userTier === 'trial'
-                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                    : 'bg-red-100 text-red-800 border border-red-300'
+                                  userTier === 'expired'
+                                    ? 'bg-red-100 text-red-800 border border-red-300'
+                                    : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                                 }`}>
-                                  {userTier === 'premium'
-                                    ? '✨ Verified Premium'
-                                    : userTier === 'trial'
-                                    ? '🌱 Active Free Trial'
-                                    : '⚠️ Expired'}
+                                  {userTier === 'expired' ? 'Paused' : 'Active'}
                                 </span>
                               </div>
                             </div>
@@ -17324,46 +17149,31 @@ export default function App() {
                                 </p>
                               </div>
                               <div className="rounded-2xl border border-brand-border/50 bg-[var(--bg-surface)]/60 p-5">
-                                <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">Active Period</p>
+                                <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">Membership</p>
                                 <p className="mt-1 text-xs font-medium text-[var(--text-primary)]">
-                                  {profileData?.subscription && getSubStart(profileData.subscription)
-                                    ? `${formatSubscriptionDate(getSubStart(profileData.subscription))} - ${formatSubscriptionDate(getSubExpiry(profileData.subscription))}`
-                                    : userTier === 'trial'
-                                    ? `${trialDaysRemaining} Days Remaining`
-                                    : 'Trial Expired'}
+                                  {userTier === 'expired' ? 'Paused' : 'Free · never expires'}
                                 </p>
                               </div>
                               <div className="rounded-2xl border border-brand-border/50 bg-[var(--bg-surface)]/60 p-5">
                                 <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">Book Listings</p>
                                 <p className="mt-1 font-serif text-lg font-bold text-brand-gold-text">
-                                  {ownedProfileBooks.length} / Unlimited
+                                  {listingAllowance && !listingAllowance.unlimited
+                                    ? `${listingAllowance.used} / ${listingAllowance.limit}`
+                                    : `${ownedProfileBooks.length} / Unlimited`}
                                 </p>
                               </div>
                             </div>
 
                             <div className="mt-8 flex flex-wrap items-center gap-4">
-                              {userTier !== 'premium' && userTier !== 'trial' && (
+                              {userTier !== 'expired' && listingAllowance && !listingAllowance.unlimited && (
                                 <button
                                   type="button"
-                                  onClick={openMembershipActivation}
+                                  onClick={() => setShowListingUnlock(true)}
                                   className="btn-primary !py-4 !px-8 text-2xs uppercase tracking-widest"
                                 >
-                                  Renew Membership — ₹49
+                                  {listingAllowance.pendingUnlock ? 'Unlock payment being verified' : 'List unlimited — ₹20 once'}
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (activeUserEmail) {
-                                    setCheckerEmail(activeUserEmail);
-                                    checkEligibility(activeUserEmail);
-                                    openMembershipUpgrade();
-                                  }
-                                }}
-                                className="btn-outline !py-4 !px-6 text-2xs uppercase tracking-widest"
-                              >
-                                View Detailed Access Log
-                              </button>
                             </div>
                           </div>
                         </motion.div>
@@ -17466,8 +17276,8 @@ export default function App() {
                               onNavigate={navigateTo} 
                               onShowLoginModal={setShowLoginModal} 
                               onPromptMembershipGate={promptMembershipGate}
-                              onSelectFree={handleRegisterFreeReader}
-                              onSelectChapters={handleSelectChaptersMembership}
+                              onSelectFree={openFreeSignupForm}
+                              onSelectChapters={openFreeSignupForm}
                               isRegisteringFree={isRegisteringFree}
                               isAuthenticated={Boolean(activeUserEmail)}
                               isMembershipPending={membershipStatus === 'pending' || !isRegisteredMember}
@@ -17563,8 +17373,8 @@ export default function App() {
                                onNavigate={navigateTo} 
                                onShowLoginModal={setShowLoginModal} 
                                onPromptMembershipGate={promptMembershipGate}
-                               onSelectFree={handleRegisterFreeReader}
-                               onSelectChapters={handleSelectChaptersMembership}
+                               onSelectFree={openFreeSignupForm}
+                               onSelectChapters={openFreeSignupForm}
                                isRegisteringFree={isRegisteringFree}
                                isAuthenticated={Boolean(activeUserEmail)}
                                isMembershipPending={membershipStatus === 'pending' || !isRegisteredMember}
@@ -17972,6 +17782,12 @@ export default function App() {
       {/* MODALS */}
       <AnimatePresence>
         {/* Subscription Form Modal */}
+        <ListingUnlockPanel
+          open={showListingUnlock}
+          onClose={() => setShowListingUnlock(false)}
+          onChange={setListingAllowance}
+        />
+
         {showSubForm && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div 
@@ -17992,158 +17808,10 @@ export default function App() {
               
               <div className="text-center mb-6">
                 <span className="text-2xs font-bold uppercase tracking-eyebrow text-brand-gold-text mb-3 block">Reader Circle Entry</span>
-                <h3 className="text-3xl font-serif text-[var(--text-primary)] tracking-tight">Become a SwapSutra Member</h3>
+                <h3 className="text-3xl font-serif text-[var(--text-primary)] tracking-tight">Join SwapSutra</h3>
                 <p className="mt-4 text-sm leading-relaxed text-[var(--text-secondary)]">
-                  List your books, discover nearby readers, and be part of a cozy reader circle where books keep travelling.
+                  Free, and it stays free. List up to 20 books, find readers nearby, and swap, lend, rent or sell.
                 </p>
-              </div>
-
-              {/* Tier Switcher */}
-              <div className="flex bg-[var(--bg-page)] p-1 rounded-2xl border border-brand-border/40 mb-8 max-w-sm mx-auto">
-                <button
-                  type="button"
-                  onClick={() => setSubFormTier('free')}
-                  className={`flex-1 py-3 text-2xs font-bold uppercase tracking-widest rounded-xl transition-all ${
-                    subFormTier === 'free' 
-                      ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-sm border border-brand-border/10 font-bold' 
-                      : 'text-[var(--text-secondary)]/85 hover:text-[var(--text-primary)] font-medium'
-                  }`}
-                >
-                  Free Explorer 🌸
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSubFormTier('premium')}
-                  className={`flex-1 py-3 text-2xs font-bold uppercase tracking-widest rounded-xl transition-all ${
-                    subFormTier === 'premium' 
-                      ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-sm border border-brand-border/10 font-bold' 
-                      : 'text-[var(--text-secondary)]/85 hover:text-[var(--text-primary)] font-medium'
-                  }`}
-                >
-                  Premium (₹49) ⭐
-                </button>
-              </div>
-
-              {subFormTier === 'free' ? (
-                <div className="mb-10 p-6 bg-[var(--bg-surface)] border border-brand-border rounded-[32px] text-center shadow-sm relative overflow-hidden night-panel">
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-brand-gold/5 rounded-bl-full opacity-50" />
-                  <span className="text-3xl block mb-2">🌸</span>
-                  <p className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text mb-2">Tier I: Free Member Registration</p>
-                  <p className="text-xl font-serif text-[var(--text-primary)] tracking-tight mb-2">₹0 / 30 Days Free</p>
-                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed max-w-sm mx-auto">
-                    Your personal reading log and explorer access.
-                  </p>
-                </div>
-              ) : (
-                getAmount() > 0 && (
-                <div className="mb-10 p-8 bg-[var(--bg-surface)] border border-brand-border rounded-[32px] text-center shadow-sm relative overflow-hidden night-panel">
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-brand-gold/5 rounded-bl-full opacity-50" />
-                  <div className="mb-6 relative inline-block">
-                    <a 
-                      href={`upi://pay?pa=7534845373-3@ybl&pn=Unnati%20Goyal&am=${getAmount()}&cu=INR&tn=SwapSutra%20Reader%20Pass`}
-                      className="block cursor-pointer hover:opacity-95 transition-opacity"
-                      title="Scan QR or click to open UPI app"
-                    >
-                      <img 
-                        src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`upi://pay?pa=7534845373-3@ybl&pn=Unnati%20Goyal&am=${getAmount()}&cu=INR&tn=SwapSutra%20Reader%20Pass`)}`} 
-                        alt="UPI Payment QR Code" 
-                        className="mx-auto border-4 border-brand-offwhite rounded-2xl shadow-md"
-                      />
-                    </a>
-                    {isCouponApplied && (
-                      <motion.div 
-                        initial={{ scale: 0 }} animate={{ scale: 1 }}
-                        className="absolute -top-3 -right-3 bg-brand-gold text-[var(--text-primary)] p-2 rounded-full shadow-lg"
-                      >
-                        <Icons.Check size={16} />
-                      </motion.div>
-                    )}
-                  </div>
-                  
-                  <div className="space-y-4">
-                    <div className="space-y-1 pt-2">
-                      <p className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text opacity-80">Pay to: Unnati Goyal (Founder)</p>
-                      <p className="text-xl font-serif text-[var(--text-primary)] tracking-tight">7534845373-3@ybl</p>
-                    </div>
-                    
-                    <div className="flex flex-col items-center gap-1">
-                       <div className="flex items-baseline gap-2">
-                         <span className="text-3xl font-serif text-[var(--text-primary)]">₹{getAmount()}</span>
-                         <span className="text-xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">Membership Fee</span>
-                       </div>
-                       <p className="text-2xs text-[var(--text-secondary)] uppercase tracking-widest font-bold opacity-60">Entry Activation</p>
-                    </div>
-
-                    <div className="pt-4 flex flex-col items-center gap-3">
-                      <a
-                        href={`upi://pay?pa=7534845373-3@ybl&pn=Unnati%20Goyal&am=${getAmount()}&cu=INR&tn=SwapSutra%20Reader%20Pass`}
-                        className="text-2xs text-brand-gold-text font-bold uppercase tracking-widest bg-brand-gold/10 hover:bg-brand-gold/20 px-5 py-2.5 rounded-full border border-brand-gold/30 transition-all text-center"
-                      >
-                         ₹{getAmount()} will open pre-filled in your UPI app. Please do not edit it.
-                      </a>
-                      <div className="flex items-center justify-center gap-4 text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]/75">
-                         <span className="flex items-center gap-1.5 border-r border-brand-border pr-4 last:border-0 last:pr-0">✓ Verified ID</span>
-                         <span className="flex items-center gap-1.5">✓ Community Safety</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              <div className="mb-10 space-y-4 text-left">
-                <div className="flex flex-col gap-1">
-                  <label className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text ml-1">Have a code?</label>
-                </div>
-                <div className="flex gap-3">
-                  <input 
-                    type="text" 
-                    placeholder="Enter coupon code" 
-                    className="input-classic bg-[var(--input-bg)] flex-1" 
-                    value={couponCode}
-                    onChange={(e) => setCouponCode(e.target.value)}
-                  />
-                  <button 
-                    type="button" 
-                    onClick={applyCoupon}
-                    disabled={isCouponApplying || !couponCode.trim()}
-                    className="btn-primary !py-0 px-6 h-[52px] uppercase text-2xs font-bold tracking-widest disabled:opacity-50"
-                  >
-                    {isCouponApplying ? '...' : 'Apply'}
-                  </button>
-                </div>
-                {couponError && <p className="text-2xs text-red-600 font-bold uppercase tracking-widest ml-1">{couponError}</p>}
-                {isCouponApplied && getAmount() <= 0 && (
-                  <div className="rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-left">
-                    <p className="text-2xs text-green-700 font-bold uppercase tracking-widest">
-                      Your coupon has unlocked free membership access.
-                    </p>
-                    <p className="mt-1 text-xs leading-relaxed text-green-800">
-                      No payment is needed. Your coupon will be verified by the SwapSutra team.
-                    </p>
-                  </div>
-                )}
-                {isCouponApplied && getAmount() > 0 && (
-                  <p className="text-2xs text-brand-gold-text font-bold uppercase tracking-widest ml-1">
-                    Final payable amount: ₹{getAmount()}.
-                  </p>
-                )}
-                {isCouponApplied && (
-                  <p className="text-2xs text-green-600 font-bold uppercase tracking-widest ml-1">
-                    Offer Applied Successfully! ✨
-                  </p>
-                )}
-              </div>
-
-              <div className="mb-10 p-6 bg-[var(--bg-page)] border border-brand-border rounded-2xl night-panel">
-                <div className="flex gap-4">
-                  <Icons.Shield size={20} className="text-brand-gold-text mt-0.5 shrink-0" />
-                  <div className="space-y-2">
-                    <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Safety First</p>
-                    <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                      SwapSutra never asks for <span className="font-bold">OTP, UPI PIN, bank passwords</span> or <span className="font-bold">card details</span>. Payments are direct and secure.
-                    </p>
-                  </div>
-                </div>
               </div>
 
               {/* An invited visitor should see whose invite they are
@@ -18153,7 +17821,7 @@ export default function App() {
                 <div className="mb-10 p-6 bg-brand-gold/10 border border-brand-gold/30 rounded-2xl">
                   <p className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text mb-2">You were invited</p>
                   <p className="text-sm text-[var(--text-primary)] font-serif leading-relaxed">
-                    <span className="font-bold">{inviterName}</span> invited you to SwapSutra. List your first book after joining and you both get <span className="font-bold">30 extra days</span>.
+                    <span className="font-bold">{inviterName}</span> invited you to SwapSutra.
                   </p>
                 </div>
               )}
@@ -18183,9 +17851,9 @@ export default function App() {
                     name="email"
                     type="email"
                     placeholder="Email Address"
-                    className={`input-classic bg-[var(--input-bg)] ${googleSignupPrefill ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    className={`input-classic bg-[var(--input-bg)] ${googleSignupPrefill || activeUserEmail ? 'opacity-70 cursor-not-allowed' : ''}`}
                     defaultValue={googleSignupPrefill?.email || activeUserEmail || ''}
-                    readOnly={Boolean(googleSignupPrefill)}
+                    readOnly={Boolean(googleSignupPrefill || activeUserEmail)}
                     required
                   />
                   <input name="phone" type="text" placeholder="WhatsApp Number" className="input-classic bg-[var(--input-bg)]" required />
@@ -18196,72 +17864,12 @@ export default function App() {
                   </p>
                 )}
                 
-                {getAmount() > 0 && (
-                  <>
-                    <div className="space-y-1 pt-2">
-                      <label className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text ml-1">Transaction Proof</label>
-                      <input name="utr" type="text" placeholder="Transaction Reference (UTR)" className="input-classic bg-[var(--input-bg)]" required />
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <div className="relative">
-                        <input
-                          name="screenshot"
-                          type="file"
-                          accept="image/jpeg,image/jpg,image/png,image/webp"
-                          className="hidden"
-                          id="sub-screenshot"
-                          required
-                          onChange={handlePaymentScreenshotChange}
-                        />
-                        <label htmlFor="sub-screenshot" className="flex flex-col items-center justify-center gap-2 p-8 border-2 border-brand-border border-dashed rounded-3xl cursor-pointer hover:border-brand-gold hover:bg-[var(--bg-surface-raised)] transition-all group night-panel">
-                           <Icons.Upload size={24} className="text-brand-gold-text group-hover:scale-110 transition-transform" />
-                           <span className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-widest">Upload Payment Confirmation</span>
-                           <span className="text-2xs text-[var(--text-secondary)] italic opacity-60">
-                             {paymentScreenshotName || 'JPG, PNG, or WebP under 3 MB'}
-                           </span>
-                        </label>
-                        {paymentScreenshotError && (
-                          <p className="mt-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-800">
-                            {paymentScreenshotError}
-                          </p>
-                        )}
-                      </div>
-                      <p className="rounded-2xl border border-brand-border bg-[var(--bg-surface)]/60 p-4 text-xs font-medium leading-relaxed text-[var(--text-secondary)] night-panel">
-                        No UPI PIN. No sensitive details.<br />
-                        You only upload your payment screenshot or UTR for manual verification.
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                <div className={`${getAmount() <= 0 ? 'hidden' : ''} py-4 border-t border-b border-brand-border/10 space-y-4`}>
-                  <label className="flex gap-4 cursor-pointer group">
-                    <input type="checkbox" className="mt-1 accent-brand-gold w-4 h-4" required={getAmount() > 0} />
-                    <p className="text-xs text-[var(--text-secondary)] leading-relaxed group-hover:text-[var(--text-primary)] transition-colors">
-                      I have transferred <span className="font-bold text-brand-gold-text">₹{getAmount()}</span> to the human-verified UPI ID.
-                    </p>
-                  </label>
-                  <div className="flex flex-wrap gap-4 px-2">
-                     {['Secure UPI', 'Physical Books', 'No Bots'].map(pill => (
-                       <div key={pill} className="flex items-center gap-1.5">
-                          <Icons.Check size={12} className="text-brand-gold-text" />
-                          <span className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]/85">{pill}</span>
-                       </div>
-                     ))}
-                  </div>
-                </div>
-
                 <div className="space-y-4">
                   <button type="submit" disabled={submitting} className="w-full btn-primary !py-6 uppercase tracking-eyebrow font-bold text-xs shadow-lg hover:shadow-xl transition-all">
-                    {submitting ? 'Activating...' : getAmount() === 0 ? 'Activate Membership' : `Activate Membership — ₹${getAmount()}`}
+                    {submitting ? 'Joining…' : 'Join SwapSutra — free'}
                   </button>
                   <p className="text-center text-2xs text-[var(--text-secondary)]/85 italic leading-relaxed">
-                    {getAmount() === 0 ? (
-                      <>This code grants you personal entry into our reading circle.<br />We manually verify every reader to keep SwapSutra personal and safe.</>
-                    ) : (
-                      <>This is not a purchase. This is your entry into a trusted reading circle.<br />We manually verify every reader to keep SwapSutra personal and safe.</>
-                    )}
+                    We'll email you a code to confirm it's you. No payment, no card, no UPI.
                   </p>
                 </div>
               </form>
@@ -19114,7 +18722,11 @@ export default function App() {
                   </p>
                 )}
                 <p className="text-2xs text-center text-[var(--text-secondary)] opacity-60 uppercase font-bold tracking-widest">
-                  {`YOUR BOOK APPEARS IN THE LIBRARY STRAIGHT AWAY. LIMIT: ${userTier === 'premium' ? 500 : 10} BOOKS.`}
+                  {listingAllowance?.unlimited
+                    ? 'Your book appears in the Library straight away.'
+                    : listingAllowance
+                      ? `Your book appears in the Library straight away. ${listingAllowance.used} of ${listingAllowance.limit} free listings used.`
+                      : 'Your book appears in the Library straight away. List up to 20 books free.'}
                 </p>
               </form>
             </motion.div>
@@ -19327,9 +18939,9 @@ export default function App() {
                           opens once this request is accepted, from the
                           exchange's own "Stages" tab. */}
                       <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] px-4 py-4 text-center space-y-1">
-                        <p className="text-2xs font-bold text-[var(--text-primary)] uppercase tracking-widest">No payment needed yet</p>
+                        <p className="text-2xs font-bold text-[var(--text-primary)] uppercase tracking-widest">No payment yet</p>
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed italic">
-                          Once the owner accepts this request, you'll pay your security deposit and submit the UTR from the exchange's Stages tab — SwapSutra verifies it before your chat unlocks.
+                          If the owner accepts, you each pay a ₹10 platform fee — plus your refundable deposit, if this swap has one — by UPI from the exchange's Stages tab. Your chat opens once SwapSutra verifies both payments.
                         </p>
                       </div>
                     </div>

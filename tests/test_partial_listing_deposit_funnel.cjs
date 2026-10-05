@@ -211,7 +211,9 @@ const surfaces = {
   'circulation tracker': read('src/components/CirculationTracker.tsx'),
 };
 check('50. Swap request modal labels the estimate', /depositLine\(depositQuote\.requesterDeposit \?\? '—', true\)/.test(app) && /DEPOSIT_ESTIMATE_EXPLAINER/.test(app));
-check('51. Stages (security fee) labels the estimate', /p\.estimated \? depositLine\(p\.requiredAmount, true\)/.test(surfaces['Stages (security fee)']));
+// Oct 2026: the QR amount is now deposit + platform fee, so the estimate
+// label is applied to the deposit part only.
+check('51. Stages (security fee) labels the estimate', /p\.estimated \? depositLine\(deposit, true\)/.test(surfaces['Stages (security fee)']));
 check('52. Timeline labels the estimate', /\{depositTitle\(data\.deposit\.estimated\)\}/.test(surfaces.timeline));
 check('53. Circulation tracker labels the estimate', /\{depositTitle\(data\.deposit\.estimated\)\}/.test(surfaces['circulation tracker']));
 check('54. No borrower surface prints a bare "Security deposit" heading any more',

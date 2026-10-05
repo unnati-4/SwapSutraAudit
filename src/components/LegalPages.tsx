@@ -142,11 +142,16 @@ export const TermsOfUsePage = ({ navigateTo }: { navigateTo: Nav }) => (
 
     <S title="3. What SwapSutra does">
       <p>SwapSutra is a meeting place for readers. <strong>Every exchange is between the two readers, not with us.</strong> We do not own, inspect, ship or insure books, and we cannot guarantee a book's condition or another reader's conduct.</p>
-      <p>We review listings, keep a record of what was agreed and help mediate disputes. Security deposits are the one place we handle money between readers (see <Link to="refund-policy" navigateTo={navigateTo}>Refunds &amp; Deposits</Link>).</p>
+      <p>We review listings, keep a record of what was agreed and help mediate disputes. Security deposits are the one place we handle money between readers (see <Link to="refund-policy" navigateTo={navigateTo}>Refunds &amp; Deposits</Link>). Separately, SwapSutra charges the small fees set out in section 4.</p>
     </S>
 
-    <S title="4. Membership">
-      <p>New readers get a <strong>30-day free trial</strong>. After that, membership is <strong>₹49 per month</strong>, prepaid, and <strong>does not renew automatically</strong>. We give 30 days' notice before any price change.</p>
+    <S title="4. Membership and fees">
+      <p>Joining SwapSutra is <strong>free</strong>, and membership does not expire.</p>
+      <UL items={[
+        <><strong>Platform fee.</strong> When an exchange (swap, lend, rent or sale) is accepted, <strong>each reader pays SwapSutra ₹10</strong> by UPI before the exchange chat opens. It is separate from any security deposit and from any money readers pay each other.</>,
+        <><strong>Listing limit.</strong> Each reader may list up to <strong>20 books</strong> free. A one-time payment of <strong>₹20</strong>, or a valid SwapSutra coupon, removes the limit for that account.</>,
+      ]} />
+      <p>We give 30 days' notice before any change to these amounts. A change never affects a fee you have already paid.</p>
     </S>
 
     <S title="5. Listing and exchanging books">
@@ -245,15 +250,15 @@ export const RefundPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
   <Shell
     tab="refund-policy"
     title="Refunds & Deposits"
-    summary="Membership is what you pay SwapSutra. A security deposit protects a lent book. They are refunded differently."
+    summary="Fees are what you pay SwapSutra. A security deposit protects a lent book. They are refunded differently."
     navigateTo={navigateTo}
   >
-    <S title="Membership fees">
-      <p>₹49 per month after the free 30-day trial, prepaid, with no automatic renewal. Payments are checked by hand and activated within 12–24 hours.</p>
-      <p><strong>Full refund</strong> if you paid but we could not activate your membership, you were charged twice, or you ask within <strong>48 hours</strong> of paying without using any paid feature.</p>
-      <p><strong>Refund for the unused period</strong> if we suspend you for a reason that is not your fault, or we close or significantly reduce the service.</p>
-      <p><strong>No refund</strong> for a change of mind later in the month, or a suspension for breaking the <Link to="terms" navigateTo={navigateTo}>Terms</Link>.</p>
-      <p>To ask, email <Mail to={L.supportEmail} /> with the subject "Refund request" and your payment reference. We decide within 7 working days, and approved refunds reach your original payment method within 7–10 working days.</p>
+    <S title="SwapSutra's fees">
+      <p>Joining is free. SwapSutra charges two things, both paid by UPI and checked by hand, usually within a day.</p>
+      <p><strong>₹10 platform fee per reader, per exchange.</strong> Refunded in full if the exchange is cancelled before both payments are verified and the chat opens, or if you were charged twice. Once the chat has opened, it is not refundable.</p>
+      <p><strong>₹20 to list more than 20 books</strong> (one time). Refunded in full if we could not verify it, you were charged twice, or you ask within <strong>48 hours</strong> without having listed a 21st book.</p>
+      <p><strong>No refund</strong> after an account is suspended for breaking the <Link to="terms" navigateTo={navigateTo}>Terms</Link>.</p>
+      <p>To ask, email <Mail to={L.supportEmail} /> with the subject "Refund request" and your payment reference (UTR). We decide within 7 working days, and approved refunds reach your original payment method within 7–10 working days.</p>
     </S>
 
     <S title="Security deposits">
@@ -345,7 +350,7 @@ const AboutPage = ({ navigateTo }: { navigateTo: Nav }) => (
     </S>
 
     <S title="What it costs">
-      <p>Your first 30 days are free, with no card required. After that membership is <strong>₹49 a month</strong>, which is what keeps the site running.</p>
+      <p>Joining is free and stays free. When an exchange is accepted, each reader pays a <strong>₹10 platform fee</strong> — that is what keeps the site running. You can list up to 20 books free; listing more costs <strong>₹20, once</strong>.</p>
       <p>Money for a rented or sold book passes directly between the two readers. The one exception is a refundable security deposit on a temporary exchange — see our <Link to="refund-policy" navigateTo={navigateTo}>Refunds &amp; Deposits</Link> page for exactly how that is handled.</p>
     </S>
 

@@ -86,15 +86,15 @@ We operate as an **intermediary** within the meaning of Section 2(1)(w) of the I
 
 ## 5. Membership and fees
 
-Every new reader receives a **30-day complimentary full-access trial**.
+Creating a SwapSutra account is **free**, and membership does not expire. You need only your name, email address and phone number.
 
-After the trial, continued access to member features costs **₹49 per month** ("SwapSutra Chapters"). Some features remain available without a paid membership; the current split is shown in the app.
+**Platform fee.** When an exchange — a swap, loan, rental or sale — is accepted, **each reader pays SwapSutra a platform fee, currently ₹10**, by UPI, before the exchange chat opens. It is separate from any security deposit (clause 8) and from any money readers pay each other.
 
-- Membership is **prepaid and non-auto-renewing**. It does not continue unless you renew it.
-- Membership fees are **payable to SwapSutra** and are separate from any money you exchange with another reader.
-- Your membership is personal to you.
+**Listing limit.** Each reader may list up to **20 books** free. A one-time payment, currently **₹20**, or a valid SwapSutra coupon, removes the limit for that account.
+
+- Fees are **payable to SwapSutra** and are separate from any money you exchange with another reader.
 - Refunds are governed by our [Refund & Security Deposit Policy](/refund-policy).
-- We may change the price with **30 days' notice** posted in the app or sent to your registered email. A price change never affects a period you have already paid for.
+- We may change these amounts with **30 days' notice** posted in the app or sent to your registered email. A change never affects a fee you have already paid.
 
 ---
 
@@ -251,7 +251,7 @@ To the fullest extent permitted by law:
 
 This limit does not apply to liability that cannot be limited under Indian law.
 
-> 💡 *Why the cap is low:* SwapSutra charges ₹49 a month and never touches the money you exchange with another reader. The cap reflects that. If a reader keeps your book, your claim is against that reader — and we will help you with the record you need to pursue it.
+> 💡 *Why the cap is low:* SwapSutra charges a ₹10 platform fee per reader per exchange and never touches the money you exchange with another reader. The cap reflects that. If a reader keeps your book, your claim is against that reader — and we will help you with the record you need to pursue it.
 
 ---
 

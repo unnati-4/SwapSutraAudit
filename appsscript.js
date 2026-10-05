@@ -1234,6 +1234,7 @@ function isApprovedActiveMember(email) {
 }
 
 function hasApprovedActiveSubscription(email) {
+  if (freeRegistrationMode_()) return isRegisteredReader_(email);
   const normEmail = normalizeEmail(email);
   if (!normEmail) return false;
   if (isAdminEmail(normEmail)) return true;
@@ -2079,8 +2080,8 @@ function requireApprovedMember(email, feature) {
   return {
     success: false,
     message: what
-      ? `${what} is available to SwapSutra members. Start your free trial or renew your membership to continue.`
-      : "This is available to SwapSutra members. Start your free trial or renew your membership to continue.",
+      ? `${what} is available to SwapSutra members. Sign up free to continue.`
+      : "This is available to SwapSutra members. Sign up free to continue.",
     error: "MEMBERSHIP_REQUIRED"
   };
 }
@@ -3641,7 +3642,7 @@ function doGetHandler_(e) {
             sub.userEmail = sub.userEmail || sub.email;
             try { healApprovedSubscriptionWindow_(sheet, headers, userRowIdx, sub); } catch (healErr) { Logger.log('Window heal skipped: ' + healErr); }
             sub.booksListedCount = recalculateBooksListedCount(email, sub.booksListedCount);
-            sub.booksRemaining = Math.max(0, 10 - sub.booksListedCount);
+            sub.booksRemaining = Math.max(0, freeListingLimit_() - sub.booksListedCount);
             sub.computedStatus = computeSubscriptionStatus(sub);
           }
         }
@@ -3674,6 +3675,10 @@ function doGetHandler_(e) {
           isFreeTrial: false,
           message: "No registered SwapSutra membership found." 
         });
+      }
+
+      if (freeRegistrationMode_()) {
+        return respondJson(freeMemberCheckSubscriptionResponse_(email, sub, profileUser));
       }
 
       const now = new Date();
@@ -3928,6 +3933,15 @@ function doGetHandler_(e) {
 
 function computeSubscriptionStatus(sub) {
   if (!sub) return 'NoSubscription';
+  // Free registration (Oct 2026): an account is a member until an admin
+  // cancels it. No trial window, no paid window, nothing expires — and the
+  // public Library, which hides books from "lapsed" owners via this same
+  // function, therefore never hides a registered reader's shelf.
+  if (freeRegistrationMode_()) {
+    const adminLower = String(sub.adminStatus || '').trim().toLowerCase();
+    const memberUpper = String(sub.membershipStatus || '').trim().toUpperCase();
+    return (adminLower === 'cancelled' || memberUpper === 'CANCELLED') ? 'CANCELLED' : 'FREE_TRIAL';
+  }
   const now = new Date();
   const adminStatus = String(sub.adminStatus || 'Pending').trim();
   const adminStatusLower = adminStatus.toLowerCase();
@@ -6404,6 +6418,14 @@ function doPostHandler_(e) {
     if (action === 'getSwapStage') return respondJson(getSwapStage(data));
     if (action === 'getSecurityFeeStatus') return respondJson(getSecurityFeeStatus(data));
     if (action === 'submitSecurityFeePayment') return respondJson(submitSecurityFeePayment(data));
+    // Oct 2026 — listing allowance and platform revenue.
+    if (action === 'getListingAllowance') return respondJson(getListingAllowance(data));
+    if (action === 'redeemListingUnlockCoupon') return respondJson(redeemListingUnlockCoupon(data));
+    if (action === 'submitListingUnlockPayment') return respondJson(submitListingUnlockPayment(data));
+    if (action === 'adminListListingUnlocks') return respondJson(adminListListingUnlocks(data));
+    if (action === 'adminReviewListingUnlock') return respondJson(adminReviewListingUnlock(data));
+    if (action === 'adminPlatformRevenueSummary') return respondJson(adminPlatformRevenueSummary(data));
+    if (action === 'getPlatformFeeQuote') return respondJson(getPlatformFeeQuote(data));
     if (action === 'adminApproveSecurityFeePayment') return respondJson(adminApproveSecurityFeePayment(data));
     if (action === 'adminListSecurityFeeBacklog') return respondJson(adminListSecurityFeeBacklog(data));
     if (action === 'submitStageEvidence') return respondJson(submitStageEvidence(data));
@@ -7918,22 +7940,15 @@ function createBook(data) {
   const submittedImages = mediaCheck.imagesForLegacyArray;
 
   const currentCount = recalculateBooksListedCount(ownerEmail);
-  // Trial/free members keep the existing 10-book ceiling already surfaced
-  // elsewhere in the app ("10-treasure listing limit" / "10-book monthly
-  // listing limit"). Chapters (premium, non-trial) members get a much
-  // higher ceiling so "unlimited listings" (as advertised) is meaningfully
-  // different from trial, while still guarding against runaway abuse.
-  // isApprovedPremiumMember() previously existed but was never called
-  // anywhere — this is its first real use.
-  const isPremium = isApprovedPremiumMember(ownerEmail);
-  const listingLimit = isPremium ? 500 : 10;
-  if (currentCount >= listingLimit) {
+  // 20 books free; a one-time ₹20 payment or a coupon lifts the limit for
+  // good. See getListingAllowanceFor_ in the platform-fee section.
+  const allowance = getListingAllowanceFor_(ownerEmail, currentCount);
+  if (!allowance.canList) {
     return {
       success: false,
-      message: isPremium
-        ? "Listing limit reached."
-        : "You've reached your 10-book trial listing limit. Upgrade to SwapSutra Chapters to list up to 500 books.",
-      error: "LISTING_LIMIT_REACHED"
+      message: listingLimitMessage_(allowance),
+      error: "LISTING_LIMIT_REACHED",
+      allowance: allowance
     };
   }
 
@@ -12313,6 +12328,7 @@ function sendBookApprovalEmailOnceForBook(data) {
 const EXPIRY_REMINDER_DAYS_BEFORE = 7;
 
 function sendMembershipExpiryReminders() {
+  if (freeRegistrationMode_()) return { success: true, remindersSent: 0, message: "Memberships no longer expire." };
   const subSheet = getOrCreateSheet('Subscriptions', []);
   const values = subSheet.getDataRange().getValues();
   if (values.length <= 1) return { success: true, remindersSent: 0, message: "No subscriptions to check." };
@@ -12410,6 +12426,7 @@ function sendMembershipExpiryReminderEmail(email, name, status, daysLeft, bookCo
 }
 
 function checkExpiredSubscriptions() {
+  if (freeRegistrationMode_()) return; // memberships no longer expire
   const subSheet = getOrCreateSheet('Subscriptions', []);
   const subValues = subSheet.getDataRange().getValues();
   if (subValues.length <= 1) return;
@@ -20191,7 +20208,10 @@ const SECURITY_FEE_HEADERS = [
   'id', 'swapId', 'payerRole', 'payerEmail', 'requiredAmount',
   'utr', 'screenshotUrl', 'paymentStatus', 'adminStatus',
   'submittedAt', 'approvedBy', 'approvedAt', 'rejectedReason',
-  'createdAt', 'updatedAt'
+  'createdAt', 'updatedAt',
+  // Oct 2026: the QR amount is deposit + platform fee; the two are kept
+  // apart so a refund only ever returns the deposit.
+  'depositAmount', 'platformFee'
 ];
 
 const STAGE_EVENTS_SHEET = 'SwapStageEvents';
@@ -20245,19 +20265,9 @@ function swapPartyRole(swap, email) {
  * SWAP = up to 2 payers, RENT/LEND/SELL = 1 payer (requester only).
  */
 function securityFeeRequirements(swap) {
-  const serviceType = String(swap.obj.serviceType || 'SWAP').trim().toUpperCase();
-  const reqs = [];
-  const requesterAmount = Math.round(Number(swap.obj.securityDeposit || 0));
-  if (requesterAmount > 0) {
-    reqs.push({ payerRole: 'requester', payerEmail: swap.requesterEmail, requiredAmount: requesterAmount });
-  }
-  if (serviceType === 'SWAP') {
-    const ownerAmount = Math.round(Number(swap.obj.ownerDeposit || 0));
-    if (ownerAmount > 0) {
-      reqs.push({ payerRole: 'owner', payerEmail: swap.ownerEmail, requiredAmount: ownerAmount });
-    }
-  }
-  return reqs;
+  // Deposit (where one applies) plus the platform fee, for BOTH readers.
+  // See computeExchangePayments_ in the platform-fee section.
+  return computeExchangePayments_(swap);
 }
 
 /** Is this a temporary circulation that must come back? */
@@ -20310,6 +20320,8 @@ function ensureSecurityFeeRecords(swap) {
       else if (h === 'payerRole') row[i] = req.payerRole;
       else if (h === 'payerEmail') row[i] = req.payerEmail;
       else if (h === 'requiredAmount') row[i] = req.requiredAmount;
+      else if (h === 'depositAmount') row[i] = req.depositAmount === undefined ? req.requiredAmount : req.depositAmount;
+      else if (h === 'platformFee') row[i] = req.platformFee || 0;
       else if (h === 'paymentStatus') row[i] = 'PENDING';
       else if (h === 'adminStatus') row[i] = 'NOT_SUBMITTED';
       else if (h === 'createdAt') row[i] = now;
@@ -20339,6 +20351,8 @@ function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
       payerRole: rec.payerRole,
       payerEmail: rec.payerEmail,
       requiredAmount: Number(rec.requiredAmount || 0),
+      depositAmount: feeRecordBreakdown_(rec).depositAmount,
+      platformFee: feeRecordBreakdown_(rec).platformFee,
       estimated: estimatedByRole[rec.payerRole],
       paymentStatus: rec.paymentStatus || 'PENDING',
       adminStatus: rec.adminStatus || 'NOT_SUBMITTED',
@@ -20600,7 +20614,7 @@ function getSwapStage(data) {
     const actions = [];
     if (!disputeOpen) {
       if (myFee && myFee.adminStatus !== 'ADMIN_APPROVED' && myFee.adminStatus !== 'ADMIN_PENDING') {
-        actions.push({ type: 'submitSecurityFeePayment', stage: 'SECURITY_FEE', label: 'Pay security fee' });
+        actions.push({ type: 'submitSecurityFeePayment', stage: 'SECURITY_FEE', label: 'Pay to unlock chat' });
       }
       const confirmable = (stageName, unlocked, partyState) => {
         if (!unlocked || !role) return;
@@ -22700,4 +22714,464 @@ function getMugProducts() {
     Logger.log('getMugProducts failed: ' + err);
     return { success: false, items: [], message: 'The mug shelf could not be loaded.' };
   }
+}
+
+
+/* =========================================================================
+   SwapSutra — free registration, per-exchange platform fee, listing allowance
+   (Oct 2026)
+
+   Wired into: computeSubscriptionStatus, hasApprovedActiveSubscription,
+   checkSubscription, createBook, securityFeeRequirements,
+   ensureSecurityFeeRecords, securityFeeStatus and doPost.
+
+   WHAT CHANGES
+   1. Registration is free and permanent. Name + email + phone, verified by
+      OTP, is a full member. No ₹49, no 30-day trial, nothing expires.
+   2. Every swap / lend / rent / sell charges a small platform fee to BOTH
+      readers, paid by UPI QR after the owner accepts. It rides on the
+      existing SecurityFeePayments flow: one QR, one UTR, one admin approval,
+      and the chat unlocks when both are approved. Where a refundable deposit
+      also applies, the QR amount is deposit + fee, and the two are stored
+      separately so refunds never touch the fee.
+   3. Every reader may list up to 20 books free. A one-time ₹20 (QR, admin
+      verified) or the code BOOKSTORE2627 removes the limit for good.
+
+   SETTINGS can be overridden without redeploying, via Project Settings →
+   Script Properties:
+     PLATFORM_FEE_PER_PARTY   e.g. "10"
+     FREE_LISTING_LIMIT       e.g. "20"
+     LISTING_UNLOCK_FEE       e.g. "20"
+     LISTING_UNLOCK_COUPONS   comma-separated, e.g. "BOOKSTORE2627,LAUNCHWEEK"
+   ========================================================================= */
+
+// The switch. A function rather than a const so it is hoisted: it is read
+// from computeSubscriptionStatus, which other code may call before this
+// part of the file has been evaluated.
+function freeRegistrationMode_() { return true; }
+
+const PLATFORM_FEE_DEFAULT = 10;          // ₹ per reader, per exchange
+// Exchanges created before this moment keep the old rules, so no chat that
+// is already open gets locked behind a new fee. Set it to your launch time.
+const PLATFORM_FEE_START_ISO = '2026-10-06T00:00:00+05:30';
+
+const FREE_LISTING_LIMIT_DEFAULT = 20;
+const LISTING_UNLOCK_FEE_DEFAULT = 20;    // ₹, one time, unlimited after
+const LISTING_UNLOCK_COUPONS_DEFAULT = ['BOOKSTORE2627'];
+
+const LISTING_UNLOCK_SHEET = 'ListingUnlocks';
+const LISTING_UNLOCK_HEADERS = [
+  'id', 'email', 'method', 'amount', 'couponCode', 'utr', 'screenshotUrl',
+  'status', 'rejectedReason', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'
+];
+const LISTING_UTR_PATTERN = /^[A-Za-z0-9]{4,25}$/;
+
+// ── Settings ────────────────────────────────────────────────────────────
+
+function readScriptProperty_(key) {
+  try {
+    return PropertiesService.getScriptProperties().getProperty(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+function numberSetting_(key, fallback) {
+  const raw = readScriptProperty_(key);
+  const n = Number(raw);
+  return raw !== null && raw !== '' && isFinite(n) && n >= 0 ? Math.round(n) : fallback;
+}
+
+function platformFeePerParty_() { return numberSetting_('PLATFORM_FEE_PER_PARTY', PLATFORM_FEE_DEFAULT); }
+function freeListingLimit_() { return numberSetting_('FREE_LISTING_LIMIT', FREE_LISTING_LIMIT_DEFAULT); }
+function listingUnlockFee_() { return numberSetting_('LISTING_UNLOCK_FEE', LISTING_UNLOCK_FEE_DEFAULT); }
+
+function listingUnlockCoupons_() {
+  const raw = readScriptProperty_('LISTING_UNLOCK_COUPONS');
+  const list = raw ? String(raw).split(',') : LISTING_UNLOCK_COUPONS_DEFAULT;
+  return list.map(c => String(c).trim().toUpperCase()).filter(Boolean);
+}
+
+// ── 1. Free registration ────────────────────────────────────────────────
+
+/** A reader is a member once they have an account row. Nothing expires. */
+function isRegisteredReader_(email) {
+  const normEmail = normalizeEmail(email);
+  if (!normEmail) return false;
+  if (isAdminEmail(normEmail)) return true;
+
+  const sub = findRowByEmail_('Subscriptions', normEmail);
+  if (sub) {
+    const admin = String(sub.adminStatus || '').trim().toLowerCase();
+    const status = String(sub.membershipStatus || '').trim().toUpperCase();
+    // Cancelled is the one way an account stops being a member: it is how
+    // an admin suspends someone.
+    return admin !== 'cancelled' && status !== 'CANCELLED';
+  }
+  return !!findRowByEmail_('Users', normEmail);
+}
+
+function findRowByEmail_(sheetName, normEmail) {
+  const values = getOrCreateSheet(sheetName, []).getDataRange().getValues();
+  if (values.length <= 1) return null;
+  const headers = values[0].map(h => String(h).trim());
+  const emailIdx = headers.indexOf('email');
+  if (emailIdx === -1) return null;
+  const row = values.slice(1).find(r => normalizeEmail(r[emailIdx]) === normEmail);
+  return row ? rowToObject(headers, row) : null;
+}
+
+/**
+ * The checkSubscription answer for a registered reader in free mode.
+ *
+ * Status is reported as 'TRIAL' on purpose: the proxy, server.ts and the
+ * app all already treat TRIAL as "active member", so nothing downstream
+ * needs to learn a new word. daysRemainingValid is false so no countdown
+ * is shown, and nothing ever flips it to EXPIRED.
+ */
+function freeMemberCheckSubscriptionResponse_(email, sub, profileUser) {
+  const normEmail = normalizeEmail(email);
+  const source = sub || profileUser || {};
+  const admin = String(source.adminStatus || '').trim().toLowerCase();
+  const mStatus = String(source.membershipStatus || '').trim().toUpperCase();
+  if (admin === 'cancelled' || mStatus === 'CANCELLED') {
+    return {
+      success: true, isRegistered: false, status: 'CANCELLED', membershipStatus: 'CANCELLED',
+      userTier: 'expired', isPremium: false, isTrial: false, isExpired: false,
+      message: 'This account has been suspended. Contact swapsutra@gmail.com.'
+    };
+  }
+
+  const booksListedCount = recalculateBooksListedCount(normEmail);
+  return {
+    success: true,
+    isRegistered: true,
+    isFreeMember: true,
+    status: 'TRIAL',
+    membershipStatus: 'TRIAL',
+    userTier: 'trial',
+    isPremium: false,
+    isTrial: true,
+    isExpired: false,
+    daysRemainingValid: false,
+    trialStartDate: '',
+    trialEndDate: '',
+    subscriptionStartDate: '',
+    subscriptionExpiry: '',
+    listingAllowance: getListingAllowanceFor_(normEmail, booksListedCount),
+    subscription: Object.assign({}, source, {
+      email: normEmail,
+      name: source.name || 'Reader',
+      computedStatus: 'TRIAL',
+      membershipStatus: 'TRIAL',
+      activationType: 'free',
+      membershipType: 'free',
+      adminStatus: 'Approved',
+      paymentRequired: 'No',
+      booksListedCount: booksListedCount,
+      booksRemaining: Math.max(0, freeListingLimit_() - booksListedCount),
+      subscriptionExpiry: '',
+      trialEndDate: ''
+    })
+  };
+}
+
+// ── 2. Platform fee on every exchange ───────────────────────────────────
+
+function platformFeeAppliesToSwap_(swapObj) {
+  const created = new Date(swapObj && swapObj.createdAt);
+  if (isNaN(created.getTime())) return true; // undated rows are new rows
+  return created.getTime() >= new Date(PLATFORM_FEE_START_ISO).getTime();
+}
+
+/**
+ * Replaces the body of securityFeeRequirements(). Who pays what on an
+ * exchange, from amounts the server already resolved — never from the
+ * request payload.
+ *
+ *   SWAP          requester: deposit + fee     owner: deposit + fee
+ *   RENT/LEND/SELL requester: deposit + fee    owner: fee
+ *
+ * A party owing nothing (pre-launch exchange, zero deposit) gets no row,
+ * exactly as before. The admin account never pays a platform fee.
+ */
+function computeExchangePayments_(swap) {
+  const obj = swap.obj || {};
+  const serviceType = String(obj.serviceType || 'SWAP').trim().toUpperCase();
+  const feeApplies = platformFeeAppliesToSwap_(obj);
+  const baseFee = feeApplies ? platformFeePerParty_() : 0;
+
+  const requesterDeposit = Math.max(0, Math.round(Number(obj.securityDeposit || 0)));
+  const ownerDeposit = serviceType === 'SWAP'
+    ? Math.max(0, Math.round(Number(obj.ownerDeposit || 0)))
+    : 0;
+
+  const reqs = [];
+  const add = (payerRole, payerEmail, depositAmount) => {
+    if (!payerEmail) return;
+    const platformFee = isAdminEmail(payerEmail) ? 0 : baseFee;
+    const requiredAmount = depositAmount + platformFee;
+    if (requiredAmount <= 0) return;
+    reqs.push({ payerRole, payerEmail, requiredAmount, depositAmount, platformFee });
+  };
+  add('requester', swap.requesterEmail, requesterDeposit);
+  add('owner', swap.ownerEmail, ownerDeposit);
+  return reqs;
+}
+
+/** Splits a SecurityFeePayments row into deposit and fee (old rows: all deposit). */
+function feeRecordBreakdown_(rec) {
+  const total = Number(rec.requiredAmount || 0);
+  const fee = Number(rec.platformFee || 0);
+  const depositRaw = rec.depositAmount;
+  const deposit = depositRaw === '' || depositRaw === undefined || depositRaw === null
+    ? Math.max(0, total - fee)
+    : Number(depositRaw);
+  return { depositAmount: deposit, platformFee: fee };
+}
+
+/** Public quote for the request modal, so readers see the fee before asking. */
+function getPlatformFeeQuote() {
+  return {
+    success: true,
+    platformFeePerParty: platformFeePerParty_(),
+    freeListingLimit: freeListingLimit_(),
+    listingUnlockFee: listingUnlockFee_()
+  };
+}
+
+// ── 3. Listing allowance ────────────────────────────────────────────────
+
+function getListingUnlockSheet_() {
+  const sheet = getOrCreateSheet(LISTING_UNLOCK_SHEET, LISTING_UNLOCK_HEADERS);
+  ensureSheetHeaders(sheet, LISTING_UNLOCK_HEADERS);
+  return sheet;
+}
+
+function loadListingUnlockRows_() {
+  const sheet = getListingUnlockSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = (values[0] || LISTING_UNLOCK_HEADERS).map(h => String(h).trim());
+  const rows = [];
+  for (let r = 1; r < values.length; r++) {
+    rows.push({ rowIndex: r, obj: rowToObject(headers, values[r]) });
+  }
+  return { sheet, headers, rows };
+}
+
+function listingUnlockStateFor_(normEmail, rows) {
+  const mine = (rows || loadListingUnlockRows_().rows).filter(r => normalizeEmail(r.obj.email) === normEmail);
+  const approved = mine.find(r => String(r.obj.status).toUpperCase() === 'APPROVED') || null;
+  const pending = mine.find(r => String(r.obj.status).toUpperCase() === 'PENDING') || null;
+  const rejected = mine.filter(r => String(r.obj.status).toUpperCase() === 'REJECTED').pop() || null;
+  return { approved, pending, rejected };
+}
+
+/** How many books this reader may list, and how to lift the limit. */
+function getListingAllowanceFor_(email, knownUsed) {
+  const normEmail = normalizeEmail(email);
+  const used = typeof knownUsed === 'number' ? knownUsed : recalculateBooksListedCount(normEmail);
+  const limit = freeListingLimit_();
+  const state = isAdminEmail(normEmail) ? { approved: { obj: { method: 'ADMIN' } } } : listingUnlockStateFor_(normEmail);
+  const unlimited = !!state.approved;
+  return {
+    used: used,
+    limit: unlimited ? null : limit,
+    unlimited: unlimited,
+    unlockedVia: unlimited ? String(state.approved.obj.method || '') : '',
+    remaining: unlimited ? null : Math.max(0, limit - used),
+    canList: unlimited || used < limit,
+    unlockFee: listingUnlockFee_(),
+    pendingUnlock: state.pending ? {
+      id: state.pending.obj.id,
+      submittedAt: state.pending.obj.createdAt,
+      utr: state.pending.obj.utr
+    } : null,
+    lastRejection: !unlimited && !state.pending && state.rejected ? {
+      reason: state.rejected.obj.rejectedReason || '',
+      at: state.rejected.obj.reviewedAt || ''
+    } : null
+  };
+}
+
+function listingLimitMessage_(allowance) {
+  if (allowance.pendingUnlock) {
+    return `You've listed ${allowance.used} of ${allowance.limit} free books. Your ₹${allowance.unlockFee} unlock payment is being verified — you can add more as soon as it's approved.`;
+  }
+  return `You've listed ${allowance.used} of ${allowance.limit} free books. Pay ₹${allowance.unlockFee} once, or enter a coupon code, to list as many as you like.`;
+}
+
+/** Action: getListingAllowance */
+function getListingAllowance() {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to see your listing allowance.' };
+  return {
+    success: true,
+    allowance: getListingAllowanceFor_(caller),
+    upi: { vpa: SWAPSM_UPI_VPA, payee: SWAPSM_UPI_PAYEE }
+  };
+}
+
+/** Action: redeemListingUnlockCoupon { code } */
+function redeemListingUnlockCoupon(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to use a coupon.' };
+  if (!isRegisteredReader_(caller)) return { success: false, error: 'MEMBERSHIP_REQUIRED', message: 'Sign up first — it is free.' };
+
+  const code = String((data && data.code) || '').trim().toUpperCase();
+  if (!code || listingUnlockCoupons_().indexOf(code) === -1) {
+    return { success: false, error: 'INVALID_COUPON', message: "That code isn't valid. Check the spelling and try again." };
+  }
+
+  const before = getListingAllowanceFor_(caller);
+  if (before.unlimited) return { success: true, alreadyUnlimited: true, allowance: before, message: 'Your listings are already unlimited.' };
+
+  const { sheet, headers } = loadListingUnlockRows_();
+  const now = new Date();
+  appendUnlockRow_(sheet, headers, {
+    id: generateId('SS_UNLOCK_'), email: caller, method: 'COUPON', amount: 0, couponCode: code,
+    status: 'APPROVED', reviewedBy: 'coupon', reviewedAt: now, createdAt: now, updatedAt: now
+  });
+  return { success: true, allowance: getListingAllowanceFor_(caller), message: 'Coupon applied. You can now list as many books as you like.' };
+}
+
+/** Action: submitListingUnlockPayment { utr, fileData, fileName } */
+function submitListingUnlockPayment(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to submit a payment.' };
+  if (!isRegisteredReader_(caller)) return { success: false, error: 'MEMBERSHIP_REQUIRED', message: 'Sign up first — it is free.' };
+
+  const { sheet, headers, rows } = loadListingUnlockRows_();
+  const state = listingUnlockStateFor_(caller, rows);
+  if (state.approved) return { success: false, message: 'Your listings are already unlimited.' };
+  if (state.pending) return { success: false, message: 'Your payment is already being verified. You will be notified when it is approved.' };
+
+  const utr = String((data && data.utr) || '').trim();
+  if (!LISTING_UTR_PATTERN.test(utr)) return { success: false, message: 'Enter the UTR / transaction reference from your UPI app (letters and numbers only).' };
+  if (utrAlreadyUsed_(utr, rows)) return { success: false, message: 'That UTR has already been submitted. Each payment can only be used once.' };
+
+  let screenshotUrl = '';
+  if (data && data.fileData) {
+    screenshotUrl = saveFileToDrive(data.fileData, data.fileName || 'listing_unlock_payment.jpg') || '';
+  }
+  if (!screenshotUrl) return { success: false, message: 'Attach a screenshot of the payment (JPG or PNG).' };
+
+  const now = new Date();
+  const amount = listingUnlockFee_();
+  appendUnlockRow_(sheet, headers, {
+    id: generateId('SS_UNLOCK_'), email: caller, method: 'PAYMENT', amount: amount, utr: utr,
+    screenshotUrl: screenshotUrl, status: 'PENDING', createdAt: now, updatedAt: now
+  });
+
+  createNotification(
+    'swapsutra@gmail.com', 'listing_unlock_submitted', 'Listing unlock payment to verify',
+    `${caller} paid ₹${amount} to unlock unlimited listings (UTR ${utr}). Please review.`,
+    '', { link: '/management' }
+  );
+  return { success: true, allowance: getListingAllowanceFor_(caller), message: 'Payment submitted. SwapSutra will verify it shortly.' };
+}
+
+function utrAlreadyUsed_(utr, unlockRows) {
+  const target = String(utr).trim().toUpperCase();
+  const inUnlocks = (unlockRows || loadListingUnlockRows_().rows).some(r =>
+    String(r.obj.utr || '').trim().toUpperCase() === target &&
+    String(r.obj.status).toUpperCase() !== 'REJECTED');
+  if (inUnlocks) return true;
+  try {
+    const values = getOrCreateSheet('SecurityFeePayments', []).getDataRange().getValues();
+    if (values.length <= 1) return false;
+    const h = values[0].map(x => String(x).trim());
+    const utrIdx = h.indexOf('utr');
+    const adminIdx = h.indexOf('adminStatus');
+    if (utrIdx === -1) return false;
+    return values.slice(1).some(r =>
+      String(r[utrIdx] || '').trim().toUpperCase() === target &&
+      String(r[adminIdx] || '') !== 'ADMIN_REJECTED');
+  } catch (e) {
+    return false;
+  }
+}
+
+function appendUnlockRow_(sheet, headers, obj) {
+  sheet.appendRow(headers.map(h => obj[h] !== undefined ? obj[h] : ''));
+}
+
+/** Admin action: adminListListingUnlocks { includeReviewed? } */
+function adminListListingUnlocks(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const includeReviewed = !!(data && data.includeReviewed);
+  const items = loadListingUnlockRows_().rows
+    .map(r => r.obj)
+    .filter(o => includeReviewed || String(o.status).toUpperCase() === 'PENDING')
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  return { success: true, items: items, count: items.length };
+}
+
+/** Admin action: adminReviewListingUnlock { id, decision: APPROVE|REJECT, reason? } */
+function adminReviewListingUnlock(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const id = String((data && data.id) || '').trim();
+  const decision = String((data && data.decision) || '').trim().toUpperCase() === 'REJECT' ? 'REJECT' : 'APPROVE';
+  const reason = String((data && data.reason) || '').trim().slice(0, 500);
+
+  const { sheet, headers, rows } = loadListingUnlockRows_();
+  const row = rows.find(r => String(r.obj.id) === id);
+  if (!row) return { success: false, message: 'Unlock request not found.' };
+  if (String(row.obj.status).toUpperCase() !== 'PENDING') return { success: false, message: 'This request has already been reviewed.' };
+  if (decision === 'REJECT' && !reason) return { success: false, message: 'Give the reader a reason, so they know what to fix.' };
+
+  const now = new Date();
+  const setCell = (name, value) => {
+    const idx = headers.indexOf(name);
+    if (idx !== -1) sheet.getRange(row.rowIndex + 1, idx + 1).setValue(value);
+  };
+  setCell('status', decision === 'APPROVE' ? 'APPROVED' : 'REJECTED');
+  setCell('rejectedReason', decision === 'REJECT' ? reason : '');
+  setCell('reviewedBy', normalizeEmail(getAuthenticatedEmail()));
+  setCell('reviewedAt', now);
+  setCell('updatedAt', now);
+
+  createNotification(
+    row.obj.email,
+    decision === 'APPROVE' ? 'listing_unlock_approved' : 'listing_unlock_rejected',
+    decision === 'APPROVE' ? 'Unlimited listings unlocked' : 'Your listing unlock payment needs attention',
+    decision === 'APPROVE'
+      ? 'Your payment is verified. You can now list as many books as you like.'
+      : `We couldn't verify your payment: ${reason}. Please submit it again from Add a book.`,
+    row.obj.id,
+    { link: '/profile', dedupeKey: 'unlock_' + decision.toLowerCase() + '_' + row.obj.id }
+  );
+  return { success: true, message: decision === 'APPROVE' ? 'Approved.' : 'Rejected.' };
+}
+
+/** Admin action: adminPlatformRevenueSummary — fees actually verified. */
+function adminPlatformRevenueSummary() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  let exchangeFees = 0;
+  let exchangePayments = 0;
+  const feeValues = getOrCreateSheet('SecurityFeePayments', []).getDataRange().getValues();
+  if (feeValues.length > 1) {
+    const h = feeValues[0].map(x => String(x).trim());
+    feeValues.slice(1).forEach(r => {
+      const rec = rowToObject(h, r);
+      if (rec.adminStatus !== 'ADMIN_APPROVED') return;
+      const fee = feeRecordBreakdown_(rec).platformFee;
+      if (fee > 0) { exchangeFees += fee; exchangePayments++; }
+    });
+  }
+  let unlockFees = 0;
+  let unlocksPaid = 0;
+  let unlocksByCoupon = 0;
+  loadListingUnlockRows_().rows.forEach(r => {
+    if (String(r.obj.status).toUpperCase() !== 'APPROVED') return;
+    if (r.obj.method === 'COUPON') { unlocksByCoupon++; return; }
+    unlockFees += Number(r.obj.amount || 0);
+    unlocksPaid++;
+  });
+  return {
+    success: true,
+    exchangeFees, exchangePayments,
+    unlockFees, unlocksPaid, unlocksByCoupon,
+    total: exchangeFees + unlockFees
+  };
 }

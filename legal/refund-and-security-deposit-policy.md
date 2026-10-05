@@ -19,55 +19,42 @@
 
 This policy covers two completely separate kinds of money. Please do not confuse them.
 
-| | **Part A — Membership** | **Part B — Security deposits** |
+| | **Part A — SwapSutra's fees** | **Part B — Security deposits** |
 |---|---|---|
 | Paid to | SwapSutra | SwapSutra, held against the book |
-| Amount | ₹49 / month | Up to 60% of the book's MRP |
-| Purpose | Access to member features | Protection against a book not coming back |
+| Amount | ₹10 per reader per exchange; ₹20 once for more than 20 listings | Up to 60% of the book's MRP |
+| Purpose | Running the platform | Protection against a book not coming back |
 | Refunded by | SwapSutra | SwapSutra, once the return is confirmed |
 
 ---
 
-# Part A — Membership fees
+# Part A — SwapSutra's fees
 
-## A1. What you pay, and when
+Joining SwapSutra is free and membership does not expire. SwapSutra charges two fees, both paid by UPI and verified by hand, usually within a day.
 
-Every reader gets a **30-day complimentary trial** with full access. Nothing is charged and no payment details are required for the trial.
+## A1. Platform fee — ₹10 per reader, per exchange
 
-After the trial, membership costs **₹49 per month**. Membership is **prepaid** and **does not renew automatically** — nothing is ever charged to you without you choosing to pay it.
-
-## A2. Activation
-
-Payments are currently verified manually. Once you pay and submit your payment reference, we activate your membership within **12–24 hours**. You will receive a confirmation email with a receipt.
-
-If your membership has not activated within 24 hours, write to **swapsutra@gmail.com** with your payment reference and we will resolve it.
-
-## A3. When we refund a membership fee
-
-We refund in full where:
+Charged to each reader when an exchange is accepted, before the exchange chat opens. Where the exchange also needs a security deposit, the QR code shows the two together; they are recorded separately, and only the deposit is ever refundable under Part B.
 
 | Situation | Refund |
 |---|---|
-| You paid but membership never activated, and we cannot activate it | **Full refund** |
-| You were charged twice for the same month | **Full refund of the duplicate** |
-| You were charged after cancelling | **Full refund** |
-| We suspend or terminate your account for a reason that is not your breach | **Pro-rata refund of the unused period** |
-| We permanently discontinue SwapSutra | **Pro-rata refund of the unused period** |
-| We materially reduce what membership includes, and you object within 30 days | **Pro-rata refund of the unused period** |
+| The exchange is cancelled before both readers' payments are verified and the chat opens | **Full refund** |
+| You were charged twice, or paid the wrong amount | **Refund of the excess** |
+| The chat has opened | **No refund** |
+| Your account is suspended for breach of our Terms or Community Guidelines | **No refund** |
 
-## A4. When we do not refund
+## A2. Listing unlock — ₹20, one time
+
+Lets you list more than 20 books. Never expires.
 
 | Situation | Refund |
 |---|---|
-| You change your mind mid-month | **No refund** for the current month; simply do not renew |
-| You did not use the service during a paid month | **No refund** |
-| Your account is suspended or terminated **for breach** of our Terms or Community Guidelines | **No refund** |
-| An exchange with another reader went badly | **No refund** — that is Part B, and it is not our fee |
-| You were unable to find a book you wanted | **No refund** |
+| We could not verify your payment | **Full refund** |
+| You were charged twice | **Refund of the duplicate** |
+| You ask within **48 hours** and have not listed a 21st book | **Full refund** |
+| Otherwise | **No refund** |
 
-**Cooling-off:** if you request a refund within **48 hours** of a payment and have not used any paid feature in that window, we will refund it in full regardless of the table above. We would rather you left happy.
-
-## A5. How to request a membership refund
+## A3. How to request a refund
 
 Email **swapsutra@gmail.com** with the subject line **"Refund request"**, including your registered email, the payment reference (UTR), the date and amount, and what happened.
 

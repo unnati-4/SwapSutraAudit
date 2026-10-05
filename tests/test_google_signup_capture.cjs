@@ -66,8 +66,9 @@ check('6. The name field is prefilled from the Google account',
 check('7. The email field is prefilled with the verified address',
   /defaultValue=\{googleSignupPrefill\?\.email/.test(src));
 
+// Oct 2026: also read-only for a reader already signed in by email code.
 check('8. The verified email is read-only — a reader cannot register an address nobody proved they own',
-  /readOnly=\{Boolean\(googleSignupPrefill\)\}/.test(src));
+  /readOnly=\{Boolean\(googleSignupPrefill( \|\| activeUserEmail)?\)\}/.test(src));
 
 check('9. The form is keyed on the prefill, or the uncontrolled inputs would never show it',
   /key=\{googleSignupPrefill \? `google:\$\{googleSignupPrefill\.email\}` : 'signup'\}/.test(src));

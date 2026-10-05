@@ -33,7 +33,12 @@ const API_URL = apiUrl('/api/swapsutra');
 interface FeePayer {
   payerRole: 'requester' | 'owner';
   payerEmail: string;
+  /** What the QR asks for: depositAmount + platformFee. */
   requiredAmount: number;
+  /** Refundable part. Older rows (before Oct 2026) report it as the whole amount. */
+  depositAmount?: number;
+  /** SwapSutra's non-refundable platform fee (₹10 per reader per exchange). */
+  platformFee?: number;
   /** Worked out from an unverified price — shown as an estimate. */
   estimated?: boolean;
   paymentStatus: string;
@@ -103,7 +108,7 @@ interface StageEvaluation {
 
 const STAGE_LABELS: Record<string, string> = {
   ACCEPTANCE: 'Request Acceptance',
-  SECURITY_FEE: 'Security Fee',
+  SECURITY_FEE: 'Payment',
   HANDOVER: 'Handover',
   LOGISTICS: 'Meeting / Courier Logistics',
   RECEIPT: 'Receipt Confirmation',
@@ -327,12 +332,28 @@ export default function SwapStateMachine({ swapId, isAdmin }: { swapId: string; 
               <div key={p.payerRole} className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">
-                    {p.payerRole === data.role ? 'You' : p.payerRole} — {p.estimated ? depositLine(p.requiredAmount, true) : `₹${p.requiredAmount}`}
+                    {p.payerRole === data.role ? 'You' : p.payerRole} — ₹{p.requiredAmount}
                   </p>
                   <span className={`text-2xs font-bold uppercase ${p.adminStatus === 'ADMIN_APPROVED' ? 'text-green-600' : p.adminStatus === 'ADMIN_REJECTED' ? 'text-red-500' : 'text-amber-600'}`}>
                     {p.adminStatus.replace('_', ' ')}
                   </span>
                 </div>
+                {/* What the amount is made of. The fee is SwapSutra's; only the
+                    deposit is ever refunded. */}
+                {(() => {
+                  const fee = p.platformFee ?? 0;
+                  const deposit = p.depositAmount ?? (p.requiredAmount - fee);
+                  if (fee <= 0) {
+                    return p.estimated ? <p className="text-xs text-[var(--text-secondary)]">{depositLine(deposit, true)}</p> : null;
+                  }
+                  return (
+                    <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                      {deposit > 0
+                        ? <>{p.estimated ? depositLine(deposit, true) : `₹${deposit} refundable deposit`} + ₹{fee} platform fee</>
+                        : <>₹{fee} platform fee</>}
+                    </p>
+                  );
+                })()}
                 {p.estimated && (
                   <p className="text-xs italic text-[var(--text-secondary)] leading-relaxed">{DEPOSIT_ESTIMATE_EXPLAINER}</p>
                 )}
@@ -341,7 +362,7 @@ export default function SwapStateMachine({ swapId, isAdmin }: { swapId: string; 
                   <div className="space-y-3 pt-2 border-t border-brand-border/40">
                     <div className="flex flex-col items-center gap-3 bg-[var(--bg-page)] p-4 rounded-xl">
                       <QRCodeCanvas
-                        value={`upi://pay?pa=${data.upi.vpa}&pn=${encodeURIComponent(data.upi.payee)}&am=${p.requiredAmount}&cu=INR&tn=SwapSutra%20Security%20Fee`}
+                        value={`upi://pay?pa=${data.upi.vpa}&pn=${encodeURIComponent(data.upi.payee)}&am=${p.requiredAmount}&cu=INR&tn=SwapSutra%20Exchange%20Payment`}
                         size={160}
                         level="H"
                         includeMargin

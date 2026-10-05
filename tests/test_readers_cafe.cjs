@@ -311,10 +311,12 @@ console.log('\n--- The invitation tells the truth about WHY you cannot speak ---
 
 check('62. Three distinct reasons are handled, not one catch-all',
   /inviteReason\?: 'guest' \| 'pending' \| 'expired'/.test(cafe));
-check('63. An expired member is told their chair is still there',
-  /Your chair is still here\. Renew your membership to rejoin/.test(cafe));
-check('64. A registered-but-not-yet-active reader is offered the trial',
-  /Almost in\. Start your free trial and the table is yours\./.test(cafe));
+// Oct 2026: 'expired' now only means a paused (cancelled) account, and
+// joining is free.
+check('63. A paused member is told their chair is still there',
+  /Your chair is still here\. Your account is paused/.test(cafe));
+check('64. A registered-but-not-yet-joined reader is offered free joining',
+  /Almost in\. Join free and the table is yours\./.test(cafe));
 check('65. A true visitor gets the register invitation',
   /Pull up a chair\. Become a SwapSutra reader to join the conversation\./.test(cafe));
 check('66. The app passes the real reason from userTier',

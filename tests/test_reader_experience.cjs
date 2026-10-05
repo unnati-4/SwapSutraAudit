@@ -250,7 +250,7 @@ check('72. Its opener and item editor are gone too — no dead entry points',
 check('73. Its form state was removed, not just hidden',
   !/setReadingSpaceForm/.test(app));
 check('74. There is now ONE gated way to add a book',
-  /const openListingForm = \(\) => \{/.test(app));
+  /const openListingForm = (async )?\(\) => \{/.test(app));
 // Assert each guard by name rather than one long span — clearer, and it
 // does not break the next time a comment is added inside the function.
 const listingFn = app.slice(app.indexOf('const openListingForm'), app.indexOf('const promptMembershipGate'));
@@ -260,8 +260,10 @@ check('75. ...and it keeps the full eligibility chain',
   && /if \(userTier === 'expired'\) \{ openMembershipActivation\(\); return; \}/.test(listingFn)
   && /if \(!isListerActive\) \{ promptMembershipGate\(\); return; \}/.test(listingFn)
   && /setShowListingForm\(/.test(listingFn));
-check('76. ...including the real per-tier listing cap',
-  /const listingLimit = userTier === 'premium' \? 500 : 10;/.test(app));
+// Oct 2026: 20 free, then ₹20 once or a coupon — asked of the server.
+check('76. ...including the real listing allowance',
+  /const allowance = await fetchListingAllowance\(\);/.test(listingFn)
+  && /if \(allowance && !allowance\.canList\) \{ setShowListingUnlock\(true\); return; \}/.test(listingFn));
 check('77. The profile "Add Book" affordance still routes there',
   /onClick=\{openListingForm\}/.test(app));
 // One place decides whether a reader may list (openListingForm). The only

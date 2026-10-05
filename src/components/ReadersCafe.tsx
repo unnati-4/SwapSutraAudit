@@ -831,9 +831,9 @@ const ReadersCafe = ({
           <div className="cafe-invite">
             <p className="cafe-invite__line">
               {inviteReason === 'expired'
-                ? 'Your chair is still here. Renew your membership to rejoin the conversation.'
+                ? 'Your chair is still here. Your account is paused — contact SwapSutra to rejoin.'
                 : inviteReason === 'pending'
-                  ? 'Almost in. Start your free trial and the table is yours.'
+                  ? 'Almost in. Join free and the table is yours.'
                   : 'Pull up a chair. Become a SwapSutra reader to join the conversation.'}
             </p>
             <button
@@ -842,9 +842,9 @@ const ReadersCafe = ({
               className="btn-primary px-8 py-3 text-2xs uppercase tracking-widest font-bold"
             >
               {inviteReason === 'expired'
-                ? 'Renew to rejoin'
+                ? 'Contact SwapSutra'
                 : inviteReason === 'pending'
-                  ? 'Start your free trial'
+                  ? 'Join free'
                   : 'Register to join'}
             </button>
           </div>

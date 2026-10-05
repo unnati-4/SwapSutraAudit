@@ -113,15 +113,21 @@ let r = check_('free@x.com');
 check('1. An approved free reader with no trial dates is NOT "pending"', r.userTier === 'trial', JSON.stringify(r.userTier));
 const a = rows('Subscriptions').find(x => x.email === 'free@x.com');
 check('2. ...and the 30-day trial window is written back for good', a.trialStartDate && a.trialEndDate && Math.round((new Date(a.trialEndDate) - new Date(a.trialStartDate))/86400000) === 30);
-check('3. ...with about 30 days remaining', r.daysRemaining >= 29 && r.daysRemaining <= 31, String(r.daysRemaining));
+// Oct 2026: membership is free and never expires, so no countdown is sent.
+check('3. ...and no trial countdown is offered', r.daysRemaining === undefined && r.daysRemainingValid === false, String(r.daysRemaining));
 
 r = check_('paid@x.com');
-check('4. An approved paid member with no dates is premium', r.userTier === 'premium', JSON.stringify(r.userTier));
+// Oct 2026: there is no paid tier any more. A former ₹49 member is an
+// ordinary (free, permanent) member.
+check('4. A former paid member is an active member', r.isRegistered === true && r.userTier === 'trial', JSON.stringify(r.userTier));
 const b = rows('Subscriptions').find(x => x.email === 'paid@x.com');
-check('5. ...with a 1-year window from approval', b.subscriptionExpiry && new Date(b.subscriptionExpiry).getTime() > Date.now()+360*86400000);
+check('5. ...(the paid row is left as it was; nothing new is written)', !!b);
 
-check('6. A reader the admin has NOT approved stays pending', check_('wait@x.com').userTier === 'pending');
-check('7. A paid application not yet approved stays payment-pending', check_('paywait@x.com').userTier === 'pending');
+// Oct 2026: joining is free and needs no approval; an admin pauses an
+// account by cancelling it. So 'Pending' rows (old unpaid ₹49 applications
+// included) are members now, and only Cancelled is shut out.
+check('6. A registered reader is a member without waiting for approval', check_('wait@x.com').isRegistered === true);
+check('7. An unpaid ₹49 application from before the change is a member too', check_('paywait@x.com').isRegistered === true);
 const c = rows('Subscriptions').find(x => x.email === 'wait@x.com');
 check('8. ...and nothing is written to unapproved rows', !c.trialStartDate && !c.subscriptionStartDate);
 

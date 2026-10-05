@@ -168,12 +168,16 @@ check('30. Home, events and the policy pages stay reachable too (no regression)'
   /GATE_ALLOWED_TABS: AppTab\[\] = \[[^\]]*'home'[^\]]*'events'[^\]]*'privacy'/.test(app));
 check('31. Guests are told up front that acting needs an account',
   app.includes("You're browsing as a guest"));
-check('32. An expiry warning banner exists',
-  app.includes('expiryNoticeDismissed') && app.includes('Renew · ₹49/mo'));
-check('33. The banner names the real consequence, with a real count',
-  app.includes('myListedBookCount') && /out of the Library until you renew/.test(app));
-check('34. Dismissing the warning silences it for the day only, not for good',
-  app.includes('swapsutraExpiryNoticeDismissedOn') && app.includes('todayKey'));
+// Oct 2026: memberships no longer expire, so there is nothing to warn
+// about. What matters now is that the warning, the reminder emails and the
+// expiry job are all gone — not silently still telling readers to pay.
+check('32. The expiry warning banner is gone',
+  !app.includes('expiryNoticeDismissed') && !app.includes('Renew · ₹49/mo'));
+check('33. Nobody is told their books leave the Library until they renew',
+  !/out of the Library until you renew/.test(app));
+check('34. The expiry job and the reminder emails do nothing in free mode',
+  /function checkExpiredSubscriptions\(\) \{\n  if \(freeRegistrationMode_\(\)\) return;/.test(src)
+  && /function sendMembershipExpiryReminders\(\) \{\n  if \(freeRegistrationMode_\(\)\) return/.test(src));
 check('35. The warning covers paid members too, not just trials',
   /userTier === 'trial' \|\| userTier === 'premium'/.test(app));
 
