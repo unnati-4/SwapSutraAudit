@@ -3936,7 +3936,7 @@ body { overflow-x: clip; }
     letter-spacing: var(--letter-spacing-wide); text-transform: uppercase; color: var(--text-primary);
   }
   @media (max-width: 380px) { .ss-header__wordmark { font-size: var(--font-size-lg); } }
-  .ss-header__wordmark, .ss-header__text-btn { white-space: nowrap; }
+  .ss-header__wordmark, .ss-header__text-btn, .ss-header__join { white-space: nowrap; }
   /* Six tabs on a 360px phone: labels stay on one line. */
   .ss-bottom-label { white-space: nowrap; letter-spacing: 0; text-transform: none; font-size: var(--font-size-2xs); }
   .ss-header__links { gap: 1.6rem; }
@@ -4211,6 +4211,9 @@ body { overflow-x: clip; }
   .ss-header__tools { gap: 0 !important; }
   .ss-header__icon { width: 40px; height: 40px; }
   .ss-header__text-btn { padding: 0 0.35rem; }
+  /* The one header button is now shown on phones too (it used to be
+     hidden below 640px, leaving "Sign in" there instead). */
+  .ss-header__join { min-height: 36px; padding: 0 0.75rem; font-size: var(--font-size-xs, 0.8125rem); }
 }
 
 /* 1 Oct (owner's request): no "Ask Quill" on the Chat (Readers' Café) page,

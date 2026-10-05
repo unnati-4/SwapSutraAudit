@@ -14419,18 +14419,25 @@ export default function App() {
                 )}
               </button>
             )}
-            {/* Signed in: the profile icon. Signed out: sign in / join. */}
-            {activeUserEmail ? (
+            {/* Signed in: the profile icon. */}
+            {activeUserEmail && (
               <button type="button" className="ss-header__icon relative" aria-label="My profile" aria-current={primaryKey === 'profile' ? 'page' : undefined} onClick={() => goPrimary('profile')}>
                 <Icons.UserRound size={21} />
               </button>
-            ) : (
-              <button type="button" onClick={() => setShowLoginModal(true)} className="ss-header__text-btn">
-                Sign in
-              </button>
             )}
+            {/* One button for everyone not yet in. Signed out, it opens the
+                Welcome screen, which offers "Login" (returning readers) and
+                "Sign Up" (new readers) — so a separate "Sign in" link next
+                to it was only a second door into the same room. */}
             {!isRegisteredMember && (
-              <button type="button" onClick={handleBecomeMemberClick} className="ss-header__join hidden sm:inline-flex">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!activeUserEmail) { setLoginStep('choice'); setShowLoginModal(true); return; }
+                  handleBecomeMemberClick();
+                }}
+                className="ss-header__join inline-flex"
+              >
                 Join free
               </button>
             )}
