@@ -12693,6 +12693,11 @@ export default function App() {
   const profileGroupOf = (sub: string) =>
     Object.keys(PROFILE_TAB_GROUPS).find((g) => PROFILE_TAB_GROUPS[g].includes(sub)) || 'overview';
   const activeProfileGroup = profileGroupOf(profileActiveSubTab || 'overview');
+  // 7 Oct (owner's request): "My Book Shelf" and "My Reading Tracker" are
+  // the Shelf page; the Profile page no longer carries them. Both still
+  // render through the profile route (they need its data), but with the
+  // Shelf's own heading and tabs and without the profile's header card.
+  const isShelfView = activeProfileGroup === 'books' || activeProfileGroup === 'tracker';
 
   // ── Primary navigation (30 Sep, owner's request) ─────────────────────
   // Seven places and nothing else: Books (the marketplace), Shelf (my
@@ -12708,7 +12713,7 @@ export default function App() {
     : activeTab === 'cafe' ? 'chat'
     : activeTab === 'mugs' ? 'mugs'
     : activeTab === 'cart' ? 'cart'
-    : activeTab === 'profile' ? (activeProfileGroup === 'books' ? 'shelf' : 'profile')
+    : activeTab === 'profile' ? (isShelfView ? 'shelf' : 'profile')
     : null;
   const goPrimary = (key: PrimaryKey) => {
     // Profile and Shelf are a reader's own pages: a visitor is asked to
@@ -16553,8 +16558,17 @@ export default function App() {
             >
               <div className="max-w-4xl mx-auto">
                 <div className="text-center mb-5 sm:mb-16">
-                  <h2 className="text-3xl sm:text-5xl font-serif text-[var(--text-secondary)] tracking-tighter italic">My <br className="hidden sm:block" /><span className="not-italic text-[var(--text-muted)] opacity-80">Reading Space</span></h2>
-                  <p className="hidden sm:block mt-4 text-[var(--text-muted)] text-sm font-medium italic opacity-70">"Books, conversations, and the readers they lead you toward."</p>
+                  {isShelfView ? (
+                    <>
+                      <h2 className="text-3xl sm:text-5xl font-serif text-[var(--text-secondary)] tracking-tighter italic">My <br className="hidden sm:block" /><span className="not-italic text-[var(--text-muted)] opacity-80">Shelf</span></h2>
+                      <p className="hidden sm:block mt-4 text-[var(--text-muted)] text-sm font-medium italic opacity-70">"The books you share, and the ones you're reading."</p>
+                    </>
+                  ) : (
+                    <>
+                      <h2 className="text-3xl sm:text-5xl font-serif text-[var(--text-secondary)] tracking-tighter italic">My <br className="hidden sm:block" /><span className="not-italic text-[var(--text-muted)] opacity-80">Reading Space</span></h2>
+                      <p className="hidden sm:block mt-4 text-[var(--text-muted)] text-sm font-medium italic opacity-70">"Books, conversations, and the readers they lead you toward."</p>
+                    </>
+                  )}
                   {/* A badge from the last meetup is the first thing a reader
                       should see when they open their own profile. */}
                   {!!(profileData as any)?.awardedBadges?.length && (
@@ -16629,7 +16643,8 @@ export default function App() {
                   const profileData = activeProfileData!;
                   return (
                     <div className="space-y-12">
-                    {/* Profile Header */}
+                    {/* Profile Header — on the Profile page only, not the Shelf. */}
+                    {!isShelfView && (<>
                     <div className="classic-card p-6 md:p-12 bg-[var(--bg-surface)] flex flex-col md:flex-row justify-between items-center gap-8 relative overflow-hidden">
                        <div className="absolute top-0 right-0 w-64 h-64 bg-brand-gold/5 rounded-bl-full -mr-32 -mt-32 opacity-50" />
                        <div className="flex items-center gap-4 relative z-10 w-full md:w-auto">
@@ -16682,16 +16697,21 @@ export default function App() {
                          <button onClick={handleLogout} className="text-2xs font-bold text-[var(--text-primary)] underline decoration-brand-gold/30 underline-offset-4 uppercase tracking-widest hover:text-brand-gold-text transition-colors">Sign Out</button>
                        </div>
                     </div>
+                    </>)}
 
                     {/* Five groups, not nine tabs. */}
-                    <div className="grid grid-cols-2 gap-3 text-2xs font-bold uppercase tracking-widest mb-6 md:flex md:justify-center md:border-b md:border-brand-border md:gap-0 md:overflow-x-auto md:scrollbar-hide">
-                      {[
-                        { group: 'overview', label: 'Reading Space', sub: 'overview' },
-                        { group: 'books', label: `My Shelf (${ownedProfileBooks.length})`, sub: 'books' },
-                        { group: 'tracker', label: 'Reading Tracker', sub: 'tracker' },
-                        { group: 'reading', label: 'Reading', sub: 'journey' },
-                        { group: 'settings', label: 'Settings', sub: 'settings' },
-                      ].map((t) => (
+                    <div className={`grid ${isShelfView ? 'grid-cols-2' : 'grid-cols-3'} gap-3 text-2xs font-bold uppercase tracking-widest mb-6 md:flex md:justify-center md:border-b md:border-brand-border md:gap-0 md:overflow-x-auto md:scrollbar-hide`}>
+                      {(isShelfView
+                        ? [
+                            { group: 'books', label: `My Book Shelf (${ownedProfileBooks.length})`, sub: 'books' },
+                            { group: 'tracker', label: 'My Reading Tracker', sub: 'tracker' },
+                          ]
+                        : [
+                            { group: 'overview', label: 'Reading Space', sub: 'overview' },
+                            { group: 'reading', label: 'Reading', sub: 'journey' },
+                            { group: 'settings', label: 'Settings', sub: 'settings' },
+                          ]
+                      ).map((t) => (
                         <button
                           key={t.group}
                           onClick={() => setProfileActiveSubTab(t.sub)}
