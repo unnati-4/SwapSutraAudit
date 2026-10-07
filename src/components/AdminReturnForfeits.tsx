@@ -52,11 +52,11 @@ export default function AdminReturnForfeits() {
   return (
     <section className="space-y-4">
       <div className="flex items-baseline justify-between gap-4">
-        <h3 className="font-serif text-2xl text-[var(--text-primary)]">Late returns · forfeited deposits</h3>
+        <h3 className="font-serif text-2xl text-[var(--text-primary)]">Deposits to pay out</h3>
         <button onClick={load} className="text-xs text-brand-gold-text underline">Refresh</button>
       </div>
       <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-        A book not on its way back by its deadline forfeits the borrower&rsquo;s deposit to the owner. Pay the owner by UPI, then mark it paid — they&rsquo;re notified.
+        Deposits forfeited for a late return, or by a dispute decision after reviewing the exchange videos. Pay the reader shown by UPI, then mark it paid — they&rsquo;re notified.
       </p>
       {loading && <p className="text-sm text-[var(--text-secondary)]">Loading…</p>}
       {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">{error}</p>}
@@ -65,7 +65,7 @@ export default function AdminReturnForfeits() {
         <div key={f.id} className="rounded-2xl border border-red-200 bg-[var(--bg-surface)] p-4 space-y-2">
           <p className="text-sm font-semibold text-[var(--text-primary)]">Pay ₹{f.amount} to <span className="break-all">{f.ownerEmail}</span></p>
           <p className="text-xs text-[var(--text-secondary)]">
-            &ldquo;{f.bookTitle}&rdquo; · not returned by {when(f.dueAt)} · borrower <span className="break-all">{f.defaulterEmail}</span> · exchange {f.swapId}
+            &ldquo;{f.bookTitle}&rdquo; · {String(f.leg).startsWith('dispute:') ? 'dispute decision' : `not returned by ${when(f.dueAt)}`} · from <span className="break-all">{f.defaulterEmail}</span> · exchange {f.swapId}
           </p>
           <button onClick={() => markPaid(f.id)} disabled={busy === f.id} className="px-3 py-2 rounded-lg bg-green-600 text-white text-xs font-semibold disabled:opacity-50">
             {busy === f.id ? 'Saving…' : 'I have paid the owner'}

@@ -3,6 +3,7 @@ import {apiUrl} from '../config/runtime';
 import { depositTitle, DEPOSIT_ESTIMATE_EXPLAINER } from '../utils/deposit';
 import { LocationCard } from './LocationPin';
 import ReturnRuleNotice from './ReturnRuleNotice';
+import { ExchangeVideosPanel, fetchExchangeVideos, missingForMe, type VmsState } from './ExchangeVideos';
 
 // The map picker pulls in Leaflet, so it loads only when someone opens it.
 const LocationPinPicker = lazy(() => import('./LocationPin').then(m => ({ default: m.LocationPinPicker })));
@@ -163,6 +164,9 @@ export default function CirculationTracker({
   const [addrNote, setAddrNote] = useState('');
 
   const [extBusy, setExtBusy] = useState(false);
+  const [vms, setVms] = useState<VmsState | null>(null);
+  const loadVideos = useCallback(async () => { if (swapId) setVms(await fetchExchangeVideos(swapId)); }, [swapId]);
+  useEffect(() => { loadVideos(); }, [loadVideos]);
   const [extMsg, setExtMsg] = useState<string | null>(null);
 
   const archived = chatStatus === 'Archived';
@@ -499,6 +503,9 @@ export default function CirculationTracker({
         </div>
       )}
 
+      {/* VMS: the three videos for the book on this tab. */}
+      <ExchangeVideosPanel swapId={swapId} leg={leg} state={vms} onChanged={loadVideos} disabled={archived} />
+
       <ol className="space-y-3">
         {legEvents.length === 0 && (
           <li className="text-xs text-[var(--text-secondary)] italic">{route ? 'Nothing recorded for this book yet.' : 'Agree the route first — then updates start here.'}</li>
@@ -539,17 +546,36 @@ export default function CirculationTracker({
             </div>
           )}
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Anything the other reader should know" className="input-classic !py-2 text-xs w-full bg-[var(--bg-page)]" />
-          <div className="flex flex-wrap gap-2">
-            {actions
-              .filter(a => route.method === 'courier' ? a.event !== 'handed_over' : !['dispatched', 'in_transit'].includes(a.event))
-              .map(a => (
-                <button key={a.event} type="button" disabled={busy || (a.event === 'dispatched' && (!courierName || !awb.trim()))}
-                  onClick={() => postEvent(a.event)} className={btnQuiet}
-                  title={a.event === 'dispatched' && (!courierName || !awb.trim()) ? 'Add the courier and tracking ID first' : undefined}>
-                  {a.label}
-                </button>
-              ))}
-          </div>
+          {(() => {
+            // VMS: the server refuses these without the videos; the buttons say so first.
+            const needSend = iAmSending ? missingForMe(vms, leg, 'sender') : [];
+            const needRecv = !iAmSending ? missingForMe(vms, leg, 'receiver') : [];
+            const blocked = (ev: string) => (ev === 'dispatched' || ev === 'handed_over') ? needSend.length > 0 : ev === 'received' ? needRecv.length > 0 : false;
+            return (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  {actions
+                    .filter(a => route.method === 'courier' ? a.event !== 'handed_over' : !['dispatched', 'in_transit'].includes(a.event))
+                    .map(a => (
+                      <button key={a.event} type="button"
+                        disabled={busy || blocked(a.event) || (a.event === 'dispatched' && (!courierName || !awb.trim()))}
+                        onClick={() => postEvent(a.event)} className={btnQuiet}
+                        title={blocked(a.event) ? 'Record the videos above first'
+                          : a.event === 'dispatched' && (!courierName || !awb.trim()) ? 'Add the courier and tracking ID first' : undefined}>
+                        {a.label}
+                      </button>
+                    ))}
+                </div>
+                {(needSend.length > 0 || needRecv.length > 0) && (
+                  <p className="text-xs text-amber-700" role="note">
+                    {needSend.length > 0
+                      ? 'Record the book quality' + (needSend.includes('PACKING') ? ' and packing videos' : ' video') + ' above before you hand over or post it.'
+                      : 'Record the receiving / unboxing video above before confirming — start recording before you open the parcel.'}
+                  </p>
+                )}
+              </>
+            );
+          })()}
           {iAmSending && route.method === 'courier' && (
             <p className="text-2xs text-[var(--text-secondary)] italic">Posting needs the courier company and tracking ID, so the other reader can follow the parcel on the courier&rsquo;s own site.</p>
           )}

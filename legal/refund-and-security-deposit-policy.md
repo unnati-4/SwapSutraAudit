@@ -100,6 +100,20 @@ The deposit is **65% of the book's printed MRP**, for a swap, a rental or a loan
 
 For a book with no printed MRP, readers should agree a reasonable figure based on current retail value. If you cannot agree, do not proceed with the exchange.
 
+## B2b. Video evidence (VMS)
+
+For every book that travels — swap, rent, lend or sale, outbound and on return:
+
+| Who | Video | When |
+|---|---|---|
+| Sender | **Book quality** — covers, spine, corners, pages | Before handing over or posting |
+| Sender | **Packing** — the book going into the parcel until it is sealed | Courier route only |
+| Receiver | **Receiving / unboxing** — start before opening, then show the book | On receipt |
+
+Videos are recorded in the SwapSutra app, which stamps each frame with the exchange's code and the time. A book cannot be marked as posted, handed over or received until its videos are in.
+
+**In a dispute**, SwapSutra reviews these videos and decides each security deposit: refunded to the reader who paid it, or forfeited — fully or partly — to the reader who is owed it. A reader who did not record a required video cannot rely on it as evidence. While a dispute is open, the automatic forfeit for a late return (B2a) is paused and the decision is made from the videos instead.
+
 ## B3. The deposit is returned in full when
 
 - the book is on its way back within the return period (B2a), in substantially the condition it went out in (ordinary reading wear is expected and is not damage); **or**

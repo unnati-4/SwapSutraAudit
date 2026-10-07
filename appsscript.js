@@ -6410,6 +6410,12 @@ function doPostHandler_(e) {
     if (action === 'getDeliveryAddress') return respondJson(getDeliveryAddress(data));
     if (action === 'setSwapRoute') return respondJson(setSwapRoute(data));
     if (action === 'shareChatLocation') return respondJson(shareChatLocation(data));
+    // Oct 2026 — VMS video evidence.
+    if (action === 'getExchangeVideos') return respondJson(getExchangeVideos(data));
+    if (action === 'vmsStartUpload') return respondJson(vmsStartUpload(data));
+    if (action === 'vmsUploadChunk') return respondJson(vmsUploadChunk(data));
+    if (action === 'vmsFinishUpload') return respondJson(vmsFinishUpload(data));
+    if (action === 'adminDecideDeposits') return respondJson(adminDecideDeposits(data));
     // Oct 2026 — 21-day return deadlines.
     if (action === 'getReturnStatus') return respondJson(getReturnStatus(data));
     if (action === 'requestReturnExtension') return respondJson(requestReturnExtension(data));
@@ -15125,7 +15131,8 @@ function getOpenDisputes(data) {
           requestedBookTitle: swapInfo.requestedBookTitle,
           serviceType: swapInfo.serviceType,
           status: swapInfo.status,
-          securityDeposit: swapInfo.securityDeposit
+          securityDeposit: swapInfo.securityDeposit,
+          ownerDeposit: swapInfo.ownerDeposit
         } : null
       });
     }
@@ -18588,6 +18595,24 @@ function logJourneyEvent(data) {
       if (RECEIVER_EVENTS[event] && !SENDER_EVENTS[event] && caller !== receiverEmail) {
         return { success: false, error: 'WRONG_PARTY', message: 'Only the reader waiting for the book can confirm that.' };
       }
+      // VMS (Oct 2026): no book leaves without its quality (and packing)
+      // video, and none is confirmed received without its unboxing video.
+      const vmsRoute = latestSwapRoute_(swapId);
+      const vmsMethod = vmsRoute ? vmsRoute.method : 'courier';
+      if ((event === 'dispatched' || event === 'handed_over') && caller === senderEmail) {
+        const missing = vmsMissing_(swap, leg, 'sender', vmsMethod);
+        if (missing.length) {
+          return { success: false, error: 'VIDEO_REQUIRED', missing: missing,
+            message: 'Record the ' + missing.map(k => VMS_KIND_LABELS[k]).join(' and the ') + ' first. They protect you if anything is disputed.' };
+        }
+      }
+      if (event === 'received' && caller === receiverEmail) {
+        const missingR = vmsMissing_(swap, leg, 'receiver', vmsMethod);
+        if (missingR.length) {
+          return { success: false, error: 'VIDEO_REQUIRED', missing: missingR,
+            message: 'Record the receiving / unboxing video before confirming — start recording before you open the parcel.' };
+        }
+      }
     }
 
     return appendJourneyEvent({
@@ -21195,6 +21220,12 @@ function stageAction(data, actionType) {
       // confirm — an upload of THEIR OWN must already exist for this stage.
       if (!mine || !mine.uploaded) {
         return { success: false, error: 'NO_UPLOAD', message: 'Upload evidence for this stage before confirming it.' };
+      }
+      // VMS (Oct 2026): the same videos the delivery timeline asks for.
+      const vmsGap = vmsStageMissing_(swap, stage, role);
+      if (vmsGap.length) {
+        return { success: false, error: 'VIDEO_REQUIRED', missing: vmsGap,
+          message: 'Record the ' + vmsGap.map(k => VMS_KIND_LABELS[k]).join(' and the ') + ' in the Delivery panel first.' };
       }
     }
 
@@ -23959,6 +23990,14 @@ function runReturnDeadlines() {
               id, 'ret_last_' + id + '_' + leg.leg + '_' + state.dueAt);
           }
         }
+        if ((leg.state === 'OVERDUE' || leg.state === 'RETURNED_LATE') && swapHasOpenDispute(id)) {
+          // A dispute is open: SwapSutra decides this deposit from the
+          // exchange videos (adminDecideDeposits) instead of the timer.
+          returnNotify_('swapsutra@gmail.com', 'return_overdue_disputed', 'Overdue return under dispute',
+            'Exchange ' + id + ' is past its return deadline but has an open dispute. Review the videos and decide the deposit.',
+            id, 'ret_overdue_disp_' + id + '_' + leg.leg, { whatsapp: false });
+          return;
+        }
         if (leg.state === 'OVERDUE' || leg.state === 'RETURNED_LATE') {
           const amount = Number(o[leg.deposit] || 0);
           const headers = ensureSheetHeaders(forfeitSheet, RETURN_FORFEIT_HEADERS);
@@ -24027,4 +24066,372 @@ function adminMarkForfeitPaid(data) {
     'SwapSutra has paid you ₹' + row.obj.amount + ' — the deposit forfeited when your book was not returned on time.',
     row.obj.swapId, 'ret_paid_' + row.obj.id);
   return { success: true };
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   VMS — VIDEO EVIDENCE FOR EVERY EXCHANGE (Oct 2026, owner's rules)
+   ────────────────────────────────────────────────────────────────────────
+   For every book that travels — swap (both books), rent, lend and sale,
+   on the way out and, where it comes back, on the way back:
+
+     the SENDER records   QUALITY   the book's condition, before it goes
+                          PACKING   packing the parcel (courier route only)
+     the RECEIVER records RECEIVING opening the parcel / checking the book
+
+   The delivery timeline will not accept "posted" / "handed over" until the
+   sender's videos are in, nor "received" until the receiver's video is.
+   If a dispute is raised, SwapSutra reviews these videos in the admin
+   console and decides each deposit: returned to the payer, or forfeited
+   (fully or partly) to the reader who is owed it. A forfeit becomes a
+   payout record (ReturnForfeits sheet), paid by UPI and marked paid there.
+
+   Upload: phones make videos far larger than the 4.5 MB a single request
+   can carry, so the app sends a video in 2.5 MB pieces. Each piece is
+   passed straight on to a Google Drive resumable upload session, so Apps
+   Script never holds the whole video in memory.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const VMS_VIDEO_SHEET = 'ExchangeVideos';
+const VMS_VIDEO_HEADERS = ['id', 'swapId', 'leg', 'kind', 'uploaderEmail', 'role', 'method', 'fileId', 'url', 'mimeType',
+  'sizeBytes', 'durationSec', 'recordedInApp', 'stampCode', 'createdAt'];
+const VMS_UPLOAD_SHEET = 'VmsUploads';
+const VMS_UPLOAD_HEADERS = ['id', 'swapId', 'leg', 'kind', 'uploaderEmail', 'mimeType', 'sizeBytes', 'totalChunks',
+  'nextIndex', 'sessionUrl', 'fileId', 'status', 'createdAt', 'updatedAt'];
+const VMS_CHUNK_BYTES = 2621440;           // 2.5 MB — a multiple of 256 KB, as Drive requires
+const VMS_MAX_BYTES = 80 * 1024 * 1024;    // 80 MB per video
+const VMS_ALLOWED_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v', 'video/3gpp'];
+const VMS_KIND_LABELS = { QUALITY: 'book quality video', PACKING: 'packing video', RECEIVING: 'receiving / unboxing video' };
+
+function getVmsVideoSheet_() { const s = getOrCreateSheet(VMS_VIDEO_SHEET, VMS_VIDEO_HEADERS); ensureSheetHeaders(s, VMS_VIDEO_HEADERS); return s; }
+function getVmsUploadSheet_() { const s = getOrCreateSheet(VMS_UPLOAD_SHEET, VMS_UPLOAD_HEADERS); ensureSheetHeaders(s, VMS_UPLOAD_HEADERS); return s; }
+
+/** The legs a book travels on for this exchange. */
+function vmsLegsFor_(swap) {
+  const type = String(swap.obj.serviceType || 'SWAP').toUpperCase();
+  const back = swapNeedsReturn(swap);
+  const legs = ['outbound'];
+  if (type === 'SWAP') legs.push('counter');
+  if (back) legs.push('return');
+  if (type === 'SWAP' && back) legs.push('counter_return');
+  return legs;
+}
+
+/** Which videos a leg needs: sender QUALITY (+ PACKING by courier), receiver RECEIVING. */
+function vmsKindsFor_(method) {
+  return {
+    sender: method === 'courier' ? ['QUALITY', 'PACKING'] : ['QUALITY'],
+    receiver: ['RECEIVING']
+  };
+}
+
+function vmsVideosForSwap_(swapId) {
+  return readSheetObjects_(getVmsVideoSheet_()).rows.map(r => r.obj).filter(v => String(v.swapId) === String(swapId));
+}
+
+/** Kinds this party still owes on this leg (empty = done). */
+function vmsMissing_(swap, leg, side, method, videos) {
+  const parties = journeyLegParties_(swap, leg);
+  const email = side === 'sender' ? parties.sender : parties.receiver;
+  const have = (videos || vmsVideosForSwap_(swap.obj.id)).filter(v =>
+    String(v.leg) === leg && normalizeEmail(v.uploaderEmail) === normalizeEmail(email));
+  return vmsKindsFor_(method)[side].filter(k => !have.some(v => v.kind === k));
+}
+
+/** Action: getExchangeVideos { swapId } — the checklist and every video, for either party or admin. */
+function getExchangeVideos(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  const admin = isAuthenticatedAdmin();
+  if (!admin && !callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+  const route = latestSwapRoute_(swap.obj.id);
+  const method = route ? route.method : '';
+  const videos = vmsVideosForSwap_(swap.obj.id);
+  const legs = vmsLegsFor_(swap).map(leg => {
+    const parties = journeyLegParties_(swap, leg);
+    const kinds = vmsKindsFor_(method || 'courier');
+    const item = (side, kind) => {
+      const email = side === 'sender' ? parties.sender : parties.receiver;
+      const v = videos.filter(x => String(x.leg) === leg && x.kind === kind && normalizeEmail(x.uploaderEmail) === normalizeEmail(email));
+      return {
+        side: side, kind: kind, label: VMS_KIND_LABELS[kind],
+        byYou: normalizeEmail(email) === caller,
+        done: v.length > 0,
+        videos: v.map(x => ({ id: x.id, url: x.url, at: x.createdAt, durationSec: Number(x.durationSec) || null, recordedInApp: String(x.recordedInApp) === 'true', stampCode: x.stampCode }))
+      };
+    };
+    return {
+      leg: leg,
+      youSend: parties.sender === caller,
+      youReceive: parties.receiver === caller,
+      items: kinds.sender.map(k => item('sender', k)).concat(kinds.receiver.map(k => item('receiver', k)))
+    };
+  });
+  return { success: true, swapId: swap.obj.id, routeMethod: method, legs: legs, stampCode: vmsStampCode_(swap.obj.id),
+    rule: 'Every book that travels needs three videos: its condition and its packing (sender) and its opening (receiver). In a dispute SwapSutra decides the deposit from these videos.' };
+}
+
+/** A short code the in-app recorder burns into every frame, tying a video to this exchange. */
+function vmsStampCode_(swapId) {
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, 'vms:' + String(swapId));
+  return 'SS-' + digest.slice(0, 3).map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('').toUpperCase();
+}
+
+/** Action: vmsStartUpload { swapId, leg, kind, mimeType, sizeBytes } */
+function vmsStartUpload(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+  if (!swapChatUnlocked(swap.obj.id)) {
+    return { success: false, error: 'SECURITY_FEE_PENDING', message: 'Videos unlock once both payments on this exchange are verified.' };
+  }
+  const route = latestSwapRoute_(swap.obj.id);
+  const routeMethod = route ? route.method : 'courier'; // no route yet: allow every video
+
+  const leg = String((data && data.leg) || '');
+  if (vmsLegsFor_(swap).indexOf(leg) === -1) return { success: false, message: 'That book does not travel on this exchange.' };
+  const kind = String((data && data.kind) || '').toUpperCase();
+  const parties = journeyLegParties_(swap, leg);
+  const side = parties.sender === caller ? 'sender' : parties.receiver === caller ? 'receiver' : '';
+  const allowed = side ? vmsKindsFor_(routeMethod)[side] : [];
+  if (allowed.indexOf(kind) === -1) {
+    return { success: false, error: 'WRONG_PARTY', message: side === 'sender'
+      ? 'As the sender you record the book quality' + (routeMethod === 'courier' ? ' and packing videos.' : ' video.')
+      : 'As the receiver you record the receiving / unboxing video.' };
+  }
+  const mimeType = String((data && data.mimeType) || '').split(';')[0].trim().toLowerCase();
+  if (VMS_ALLOWED_TYPES.indexOf(mimeType) === -1) return { success: false, message: 'Please record a video (MP4, WebM or MOV).' };
+  const size = Math.floor(Number(data && data.sizeBytes));
+  if (!(size > 0)) return { success: false, message: 'That video is empty.' };
+  if (size > VMS_MAX_BYTES) return { success: false, error: 'TOO_LARGE', message: 'Keep the video under ' + Math.round(VMS_MAX_BYTES / 1048576) + ' MB — about a minute is plenty.' };
+
+  const folder = getOrCreateFolder('ExchangeVideos_' + swap.obj.id);
+  const name = [swap.obj.id, leg, kind, caller.split('@')[0], new Date().toISOString()].join('_') + vmsExtension_(mimeType);
+  const res = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id', {
+    method: 'post',
+    contentType: 'application/json; charset=UTF-8',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'X-Upload-Content-Type': mimeType, 'X-Upload-Content-Length': String(size) },
+    payload: JSON.stringify({ name: name, parents: [folder.getId()], mimeType: mimeType }),
+    muteHttpExceptions: true
+  });
+  const h = res.getHeaders() || {};
+  const sessionUrl = h.Location || h.location || '';
+  if (res.getResponseCode() >= 300 || !sessionUrl) {
+    Logger.log('vmsStartUpload: Drive session failed ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 300));
+    return { success: false, message: 'The video store is not reachable right now. Please try again in a minute.' };
+  }
+  const sheet = getVmsUploadSheet_();
+  const headers = ensureSheetHeaders(sheet, VMS_UPLOAD_HEADERS);
+  const now = new Date();
+  const rec = {
+    id: generateId('SS_VUP_'), swapId: swap.obj.id, leg: leg, kind: kind, uploaderEmail: caller, mimeType: mimeType,
+    sizeBytes: size, totalChunks: Math.ceil(size / VMS_CHUNK_BYTES), nextIndex: 0, sessionUrl: sessionUrl,
+    status: 'UPLOADING', createdAt: now, updatedAt: now
+  };
+  sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  return { success: true, uploadId: rec.id, chunkBytes: VMS_CHUNK_BYTES, totalChunks: rec.totalChunks };
+}
+
+function vmsExtension_(mime) {
+  return { 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'video/x-m4v': '.m4v', 'video/3gpp': '.3gp' }[mime] || '.mp4';
+}
+
+/** Action: vmsUploadChunk { uploadId, index, data (base64 of the raw bytes) } — pieces go in order. */
+function vmsUploadChunk(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const sheet = getVmsUploadSheet_();
+  const t = readSheetObjects_(sheet);
+  const row = t.rows.find(r => String(r.obj.id) === String(data && data.uploadId));
+  if (!row) return { success: false, message: 'That upload has expired. Please record again.' };
+  const up = row.obj;
+  if (normalizeEmail(up.uploaderEmail) !== caller) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  if (up.status !== 'UPLOADING') return { success: false, message: 'That upload is already finished.' };
+  const index = Number(data && data.index);
+  if (index !== Number(up.nextIndex)) return { success: false, error: 'OUT_OF_ORDER', expected: Number(up.nextIndex), message: 'Pieces arrived out of order.' };
+  let bytes;
+  try { bytes = Utilities.base64Decode(String((data && data.data) || '')); } catch (e) { bytes = null; }
+  const size = Number(up.sizeBytes);
+  const start = index * VMS_CHUNK_BYTES;
+  const isLast = index === Number(up.totalChunks) - 1;
+  const expectedLen = isLast ? size - start : VMS_CHUNK_BYTES;
+  if (!bytes || bytes.length !== expectedLen) return { success: false, message: 'A piece of the video arrived damaged. Please try again.' };
+
+  const res = UrlFetchApp.fetch(up.sessionUrl, {
+    method: 'put', contentType: up.mimeType, payload: bytes, muteHttpExceptions: true,
+    headers: { 'Content-Range': 'bytes ' + start + '-' + (start + bytes.length - 1) + '/' + size }
+  });
+  const code = res.getResponseCode();
+  const set = (name, v) => { const i = t.headers.indexOf(name); if (i !== -1) sheet.getRange(row.rowIndex + 1, i + 1).setValue(v); };
+  if (code === 308 && !isLast) {
+    set('nextIndex', index + 1); set('updatedAt', new Date());
+    return { success: true, next: index + 1 };
+  }
+  if ((code === 200 || code === 201) && isLast) {
+    let fileId = '';
+    try { fileId = JSON.parse(res.getContentText()).id || ''; } catch (e) { fileId = ''; }
+    if (!fileId) return { success: false, message: 'The video was stored but could not be confirmed. Please try again.' };
+    set('fileId', fileId); set('nextIndex', index + 1); set('status', 'STORED'); set('updatedAt', new Date());
+    return { success: true, stored: true };
+  }
+  Logger.log('vmsUploadChunk: Drive answered ' + code + ' for piece ' + index + ': ' + res.getContentText().slice(0, 300));
+  set('status', 'FAILED');
+  return { success: false, message: 'The upload failed part-way. Please record and send again.' };
+}
+
+/** Action: vmsFinishUpload { uploadId, durationSec, recordedInApp } — registers the stored video. */
+function vmsFinishUpload(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const usheet = getVmsUploadSheet_();
+  const t = readSheetObjects_(usheet);
+  const row = t.rows.find(r => String(r.obj.id) === String(data && data.uploadId));
+  if (!row) return { success: false, message: 'That upload could not be found.' };
+  const up = row.obj;
+  if (normalizeEmail(up.uploaderEmail) !== caller) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  if (up.status !== 'STORED' || !up.fileId) return { success: false, message: 'The video has not finished uploading yet.' };
+
+  const swap = loadSwapForCirculation(up.swapId);
+  const route = latestSwapRoute_(up.swapId);
+  let url = '';
+  try {
+    const file = DriveApp.getFileById(up.fileId);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    url = file.getUrl();
+  } catch (e) {
+    return { success: false, message: 'The video was stored but could not be opened for viewing. Please try again.' };
+  }
+  const parties = journeyLegParties_(swap, up.leg);
+  const vsheet = getVmsVideoSheet_();
+  const headers = ensureSheetHeaders(vsheet, VMS_VIDEO_HEADERS);
+  const rec = {
+    id: generateId('SS_VID_'), swapId: up.swapId, leg: up.leg, kind: up.kind, uploaderEmail: caller,
+    role: parties.sender === caller ? 'sender' : 'receiver', method: route ? route.method : '',
+    fileId: up.fileId, url: url, mimeType: up.mimeType, sizeBytes: up.sizeBytes,
+    durationSec: Math.max(0, Math.round(Number(data && data.durationSec) || 0)),
+    recordedInApp: data && (data.recordedInApp === true || data.recordedInApp === 'true') ? 'true' : 'false',
+    stampCode: vmsStampCode_(up.swapId), createdAt: new Date()
+  };
+  vsheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  const set = (name, v) => { const i = t.headers.indexOf(name); if (i !== -1) usheet.getRange(row.rowIndex + 1, i + 1).setValue(v); };
+  set('status', 'DONE'); set('sessionUrl', ''); set('updatedAt', new Date());
+
+  try {
+    const chat = findChatBySwapId(up.swapId);
+    const chatId = chat && (chat.chatId || chat.id);
+    if (chatId) {
+      sendChatMessage({ chatId: chatId, senderEmail: 'swapsutra@gmail.com', senderRole: 'Admin',
+        message: '🎥 ' + caller.split('@')[0] + ' recorded the ' + VMS_KIND_LABELS[up.kind] + '. It is saved with this exchange in case it is ever needed.' });
+    }
+  } catch (e) { Logger.log('vmsFinishUpload chat notice failed: ' + e); }
+  return { success: true, video: { id: rec.id, url: url, kind: rec.kind, leg: rec.leg } };
+}
+
+
+/**
+ * The videos a party still owes before confirming a Stages-panel stage:
+ *   HANDOVER — the sender's videos on each leg going OUT that they send
+ *   RECEIPT  — the receiver's video on each leg going OUT that they receive
+ *   RETURN   — both, on each leg coming BACK, by their role on it
+ * Without an agreed route the exchange is treated as in person (quality
+ * video only for the sender), since there is no parcel to pack.
+ */
+function vmsStageMissing_(swap, stage, role) {
+  const legs = vmsLegsFor_(swap);
+  const out = legs.filter(l => l === 'outbound' || l === 'counter');
+  const back = legs.filter(l => l === 'return' || l === 'counter_return');
+  const route = latestSwapRoute_(swap.obj.id);
+  const method = route ? route.method : 'in_person';
+  const email = role === 'owner' ? swap.ownerEmail : swap.requesterEmail;
+  const videos = vmsVideosForSwap_(swap.obj.id);
+  const missing = [];
+  const add = (leg, side) => vmsMissing_(swap, leg, side, method, videos).forEach(k => { if (missing.indexOf(k) === -1) missing.push(k); });
+  (stage === 'RETURN' ? back : out).forEach(leg => {
+    const p = journeyLegParties_(swap, leg);
+    if ((stage === 'HANDOVER' || stage === 'RETURN') && p.sender === email) add(leg, 'sender');
+    if ((stage === 'RECEIPT' || stage === 'RETURN') && p.receiver === email) add(leg, 'receiver');
+  });
+  return missing;
+}
+
+/**
+ * Admin action: adminDecideDeposits { swapId, disputeId?, decisions: [{ payerRole, outcome, amount?, reason }] }
+ *
+ * After reviewing the exchange's videos, SwapSutra decides each deposit:
+ *   REFUND   — goes back to the reader who paid it
+ *   FORFEIT  — goes to the other reader, in full or (with amount) in part;
+ *              any rest is refunded
+ * Every forfeit becomes a payout record in ReturnForfeits (shown in Admin →
+ * Payments → "Deposits to pay out"); both readers are told the decision.
+ * SwapSutra moves the money by UPI and marks each payout paid.
+ */
+function adminDecideDeposits(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  const decisions = Array.isArray(data && data.decisions) ? data.decisions : [];
+  if (!decisions.length) return { success: false, message: 'Choose what happens to each deposit.' };
+
+  const deposits = { requester: Number(swap.obj.securityDeposit || 0), owner: Number(swap.obj.ownerDeposit || 0) };
+  const emailOf = { requester: swap.requesterEmail, owner: swap.ownerEmail };
+  const disputeId = String((data && data.disputeId) || '').trim();
+  const title = String(swap.obj.requestedBookTitle || 'the book');
+  const sheet = getReturnForfeitSheet_();
+  const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
+  const existing = readSheetObjects_(sheet).rows.map(r => r.obj);
+  const results = [];
+
+  for (let i = 0; i < decisions.length; i++) {
+    const d = decisions[i] || {};
+    const payerRole = d.payerRole === 'owner' ? 'owner' : d.payerRole === 'requester' ? 'requester' : '';
+    if (!payerRole) return { success: false, message: 'Each decision needs the deposit it is about.' };
+    const held = deposits[payerRole];
+    if (!(held > 0)) return { success: false, message: 'There is no ' + payerRole + ' deposit on this exchange.' };
+    const outcome = String(d.outcome || '').toUpperCase();
+    const reason = String(d.reason || '').trim().slice(0, 500);
+    if (!reason) return { success: false, message: 'Write the reason for each decision — both readers will see it.' };
+    const leg = 'dispute:' + (disputeId || 'review') + ':' + payerRole;
+    if (existing.some(f => String(f.swapId) === String(swap.obj.id) && String(f.leg) === leg)) {
+      return { success: false, message: 'The ' + payerRole + ' deposit on this exchange has already been decided.' };
+    }
+    let forfeit = 0;
+    if (outcome === 'FORFEIT') {
+      forfeit = d.amount === undefined || d.amount === '' || d.amount === null ? held : Math.round(Number(d.amount));
+      if (!(forfeit > 0) || forfeit > held) return { success: false, message: 'The amount to forfeit must be between ₹1 and ₹' + held + '.' };
+    } else if (outcome !== 'REFUND') {
+      return { success: false, message: 'Each deposit is either refunded or forfeited.' };
+    }
+    const payer = emailOf[payerRole];
+    const other = emailOf[payerRole === 'owner' ? 'requester' : 'owner'];
+    if (forfeit > 0) {
+      const rec = {
+        id: generateId('SS_FORFEIT_'), swapId: swap.obj.id, leg: leg, bookTitle: title,
+        defaulterEmail: payer, ownerEmail: other, amount: forfeit, dueAt: '', forfeitedAt: new Date(),
+        payoutStatus: 'TO_PAY_OWNER', note: 'Dispute decision: ' + reason
+      };
+      sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+      existing.push(rec);
+    } else {
+      const rec = {
+        id: generateId('SS_FORFEIT_'), swapId: swap.obj.id, leg: leg, bookTitle: title,
+        defaulterEmail: '', ownerEmail: payer, amount: 0, dueAt: '', forfeitedAt: new Date(),
+        payoutStatus: 'NO_DEPOSIT', note: 'Dispute decision: deposit refunded — ' + reason
+      };
+      sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+      existing.push(rec);
+    }
+    const refund = held - forfeit;
+    const message = forfeit > 0
+      ? '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
+      : 'The ₹' + held + ' deposit is refunded in full. Reason: ' + reason;
+    [payer, other].forEach(email => returnNotify_(email, 'deposit_decided', 'Decision on the security deposit',
+      'After reviewing the exchange videos for "' + title + '": ' + message, swap.obj.id, 'dep_dec_' + leg));
+    results.push({ payerRole: payerRole, held: held, forfeit: forfeit, refund: refund });
+  }
+  try {
+    appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'system', actionType: 'deposit_decided',
+      actorEmail: normalizeEmail(getAuthenticatedEmail()),
+      note: results.map(r => r.payerRole + ': forfeit ₹' + r.forfeit + ', refund ₹' + r.refund).join('; ') });
+  } catch (e) { /* the payout records are the source of truth */ }
+  return { success: true, results: results, message: 'Decision recorded. Forfeits are in Deposits to pay out.' };
 }

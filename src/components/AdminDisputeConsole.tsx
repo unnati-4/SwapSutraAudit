@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {apiUrl} from '../config/runtime';
+import AdminVmsReview from './AdminVmsReview';
 
 /**
  * Admin dispute console — the resolution workflow disputeSwapRequest's
@@ -195,6 +196,16 @@ export default function AdminDisputeConsole() {
 
               {isOpenRow && (
                 <div className="pt-3 border-t border-brand-border/40 space-y-3">
+                  {/* Oct 2026: review the exchange's videos, then decide each deposit. */}
+                  <AdminVmsReview
+                    swapId={d.swapId}
+                    disputeId={d.id}
+                    requesterEmail={d.swap?.requesterEmail}
+                    ownerEmail={d.swap?.ownerEmail}
+                    requesterDeposit={Number(d.swap?.securityDeposit || 0)}
+                    ownerDeposit={Number((d.swap as any)?.ownerDeposit || 0)}
+                  />
+                  <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)] pt-2">Close the dispute</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <select
                       value={draft.resolutionStatus}
@@ -229,9 +240,8 @@ export default function AdminDisputeConsole() {
                     className="input-classic !py-2 text-xs w-full bg-[var(--bg-page)]"
                   />
                   <p className="text-2xs text-[var(--text-secondary)] italic leading-relaxed">
-                    This records the decision. SwapSutra does not hold deposit money — a PARTIAL_DEDUCTION or
-                    FULL_FORFEIT outcome still needs the actual refund handled the way markRefundIssued already
-                    does, per the current interim (non-escrow) deposit arrangement.
+                    Decide the deposits above first; forfeits appear in Admin → Payments → Deposits to pay out. This
+                    closes the dispute and sends both readers the note.
                   </p>
                   <button
                     type="button"

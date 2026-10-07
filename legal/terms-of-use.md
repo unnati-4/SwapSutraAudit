@@ -113,6 +113,8 @@ You may list a book only if **all** of the following are true:
 
 **Returns are strict.** A rented, lent or temporarily swapped book must be on its way back within 21 days of reaching the borrower (+7 or +14 days if both readers agree, 14 at most), or the borrower's 65% MRP security deposit is forfeited and paid to the owner. See the [Refund & Security Deposit Policy](/refund-policy).
 
+**Video evidence.** For every exchange, the sender records the book's condition (and its packing, if sent by courier) and the receiver records opening it, in the app. SwapSutra decides deposit disputes from these videos. See the [Refund & Security Deposit Policy](/refund-policy).
+
 Every listing is reviewed by a curator before it goes live. We may reject or remove any listing at our discretion, including for poor image quality, incomplete details, suspected inauthenticity, or content that breaches our [Community Guidelines](/community-guidelines).
 
 **Lending, renting, swapping and selling your own legally purchased physical books is lawful in India.** Once a copy has been sold, the copyright owner's control over that particular copy is exhausted. What is *not* permitted — and what will get you removed — is circulating reproductions: photocopies, scans, or PDFs.

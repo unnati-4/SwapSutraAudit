@@ -5961,7 +5961,7 @@ const ChatModal = memo(({
               <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6 sm:space-y-10">
                 <div className="text-center space-y-2">
                   <h3 className="font-serif text-2xl text-[var(--text-primary)]">Condition Protection</h3>
-                  <p className="text-2xs text-[var(--text-secondary)] uppercase tracking-widest font-bold">Evidence based book swap for safety</p>
+                  <p className="text-2xs text-[var(--text-secondary)] uppercase tracking-widest font-bold">Video evidence for every book — quality, packing, receiving</p>
                 </div>
 
                 {chatLocked && (
@@ -6002,176 +6002,11 @@ const ChatModal = memo(({
                   <RateCounterparty swapId={String(currentChat.swapId)} />
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* Phase 1: Owner Pre-Handover */}
-                  <div className="bg-[var(--bg-surface)] p-6 rounded-3xl border border-brand-border shadow-sm flex flex-col">
-                    <div className="flex items-center gap-3 mb-4">
-                       <span className="w-8 h-8 rounded-full bg-brand-brown text-white flex items-center justify-center font-bold text-xs italic">1</span>
-                       <h4 className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Owner Pre-Handover</h4>
-                    </div>
-                    <p className="text-2xs text-[var(--text-secondary)] italic mb-4">Required: 3 Images + 1 Video</p>
-                    
-                    <div className="grid grid-cols-2 gap-2 mb-4">
-                      {phaseProofs('owner_pre_handover').map(p => (
-                        <div key={p.id} className="aspect-square rounded-xl overflow-hidden border border-brand-border group relative">
-                          {p.mediaType === 'video' ? (
-                            <div className="w-full h-full bg-black/10 flex items-center justify-center">
-                               <Icons.Film className="text-brand-gold-text/40" size={24} />
-                               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                  <a href={p.mediaUrl} target="_blank" rel="noreferrer" className="text-[var(--text-primary)] text-2xs font-bold uppercase tracking-widest bg-brand-gold px-2 py-1 rounded">View</a>
-                               </div>
-                            </div>
-                          ) : (
-                            <img src={normalizeImageUrl(p.mediaUrl)} alt="Owner handover proof" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                          )}
-                        </div>
-                      ))}
-                    {isOwner && chatStatus === 'Active' && !isArchived && (
-                      <label className="aspect-square rounded-xl border-2 border-dashed border-brand-border flex flex-col items-center justify-center cursor-pointer hover:bg-[var(--bg-surface-inset)]/60 text-brand-gold-text">
-                        <input type="file" className="hidden" accept="image/*,video/*" onChange={(e) => handleUploadProof(e, 'owner_pre_handover')} disabled={!!uploading} />
-                        {uploading === 'owner_pre_handover' ? <Icons.Loader className="animate-spin" size={16} /> : <Icons.Plus size={16} />}
-                        <span className="text-2xs font-bold mt-1">Add</span>
-                      </label>
-                    )}
-                    </div>
-
-                    <button
-                      disabled={!isOwner}
-                      onClick={() => handleMarkSwapAction('handover')}
-                      className={`w-full py-4 rounded-xl text-2xs font-bold uppercase tracking-widest transition-all ${
-                        isOwner
-                          ? 'bg-brand-gold text-[var(--text-primary)] shadow-lg hover:bg-brand-brown hover:text-brand-offwhite'
-                          : 'bg-[var(--bg-surface-inset)]/50 text-[var(--text-secondary)] opacity-50 cursor-not-allowed'
-                      }`}
-                    >
-                      Go to Stages Tab to Confirm Handover
-                    </button>
-                  </div>
-
-                  {/* Phase 2: Requester Received */}
-                  <div className="bg-[var(--bg-surface)] p-6 rounded-3xl border border-brand-border shadow-sm flex flex-col">
-                    <div className="flex items-center gap-3 mb-4">
-                       <span className="w-8 h-8 rounded-full bg-brand-gold text-[var(--text-primary)] flex items-center justify-center font-bold text-xs italic">2</span>
-                       <h4 className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Requester Received Proof</h4>
-                    </div>
-                    <p className="text-2xs text-[var(--text-secondary)] italic mb-4">Required: 2 Images + 1 Video</p>
-                    
-                    <div className="grid grid-cols-2 gap-2 mb-4">
-                      {phaseProofs('requester_received').map(p => (
-                        <div key={p.id} className="aspect-square rounded-xl overflow-hidden border border-brand-border group relative">
-                           {p.mediaType === 'video' ? (
-                              <div className="w-full h-full bg-black/10 flex items-center justify-center">
-                                 <Icons.Film className="text-brand-gold-text/40" size={24} />
-                                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <a href={p.mediaUrl} target="_blank" rel="noreferrer" className="text-[var(--text-primary)] text-2xs font-bold uppercase tracking-widest bg-brand-gold px-2 py-1 rounded">View</a>
-                                 </div>
-                              </div>
-                           ) : (
-                             <img src={normalizeImageUrl(p.mediaUrl)} alt="Requester received proof" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                           )}
-                        </div>
-                      ))}
-                    {isRequester && chatStatus === 'Handed Over' && !isArchived && (
-                      <label className="aspect-square rounded-xl border-2 border-dashed border-brand-border flex flex-col items-center justify-center cursor-pointer hover:bg-[var(--bg-surface-inset)]/60 text-brand-gold-text">
-                        <input type="file" className="hidden" accept="image/*,video/*" onChange={(e) => handleUploadProof(e, 'requester_received')} disabled={!!uploading} />
-                        {uploading === 'requester_received' ? <Icons.Loader className="animate-spin" size={16} /> : <Icons.Plus size={16} />}
-                        <span className="text-2xs font-bold mt-1">Add</span>
-                      </label>
-                    )}
-                    </div>
-                    {chatStatus === 'Active' && <p className="text-2xs text-[var(--text-secondary)] italic text-center mt-auto opacity-60">Waiting for handover...</p>}
-                  </div>
-
-                  {/* Phase 3: Requester Pre-Return */}
-                  <div className="bg-[var(--bg-surface)] p-6 rounded-3xl border border-brand-border shadow-sm flex flex-col">
-                    <div className="flex items-center gap-3 mb-4">
-                       <span className="w-8 h-8 rounded-full bg-brand-brown text-white flex items-center justify-center font-bold text-xs italic">3</span>
-                       <h4 className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Requester Pre-Return</h4>
-                    </div>
-                    <p className="text-2xs text-[var(--text-secondary)] italic mb-4">Required: 3 Images + 1 Video</p>
-                    
-                    <div className="grid grid-cols-2 gap-2 mb-4">
-                      {phaseProofs('requester_pre_return').map(p => (
-                        <div key={p.id} className="aspect-square rounded-xl overflow-hidden border border-brand-border group relative">
-                          {p.mediaType === 'video' ? (
-                             <div className="w-full h-full bg-black/10 flex items-center justify-center">
-                                <Icons.Film className="text-brand-gold-text/40" size={24} />
-                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                   <a href={p.mediaUrl} target="_blank" rel="noreferrer" className="text-[var(--text-primary)] text-2xs font-bold uppercase tracking-widest bg-brand-gold px-2 py-1 rounded">View</a>
-                                </div>
-                             </div>
-                          ) : (
-                            <img src={normalizeImageUrl(p.mediaUrl)} alt="Requester pre-return proof" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                          )}
-                        </div>
-                      ))}
-                    {isRequester && (chatStatus === 'Handed Over' || chatStatus === 'Returned') && !isArchived && (
-                      <label className="aspect-square rounded-xl border-2 border-dashed border-brand-border flex flex-col items-center justify-center cursor-pointer hover:bg-[var(--bg-surface-inset)]/60 text-brand-gold-text">
-                        <input type="file" className="hidden" accept="image/*,video/*" onChange={(e) => handleUploadProof(e, 'requester_pre_return')} disabled={!!uploading} />
-                        {uploading === 'requester_pre_return' ? <Icons.Loader className="animate-spin" size={16} /> : <Icons.Plus size={16} />}
-                        <span className="text-2xs font-bold mt-1">Add</span>
-                      </label>
-                    )}
-                    </div>
-
-                    <button
-                      disabled={!isRequester}
-                      onClick={() => handleMarkSwapAction('return')}
-                      className={`w-full py-4 rounded-xl text-2xs font-bold uppercase tracking-widest transition-all ${
-                        isRequester
-                          ? 'bg-brand-brown text-white shadow-lg hover:bg-black'
-                          : 'bg-[var(--bg-surface-inset)]/50 text-[var(--text-secondary)] opacity-50 cursor-not-allowed'
-                      }`}
-                    >
-                      Go to Stages Tab to Confirm Return
-                    </button>
-                  </div>
-
-                  {/* Phase 4: Owner Received Return */}
-                  <div className="bg-[var(--bg-surface)] p-6 rounded-3xl border border-brand-border shadow-sm flex flex-col">
-                    <div className="flex items-center gap-3 mb-4">
-                       <span className="w-8 h-8 rounded-full bg-brand-gold text-[var(--text-primary)] flex items-center justify-center font-bold text-xs italic">4</span>
-                       <h4 className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Owner Return Received</h4>
-                    </div>
-                    <p className="text-2xs text-[var(--text-secondary)] italic mb-4">Required: 2 Images + 1 Video</p>
-                    
-                    <div className="grid grid-cols-2 gap-2 mb-4">
-                      {phaseProofs('owner_received_return').map(p => (
-                        <div key={p.id} className="aspect-square rounded-xl overflow-hidden border border-brand-border group relative">
-                           {p.mediaType === 'video' ? (
-                              <div className="w-full h-full bg-black/10 flex items-center justify-center">
-                                 <Icons.Film className="text-brand-gold-text/40" size={24} />
-                                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <a href={p.mediaUrl} target="_blank" rel="noreferrer" className="text-[var(--text-primary)] text-2xs font-bold uppercase tracking-widest bg-brand-gold px-2 py-1 rounded">View</a>
-                                 </div>
-                              </div>
-                           ) : (
-                             <img src={normalizeImageUrl(p.mediaUrl)} alt="Owner return received proof" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                           )}
-                        </div>
-                      ))}
-                      {isOwner && (chatStatus === 'Returned' || chatStatus === 'Completed') && !isArchived && (
-                        <label className="aspect-square rounded-xl border-2 border-dashed border-brand-border flex flex-col items-center justify-center cursor-pointer hover:bg-[var(--bg-surface-inset)]/60 text-brand-gold-text">
-                          <input type="file" className="hidden" accept="image/*,video/*" onChange={(e) => handleUploadProof(e, 'owner_received_return')} disabled={!!uploading} />
-                          {uploading === 'owner_received_return' ? <Icons.Loader className="animate-spin" size={16} /> : <Icons.Plus size={16} />}
-                          <span className="text-2xs font-bold mt-1">Add</span>
-                        </label>
-                      )}
-                    </div>
-
-                    <button
-                      disabled={!isOwner || isArchived}
-                      onClick={() => handleMarkSwapAction('confirm_return')}
-                      className={`w-full py-4 rounded-xl text-2xs font-bold uppercase tracking-widest transition-all ${
-                        isOwner && !isArchived
-                          ? 'bg-brand-gold text-[var(--text-primary)] shadow-lg hover:bg-brand-brown hover:text-brand-offwhite'
-                          : 'bg-[var(--bg-surface-inset)]/50 text-[var(--text-secondary)] opacity-50 cursor-not-allowed'
-                      }`}
-                    >
-                      Go to Stages Tab to Confirm Receipt
-                    </button>
-                  </div>
-                </div>
+                {/* The four photo "proof phases" that lived here were replaced
+                    on 7 Oct (owner's request) by the video evidence system:
+                    quality, packing and receiving videos for every book, in the
+                    Delivery panel above. Old proofs still appear in the
+                    timeline and in the admin dispute review. */}
 
                 <div className="space-y-4">
                   {/* Admin Controls */}
@@ -16557,12 +16392,11 @@ export default function App() {
               className="space-y-8 sm:space-y-12 pb-24"
             >
               <div className="max-w-4xl mx-auto">
-                <div className="text-center mb-5 sm:mb-16">
+                <div className={isShelfView ? "text-center mb-4 sm:mb-6" : "text-center mb-5 sm:mb-16"}>
                   {isShelfView ? (
-                    <>
-                      <h2 className="text-3xl sm:text-5xl font-serif text-[var(--text-secondary)] tracking-tighter italic">My <br className="hidden sm:block" /><span className="not-italic text-[var(--text-muted)] opacity-80">Shelf</span></h2>
-                      <p className="hidden sm:block mt-4 text-[var(--text-muted)] text-sm font-medium italic opacity-70">"The books you share, and the ones you're reading."</p>
-                    </>
+                    // 7 Oct (owner's request): a one-line heading — the shelf
+                    // itself is what this page is for.
+                    <h2 className="text-2xl sm:text-3xl font-serif text-[var(--text-primary)] tracking-tight">My Shelf</h2>
                   ) : (
                     <>
                       <h2 className="text-3xl sm:text-5xl font-serif text-[var(--text-secondary)] tracking-tighter italic">My <br className="hidden sm:block" /><span className="not-italic text-[var(--text-muted)] opacity-80">Reading Space</span></h2>
@@ -16571,7 +16405,8 @@ export default function App() {
                   )}
                   {/* A badge from the last meetup is the first thing a reader
                       should see when they open their own profile. */}
-                  {!!(profileData as any)?.awardedBadges?.length && (
+                  {/* Badges belong to the profile, not the shelf (7 Oct). */}
+                  {!isShelfView && !!(profileData as any)?.awardedBadges?.length && (
                     <div className="mt-6">
                       <AwardedBadges badges={(profileData as any).awardedBadges} />
                     </div>
@@ -17382,29 +17217,27 @@ export default function App() {
                             );
                           })()}
                           {(() => {
-                            // Listings that went live with only a front cover.
+                            // 7 Oct (owner's request): the big "N listings need a few
+                            // more photos" panel is gone. Only a book offered for SALE
+                            // still asks for its inside photos — a buyer pays for that
+                            // copy sight unseen — and the ask is one slim line.
                             const unfinished = ownedProfileBooks.filter((b: any) =>
-                              String(b.status || '').toLowerCase() !== 'removed' && listingPhotoGaps(b).length > 0);
+                              String(b.status || '').toLowerCase() !== 'removed'
+                              && bookAvailabilityFromBook(b).sell
+                              && listingPhotoGaps(b).length > 0);
                             if (!unfinished.length) return null;
                             return (
-                              <div data-testid="my-books-finish-prompt" className="rounded-3xl border border-brand-gold/40 bg-brand-gold/10 p-5 space-y-3">
-                                <p className="text-sm font-semibold text-[var(--text-primary)]">
-                                  {unfinished.length === 1 ? '1 listing needs' : `${unfinished.length} listings need`} a few more photos
-                                </p>
-                                <ul className="space-y-2">
-                                  {unfinished.map((b: any) => (
-                                    <li key={b.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-[var(--bg-surface)] px-4 py-3">
-                                      <span className="min-w-0 text-xs text-[var(--text-primary)]">
-                                        <b className="font-serif text-sm">{b.title}</b>
-                                        <span className="block text-[var(--text-secondary)]">Add {listingPhotoGapText(listingPhotoGaps(b))} to finish your listing</span>
-                                      </span>
-                                      <button type="button" onClick={() => setFinishingBook(b)}
-                                        className="btn-primary shrink-0 !py-2 !px-4 text-2xs uppercase tracking-widest">
-                                        Add photos
-                                      </button>
-                                    </li>
-                                  ))}
-                                </ul>
+                              <div data-testid="my-books-finish-prompt" className="flex flex-wrap items-center gap-2 rounded-2xl border border-brand-gold/30 bg-brand-gold/5 px-4 py-2.5">
+                                <span className="text-xs text-[var(--text-secondary)]">
+                                  {unfinished.length === 1 ? 'A book you\u2019re selling needs' : `${unfinished.length} books you\u2019re selling need`} inside photos:
+                                </span>
+                                {unfinished.map((b: any) => (
+                                  <button key={b.id} type="button" onClick={() => setFinishingBook(b)}
+                                    className="rounded-full border border-brand-border bg-[var(--bg-surface)] px-3 py-1 text-xs text-[var(--text-primary)] hover:border-brand-gold max-w-[14rem] truncate"
+                                    title={`Add photos to ${b.title}`}>
+                                    + {b.title}
+                                  </button>
+                                ))}
                               </div>
                             );
                           })()}
@@ -19114,6 +18947,7 @@ export default function App() {
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed italic">
                           If the owner accepts, you each pay a ₹10 platform fee — plus your refundable deposit, if this swap has one — by UPI from the exchange's Stages tab. Your chat opens once SwapSutra verifies both payments.
                         </p>
+                        <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book needs three short videos in the app: its condition and its packing (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides the deposit from these videos.</p>
                       </div>
                     </div>
                   )}
@@ -19206,6 +19040,7 @@ export default function App() {
                   </div>
                 </div>
                 {showServiceModal.serviceType === 'RENT' && <ReturnRuleNotice />}
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book needs three short videos in the app: its condition and its packing (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides the deposit from these videos.</p>
 
                 <textarea name="notes" placeholder={`A message for the owner (optional)...`} className="input-classic bg-[var(--input-bg)]" rows={2}></textarea>
 

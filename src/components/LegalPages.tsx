@@ -262,6 +262,7 @@ export const RefundPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
     </S>
 
     <S title="Security deposits">
+      <p><strong>Video evidence.</strong> For every book that travels — in a swap, a rental, a loan or a sale, on the way out and on the way back — the sender records a video of the book&rsquo;s condition and, if it goes by courier, of packing it; the receiver records opening the parcel or checking the book. These are recorded in the app and kept with the exchange. A book cannot be marked as posted, handed over or received without them. If a dispute is raised, SwapSutra reviews these videos and decides the security deposit: it is refunded, or forfeited in full or in part to the reader who is owed it.</p>
       <p>For a swap, a rental or a loan, the reader receiving a book pays a refundable deposit of 65% of its printed MRP. A purchase has no deposit. A borrowed book must be on its way back within <strong>21 days</strong> of reaching the borrower (handed over, or posted with the courier name and tracking ID). Both readers may agree to extend by +7 or +14 days, 14 at most. If it isn't on its way back by the deadline, the deposit is forfeited and paid to the book's owner.</p>
       <UL items={[
         <><strong>Returned in full within 48 hours</strong> after both readers confirm the book is back in good condition, or if the exchange is cancelled before handover.</>,
