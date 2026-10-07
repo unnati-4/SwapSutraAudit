@@ -189,7 +189,7 @@ export default function PricingAdmin({ adminEmail, sessionToken }:
                   ['Printed MRP', quote.mrp],
                   ['May list for', `${quote.sell.allowed_min}–${quote.sell.allowed_max}`],
                   ['Reference value', quote.reference_price],
-                  ['Deposit 60%', quote.deposit],
+                  ['Deposit (server rate)', quote.deposit],
                 ].map(([k, v]) => (
                   <div key={String(k)}>
                     <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">{k}</p>

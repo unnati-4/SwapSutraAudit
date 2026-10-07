@@ -174,19 +174,22 @@ const A = { id: 'a', mrp: 200 };    // cheap novel
 const B = { id: 'b', mrp: 2000 };   // expensive textbook
 const swap = run(`computeMutualDeposit(${JSON.stringify(B)}, ${JSON.stringify(A)}, 'SWAP')`);
 
-check('20. The requester deposits 60% of the book they are receiving',
-  swap.requesterDeposit === 1200);
-check('21. The owner deposits 60% of the book they are receiving',
-  swap.ownerDeposit === 120);
+// Oct 2026: security is a flat 65% of MRP (owner's decision), not 60%.
+check('20. The requester deposits 65% of the book they are receiving',
+  swap.requesterDeposit === 1300);
+check('21. The owner deposits 65% of the book they are receiving',
+  swap.ownerDeposit === 130);
 check('22. The two deposits are deliberately asymmetric, following the two book values',
   swap.requesterDeposit !== swap.ownerDeposit);
 
 const rent = run(`computeMutualDeposit(${JSON.stringify(B)}, null, 'RENT')`);
 check('23. A rental moves one book, so only the renter deposits',
-  rent.requesterDeposit === 1200 && rent.ownerDeposit === 0);
+  rent.requesterDeposit === 1300 && rent.ownerDeposit === 0);
 
 const sell = run(`computeMutualDeposit(${JSON.stringify(B)}, null, 'SELL')`);
 check('24. A sale has no owner deposit either', sell.ownerDeposit === 0);
+// Oct 2026: and no buyer deposit — a sale takes no security at all.
+check('24b. A sale takes no buyer deposit', sell.requesterDeposit === 0);
 
 // This test used to assert that lending is two-way, and it was asserting a
 // bug. LEND meant "temporary swap" back then — the two were the same code
@@ -196,10 +199,10 @@ check('24. A sale has no owner deposit either', sell.ownerDeposit === 0);
 // deposit meant asking someone for money to lend their own book.
 const lend = run(`computeMutualDeposit(${JSON.stringify(B)}, ${JSON.stringify(A)}, 'LEND')`);
 check('25. Lending is one-way, so only the borrower deposits',
-  lend.requesterDeposit === 1200 && lend.ownerDeposit === 0,
+  lend.requesterDeposit === 1300 && lend.ownerDeposit === 0,
   JSON.stringify({ requester: lend.requesterDeposit, owner: lend.ownerDeposit }));
 check('25b. A swap is still two-way — the two are no longer the same path',
-  swap.requesterDeposit === 1200 && swap.ownerDeposit === 120);
+  swap.requesterDeposit === 1300 && swap.ownerDeposit === 130);
 
 // The first version of this test expected 0 and failed, which was the
 // test being wrong rather than the code: a book with nothing to go on
@@ -208,7 +211,7 @@ check('25b. A swap is still two-way — the two are no longer the same path',
 // the number is real.
 const noPrice = run(`computeMutualDeposit({ id: 'x' }, null, 'RENT')`);
 check('26. A book with no ISBN and no genre still yields a real deposit, never NaN',
-  Number.isFinite(noPrice.requesterDeposit) && noPrice.requesterDeposit === 150);
+  Number.isFinite(noPrice.requesterDeposit) && noPrice.requesterDeposit === 163); // 65% of ₹250
 // 150 rather than 270 because a row with no edition reads as NOT_SURE,
 // which takes the cheapest tier of the generic "Other" rate (Rs.250), not
 // its paperback (Rs.450). That is the right way round: the less the
@@ -217,7 +220,7 @@ check('27. Knowing nothing about a book produces the CHEAPEST generic rate, not 
   noPrice.requestedBookValue === 250);
 
 check('28. Rounding lands on whole rupees',
-  Number.isInteger(run(`depositFor(195)`)) && run('depositFor(195)') === 117);
+  Number.isInteger(run(`depositFor(195)`)) && run('depositFor(195)') === 127); // 65% of ₹195 = 126.75
 
 // ─────────────────────────────────────────── the client cannot set a price
 console.log('\n--- The client cannot supply an amount ---');
@@ -240,7 +243,7 @@ check('31. createSwapRequest no longer accepts data.securityDeposit',
   !/data\.securityDeposit/.test(src));
 
 check('32. The deposit rate is defined once, not repeated as a literal',
-  /const DEPOSIT_RATE = 0\.6;/.test(src));
+  /const DEPOSIT_RATE = 0\.65;/.test(src));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

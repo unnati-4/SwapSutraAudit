@@ -3217,6 +3217,7 @@ function doGetHandler_(e) {
     if (action === 'getAmbassadorStanding') return respondJson(getAmbassadorStanding(e.parameter));
     if (action === 'getAmbassadorLeaderboard') return respondJson(getAmbassadorLeaderboard(e.parameter));
     if (action === 'getSwapJourney') return respondJson(getSwapJourney(e.parameter));
+    if (action === 'getReturnStatus') return respondJson(getReturnStatus(e.parameter));
     if (action === 'getDeliveryAddress') return respondJson(getDeliveryAddress(e.parameter));
     if (action === 'getSwapTimeline') return respondJson(getSwapTimeline(e.parameter));
     if (action === 'getRatingPromptStatus') return respondJson(getRatingPromptStatus(e.parameter));
@@ -5860,6 +5861,8 @@ function getBookHeaders() {
     // and priceBasis are kept so a listing that fell back to a genre rate
     // can be found later and given a real ISBN row.
     "bookFormat", "bookEdition", "priceTier", "priceBasis",
+    // Oct 2026: the owner's own asking price and monthly rent.
+    "ownerSellPrice", "ownerRentPerMonth",
 
     // ── Authenticity ──────────────────────────────────────────────────
     // ORIGINAL / UNAUTHORISED / UNKNOWN, shown to every reader who sees
@@ -6406,6 +6409,13 @@ function doPostHandler_(e) {
     if (action === 'saveDeliveryAddress') return respondJson(saveDeliveryAddress(data));
     if (action === 'getDeliveryAddress') return respondJson(getDeliveryAddress(data));
     if (action === 'setSwapRoute') return respondJson(setSwapRoute(data));
+    if (action === 'shareChatLocation') return respondJson(shareChatLocation(data));
+    // Oct 2026 — 21-day return deadlines.
+    if (action === 'getReturnStatus') return respondJson(getReturnStatus(data));
+    if (action === 'requestReturnExtension') return respondJson(requestReturnExtension(data));
+    if (action === 'respondReturnExtension') return respondJson(respondReturnExtension(data));
+    if (action === 'adminListReturnForfeits') return respondJson(adminListReturnForfeits(data));
+    if (action === 'adminMarkForfeitPaid') return respondJson(adminMarkForfeitPaid(data));
     if (action === 'logJourneyEvent') return respondJson(logJourneyEvent(data));
     if (action === 'getSwapJourney') return respondJson(getSwapJourney(data));
     if (action === 'getSwapTimeline') return respondJson(getSwapTimeline(data));
@@ -7898,7 +7908,26 @@ function createBook(data) {
     };
   }
   const id = generateId('SS_BOOK_');
-  const pricing = resolveListingPricing(data, id);
+  // Oct 2026: the owner sets their own selling price and monthly rent. The
+  // catalogue still values the book (for the deposit and for swaps), but it
+  // no longer gets a veto over the price, so the owner's asking price is
+  // kept out of its band check.
+  const listingFlags = bookStatusFlags(data);
+  const ownerSellPrice = ownerPrice_(data.sellPrice);
+  const ownerRentPerMonth = ownerPrice_(data.rentPerMonth);
+  if (listingFlags.sell && ownerSellPrice === null) {
+    return {
+      success: false, error: 'SELL_PRICE_REQUIRED',
+      message: 'Enter the price you want to sell this book for (₹1 to ₹' + OWNER_PRICE_CEILING.toLocaleString('en-IN') + ').'
+    };
+  }
+  if (listingFlags.rent && ownerRentPerMonth === null) {
+    return {
+      success: false, error: 'RENT_PRICE_REQUIRED',
+      message: 'Enter the rent you want per month for this book (₹1 to ₹' + OWNER_PRICE_CEILING.toLocaleString('en-IN') + ').'
+    };
+  }
+  const pricing = resolveListingPricing(Object.assign({}, data, { sellPrice: null }), id);
   if (!pricing.ok) {
     return {
       success: false,
@@ -8035,6 +8064,7 @@ function createBook(data) {
   const printedMrpTier = claimedPrintedMrp === null ? '' : 'USER_PROVISIONAL';
   const printedMrpStatus = claimedPrintedMrp === null ? 'UNRESOLVED' : 'PROVISIONAL';
 
+  ensureSheetHeaders(sheet, ['ownerSellPrice', 'ownerRentPerMonth']);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
   const row = new Array(headers.length).fill("");
   // 'Approved' unless the site owner has turned manual review back on —
@@ -8102,6 +8132,8 @@ function createBook(data) {
     else if (h === 'internalBookVideo') row[i] = mediaUpload.urls.internalBookVideo || '';
     else if (h === 'backCoverImage') row[i] = mediaUpload.urls.backCoverImage || '';
     else if (h === 'bookFormat') row[i] = resolvedListingFormat;
+    else if (h === 'ownerSellPrice') row[i] = listingFlags.sell && ownerSellPrice !== null ? ownerSellPrice : '';
+    else if (h === 'ownerRentPerMonth') row[i] = listingFlags.rent && ownerRentPerMonth !== null ? ownerRentPerMonth : '';
     else if (h === 'bookEdition') row[i] = resolvedListingEdition;
     else if (h === 'priceTier') row[i] = resolvedListingPrice.tier;
     else if (h === 'priceBasis') row[i] = resolvedListingPrice.basis;
@@ -8299,6 +8331,21 @@ function updateUserBook(data) {
       if (colIdx !== -1 && updatePayload[field] !== undefined) {
         sheet.getRange(rowIndex + 1, colIdx + 1).setValue(updatePayload[field]);
       }
+    });
+
+    // Oct 2026: the owner's prices are theirs to change, but only to a
+    // real whole-rupee amount. A sent value that isn't one is refused
+    // rather than silently stored as blank.
+    [['sellPrice', 'ownerSellPrice', 'selling price'], ['rentPerMonth', 'ownerRentPerMonth', 'monthly rent']].forEach(function (pair) {
+      if (data[pair[0]] === undefined) return;
+      const colIdx = headers.indexOf(pair[1]);
+      if (colIdx === -1) return;
+      if (data[pair[0]] === '' || data[pair[0]] === null) {
+        sheet.getRange(rowIndex + 1, colIdx + 1).setValue('');
+        return;
+      }
+      const v = ownerPrice_(data[pair[0]]);
+      if (v !== null) sheet.getRange(rowIndex + 1, colIdx + 1).setValue(v);
     });
 
     // The four media columns, written only when the owner actually
@@ -9054,6 +9101,17 @@ function createSwapRequest(data) {
     };
   }
 
+  // Oct 2026 (owner's rule): a swap is like for like — same condition,
+  // same type (paperback / hardcover / budget copy) and MRPs within 10% of
+  // each other. Checked here, where the request is created, so it holds
+  // however the request arrives.
+  if (serviceType === 'SWAP') {
+    const match = swapBooksMatch_(requestedBook, offeredBook);
+    if (!match.ok) {
+      return { success: false, error: 'SWAP_NOT_MATCHING', message: match.message, mismatches: match.reasons };
+    }
+  }
+
   // Both figures, computed on the server from server-resolved prices.
   // Nothing in the request payload can move either number — the previous
   // version accepted data.securityDeposit straight from the client.
@@ -9071,6 +9129,13 @@ function createSwapRequest(data) {
   // So an unresolved price blocks acceptance outright here, the same way
   // RENT_UNAVAILABLE already blocks renting a book with no printed MRP —
   // "unknown" must never be allowed to collapse into "free" this way.
+  if (serviceType === 'SELL' && deposits.salePrice === null) {
+    return {
+      success: false,
+      error: 'SALE_PRICE_MISSING',
+      message: "The owner hasn't set a selling price for this book yet, so it can't be bought right now."
+    };
+  }
   if (deposits.requesterDeposit === null) {
     return {
       success: false,
@@ -9138,7 +9203,7 @@ function createSwapRequest(data) {
     // LEND is not a rental and carries no monthly charge, which is why it
     // is not folded in with RENT here.
     else if (h === 'amount') row[i] = serviceType === 'SELL'
-      ? Number(deposits.requestedBookValue)
+      ? Number(deposits.salePrice)
       : (serviceType === 'RENT' ? Number(rentCharge || 0) : 0);
     else if (h === 'monthlyRent') row[i] = serviceType === 'RENT' ? Number(monthlyRent || 0) : '';
     else if (h === 'securityDeposit') row[i] = deposits.requesterDeposit;
@@ -17281,6 +17346,8 @@ function buildLibraryPayload() {
     // monthlyRentForBook, so the quote and the eligibility flag are both
     // derived from the same known value (never the generic estimate).
     obj.monthlyRent = eligibility.can_rent ? monthlyRentForBook(obj) : null;
+    // The owner's asking price (Oct 2026), null when the book isn't for sale.
+    obj.sellPrice = eligibility.can_sell ? sellPriceForBook(obj) : null;
 
     // SwapSutra's own resolved value, kept under a name that cannot be
     // mistaken for the printed MRP.
@@ -18110,12 +18177,47 @@ const ADDRESS_HEADERS = [
 const JOURNEY_SHEET = 'SwapJourney';
 const JOURNEY_HEADERS = [
   'id', 'swapId', 'leg', 'event', 'actorEmail', 'method',
-  'courierName', 'awb', 'note', 'mediaUrl', 'expectedBy', 'createdAt'
+  'courierName', 'awb', 'note', 'mediaUrl', 'expectedBy', 'createdAt',
+  // Oct 2026: a pinned meeting point (route_set, in person).
+  'lat', 'lng'
 ];
 
-// The two directions a book travels. A permanent swap or a sale only
-// ever has an outbound leg; a rental or a lend has both.
-const JOURNEY_LEGS = { outbound: true, return: true };
+// The directions a book travels.
+//   outbound — the owner's book going to the requester (every exchange)
+//   counter  — the requester's own book going to the owner (a SWAP: two
+//              books cross at once, so both are tracked) — added Oct 2026
+//   return   — the owner's book coming back (a rental or a lend)
+const JOURNEY_LEGS = { outbound: true, counter: true, return: true, counter_return: true };
+
+/** Who sends and who receives on each leg. */
+function journeyLegParties_(swap, leg) {
+  if (leg === 'outbound') return { sender: swap.ownerEmail, receiver: swap.requesterEmail };
+  // counter_return: in a temporary swap the owner sends the requester's book back.
+  if (leg === 'counter_return') return { sender: swap.ownerEmail, receiver: swap.requesterEmail };
+  return { sender: swap.requesterEmail, receiver: swap.ownerEmail }; // counter and return
+}
+
+/** A real point on Earth, or null. Rounded to ~1 m. */
+function cleanLatLng_(lat, lng) {
+  const a = Number(lat), b = Number(lng);
+  if (!isFinite(a) || !isFinite(b) || Math.abs(a) > 90 || Math.abs(b) > 180) return null;
+  if (a === 0 && b === 0) return null;
+  return { lat: Math.round(a * 1e5) / 1e5, lng: Math.round(b * 1e5) / 1e5 };
+}
+
+/** The route currently agreed for an exchange (the latest route_set), or null. */
+function latestSwapRoute_(swapId) {
+  const values = getJourneySheet().getDataRange().getValues();
+  if (values.length <= 1) return null;
+  const headers = values[0].map(h => String(h).trim());
+  let best = null;
+  for (let r = 1; r < values.length; r++) {
+    const o = rowToObject(headers, values[r]);
+    if (String(o.swapId) !== String(swapId) || o.event !== 'route_set') continue;
+    if (!best || new Date(o.createdAt) >= new Date(best.createdAt)) best = o;
+  }
+  return best;
+}
 
 // The ledger's vocabulary. An allowlist, because a timeline whose events
 // are free text is a timeline nothing can reason about — the SLA job and
@@ -18333,6 +18435,19 @@ function getDeliveryAddress(data) {
       };
     }
 
+    // Oct 2026: addresses and phone numbers are for posting a book. Readers
+    // meeting in person never need each other's home address, so it is
+    // released only once the agreed route is courier.
+    const route = latestSwapRoute_(swapId);
+    if (!isAuthenticatedAdmin() && (!route || route.method !== 'courier')) {
+      return {
+        success: false,
+        error: 'ROUTE_NOT_COURIER',
+        message: 'Addresses and phone numbers are shared only when you choose courier.',
+        own: readDeliveryAddress(caller)
+      };
+    }
+
     const other = caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail;
     const address = readDeliveryAddress(other);
     if (!address) {
@@ -18387,24 +18502,36 @@ function setSwapRoute(data) {
       return { success: false, message: 'Choose whether you are meeting in person or posting the book.' };
     }
 
-    const leg = JOURNEY_LEGS[String((data && data.leg) || 'outbound')] ? String(data.leg || 'outbound') : 'outbound';
-    const note = method === 'in_person'
-      ? 'Meeting at: ' + String((data && data.meetingPoint) || '').trim().slice(0, 200)
-      : 'By post';
+    // Oct 2026: one route for the whole exchange — in a swap both books
+    // cross at the same meeting, or both are posted — so it is always
+    // recorded on the outbound leg. Either reader may set it (they agree
+    // in the chat), and setting it again replaces it.
+    const leg = 'outbound';
+    const pin = method === 'in_person' ? cleanLatLng_(data && data.meetingLat, data && data.meetingLng) : null;
+    const place = String((data && data.meetingPoint) || '').trim().slice(0, 200);
 
-    if (method === 'in_person' && !String((data && data.meetingPoint) || '').trim()) {
-      return { success: false, message: 'Agree a public place to meet — a café, a metro station, a campus gate.' };
+    if (method === 'in_person' && !place && !pin) {
+      return { success: false, message: 'Pin the meeting point on the map, or name a public place — a café, a metro station, a campus gate.' };
     }
+    const note = method === 'in_person'
+      ? 'Meeting at: ' + (place || 'the pinned location')
+      : 'By courier — addresses and phone numbers are now shared with each other';
 
-    return appendJourneyEvent({
+    const result = appendJourneyEvent({
       swapId: swapId,
       leg: leg,
       event: 'route_set',
       actorEmail: caller,
       method: method,
       note: note,
+      lat: pin ? pin.lat : '',
+      lng: pin ? pin.lng : '',
       expectedBy: data && data.expectedBy
     }, swap);
+    if (result && result.success !== false) {
+      postRouteNoticeToChat_(swap, method, place, pin);
+    }
+    return result;
   } catch (err) {
     return { success: false, message: err.toString() };
   }
@@ -18438,11 +18565,21 @@ function logJourneyEvent(data) {
     if (!JOURNEY_EVENTS[event]) return { success: false, message: 'Unknown delivery update.' };
 
     const leg = JOURNEY_LEGS[String((data && data.leg) || 'outbound')] ? String(data.leg || 'outbound') : 'outbound';
+    const legServiceType = String(swap.obj.serviceType || 'SWAP').toUpperCase();
+    if ((leg === 'counter' || leg === 'counter_return') && legServiceType !== 'SWAP') {
+      return { success: false, message: 'Only a swap has a second book travelling the other way.' };
+    }
+    // Nothing moves before the two readers have agreed how (Oct 2026 route).
+    if (event !== 'route_set' && event !== 'issue_raised' && !latestSwapRoute_(swapId)) {
+      return { success: false, error: 'ROUTE_NOT_SET', message: 'First agree how the books will travel — meet in person or courier.' };
+    }
 
     // Who is sending and who is waiting depends on the leg: on the way
-    // out the owner sends, on the way back the requester does.
-    const senderEmail = leg === 'outbound' ? swap.ownerEmail : swap.requesterEmail;
-    const receiverEmail = leg === 'outbound' ? swap.requesterEmail : swap.ownerEmail;
+    // out the owner sends; the requester sends their own book in a swap
+    // (counter) and sends the borrowed book back (return).
+    const legParties = journeyLegParties_(swap, leg);
+    const senderEmail = legParties.sender;
+    const receiverEmail = legParties.receiver;
 
     if (!isAuthenticatedAdmin()) {
       if (SENDER_EVENTS[event] && caller !== senderEmail) {
@@ -18500,6 +18637,8 @@ function appendJourneyEvent(entry, swap) {
     else if (h === 'mediaUrl') row[i] = String(entry.mediaUrl || '');
     else if (h === 'expectedBy') row[i] = entry.expectedBy ? new Date(entry.expectedBy) : '';
     else if (h === 'createdAt') row[i] = now;
+    else if (h === 'lat') row[i] = entry.lat === undefined ? '' : entry.lat;
+    else if (h === 'lng') row[i] = entry.lng === undefined ? '' : entry.lng;
   });
   sheet.appendRow(row);
 
@@ -18564,6 +18703,8 @@ function getSwapJourney(data) {
         note: obj.note,
         mediaUrl: obj.mediaUrl,
         expectedBy: obj.expectedBy || '',
+        lat: obj.lat === '' || obj.lat === undefined ? null : Number(obj.lat),
+        lng: obj.lng === '' || obj.lng === undefined ? null : Number(obj.lng),
         at: obj.createdAt
       });
     }
@@ -18571,15 +18712,29 @@ function getSwapJourney(data) {
     events.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
 
     const serviceType = String(swap.obj.serviceType || 'SWAP').toUpperCase();
-    const needsReturn = serviceType === 'RENT' || serviceType === 'LEND';
+    // A temporary swap comes back too (both books) — same rule as the stage machine.
+    const needsReturn = swapNeedsReturn(swap);
+    const twoWay = serviceType === 'SWAP';
+    let route = null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].event === 'route_set') { route = events[i]; break; }
+    }
 
     return {
       success: true,
       swapId: swapId,
       serviceType: serviceType,
       needsReturn: needsReturn,
+      twoWay: twoWay,
+      legs: ['outbound'].concat(twoWay ? ['counter'] : []).concat(needsReturn ? ['return'] : [])
+        .concat(twoWay && needsReturn ? ['counter_return'] : []),
+      returnDeadline: needsReturn ? returnStateForSwap_(swap) : null,
+      route: route ? {
+        method: route.method, note: route.note, lat: route.lat, lng: route.lng,
+        setBy: route.isYou ? 'you' : route.actorName, at: route.at
+      } : null,
       events: events,
-      status: summariseJourney(events, needsReturn),
+      status: summariseJourney(events, needsReturn, twoWay),
       deposit: depositStateFromJourney(swap, events, needsReturn),
       couriers: Object.keys(COURIERS)
     };
@@ -18589,13 +18744,36 @@ function getSwapJourney(data) {
 }
 
 /** Where the book is, in one line, derived from the last event on each leg. */
-function summariseJourney(events, needsReturn) {
+function summariseJourney(events, needsReturn, twoWay) {
   const lastOf = (leg) => {
     for (let i = events.length - 1; i >= 0; i--) if (events[i].leg === leg) return events[i];
     return null;
   };
   const outbound = lastOf('outbound');
   const back = lastOf('return');
+  // A swap (Oct 2026): two books cross, and it is done when both readers
+  // have confirmed receiving the other's book.
+  if (twoWay && outbound) {
+    const counter = lastOf('counter');
+    const gotOwners = events.some(e => e.leg === 'outbound' && e.event === 'received');
+    const gotRequesters = events.some(e => e.leg === 'counter' && e.event === 'received');
+    if (gotOwners && gotRequesters) {
+      if (!needsReturn) return { stage: 'closed', label: 'Both books received — swap complete', holder: 'both' };
+      // A temporary swap: both books now have to come back.
+      const backOwners = events.some(e => e.leg === 'return' && e.event === 'received');
+      const backRequesters = events.some(e => e.leg === 'counter_return' && e.event === 'received');
+      if (backOwners && backRequesters) return { stage: 'closed', label: 'Both books returned — swap complete', holder: 'both' };
+      if (events.some(e => e.leg === 'return' || e.leg === 'counter_return')) {
+        return { stage: 'returning', label: 'Books on their way back', holder: 'in_transit' };
+      }
+      return { stage: 'with_reader', label: 'Both readers have the books — return due', holder: 'both' };
+    }
+    if (gotOwners || gotRequesters) return { stage: 'in_transit', label: 'One book received, waiting for the other', holder: 'in_transit' };
+    if (outbound.event === 'route_set' && !counter) {
+      return { stage: 'preparing', label: 'Route agreed — ' + (outbound.method === 'courier' ? 'both books to be posted' : 'meeting in person'), holder: 'both' };
+    }
+    return { stage: 'in_transit', label: 'Books on their way', holder: 'in_transit' };
+  }
 
   if (!outbound) return { stage: 'not_started', label: 'Route not agreed yet', holder: 'owner' };
   if (back && (back.event === 'received')) return { stage: 'closed', label: 'Returned and confirmed', holder: 'owner' };
@@ -18630,6 +18808,11 @@ function depositStateFromJourneyCore_(swap, events, needsReturn) {
 
   if (issue) {
     return { amount: amount, state: 'held_dispute', reason: 'A problem was reported. The deposit stays held until SwapSutra reviews the timeline.' };
+  }
+  if (!needsReturn && String(swap.obj.serviceType || '').toUpperCase() === 'SWAP') {
+    return has('outbound', 'received') && has('counter', 'received')
+      ? { amount: amount, state: 'release', reason: 'Both readers confirmed receiving the other\'s book.' }
+      : { amount: amount, state: 'held', reason: 'Held until both readers confirm the other\'s book arrived.' };
   }
   if (!needsReturn) {
     return has('outbound', 'received')
@@ -18960,10 +19143,43 @@ function monthlyRentForMrp(mrp) {
 }
 
 function monthlyRentForBook(book) {
+  // Oct 2026: the owner sets their own monthly rent (ownerRentPerMonth).
+  // Listings made before that keep the old rule — 10% of the printed MRP —
+  // which is also what the listing form suggests as a starting point.
+  const own = ownerPrice_(book && book.ownerRentPerMonth);
+  if (own !== null) return own;
   // knownBookMRP, not effectiveBookMRP: rent is a real monthly charge, so
   // it is only quoted from a value this book actually has. No value, no
   // rent — see knownBookMRP.
   return monthlyRentForMrp(knownBookMRP(book));
+}
+
+/** A whole-rupee price the owner typed, or null. Never 0, never negative. */
+function ownerPrice_(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  // A minus sign is refused outright: stripping it would turn -5 into 5.
+  if (String(raw).indexOf('-') !== -1) return null;
+  const n = Number(String(raw).replace(/[^0-9.]/g, ''));
+  if (!isFinite(n) || n < 1 || n > OWNER_PRICE_CEILING) return null;
+  return Math.round(n);
+}
+
+// A sanity ceiling, not a pricing rule: the owner decides the price, but a
+// typo of ₹45000 for a ₹450 paperback should be caught.
+const OWNER_PRICE_CEILING = 50000;
+
+/**
+ * What a buyer pays for this book (Oct 2026): the owner's own asking
+ * price. Older listings, made before owners set one, fall back to the
+ * book's resolved value — which is what a sale was charged before.
+ */
+function sellPriceForBook(book) {
+  if (!book) return null;
+  const own = ownerPrice_(book.ownerSellPrice);
+  if (own !== null) return own;
+  if (bookAuthenticity(book) === 'UNAUTHORISED') return null;
+  const legacy = effectiveBookMRP(book);
+  return legacy === null || legacy === undefined ? null : Math.round(Number(legacy));
 }
 function normalizeBookEdition(raw) {
   const v = String(raw || '').trim().toUpperCase();
@@ -19399,7 +19615,9 @@ function pricingSourceOf(book) {
    either number.
    ════════════════════════════════════════════════════════════════════════ */
 
-const DEPOSIT_RATE = 0.6;
+// Oct 2026 (owner's decision): security is a flat 65% of the book's MRP
+// for swap, rent and lend, whatever the condition. A sale takes none.
+const DEPOSIT_RATE = 0.65;
 
 /**
  * amount * the condition-tiered rate (60/55/50%, see depositRateForCondition
@@ -19488,6 +19706,19 @@ function computeMutualDeposit(requestedBook, offeredBook, serviceType) {
   // every deposit figure in the app is computed from.
   const requesterRate = depositRateForCondition(requestedBook && requestedBook.condition);
   const ownerRate = offeredBook ? depositRateForCondition(offeredBook.condition) : DEPOSIT_RATE;
+  // Oct 2026: a sale takes no security deposit. The buyer pays the owner's
+  // asking price (sellPriceForBook) and the platform fee; nothing is held.
+  if (serviceType === 'SELL') {
+    const salePrice = sellPriceForBook(requestedBook);
+    return {
+      requestedBookValue: requestedValue, offeredBookValue: null,
+      requesterDeposit: 0, ownerDeposit: 0,
+      unresolved: salePrice === null,
+      requesterDepositEstimated: false, ownerDepositEstimated: false,
+      requesterDepositRate: 0, ownerDepositRate: 0, rate: 0,
+      salePrice: salePrice
+    };
+  }
   return {
     requestedBookValue: requestedValue,
     offeredBookValue: offeredValue,
@@ -19526,7 +19757,11 @@ function getDepositQuote(data) {
     // two sides can now differ.
     ratePercent: Math.round(q.requesterDepositRate * 100),
     requesterDepositRatePercent: Math.round(q.requesterDepositRate * 100),
-    ownerDepositRatePercent: Math.round(q.ownerDepositRate * 100)
+    ownerDepositRatePercent: Math.round(q.ownerDepositRate * 100),
+    salePrice: q.salePrice === undefined ? null : q.salePrice,
+    // Oct 2026: whether these two books may be swapped, and why not.
+    swapMatch: String((data && data.serviceType) || 'SWAP').toUpperCase() === 'SWAP' && offered
+      ? swapBooksMatch_(requested, offered) : null
   };
 }
 
@@ -19693,12 +19928,14 @@ function normalizeConditionGrade(raw) {
  * book, not an unopened one, so it belongs with the other used grades
  * instead of inheriting the new-book rate.
  */
+// Oct 2026: flattened to 65% for every grade (owner's decision). Kept as a
+// table so a future per-condition rate is a one-line change again.
 const CONDITION_DEPOSIT_RATES = {
-  AS_NEW: 0.60,
-  VERY_GOOD: 0.55,
-  GOOD: 0.55,
-  FAIR: 0.55,
-  POOR: 0.50
+  AS_NEW: 0.65,
+  VERY_GOOD: 0.65,
+  GOOD: 0.65,
+  FAIR: 0.65,
+  POOR: 0.65
 };
 
 /** The condition-tiered deposit rate for a raw (un-normalised) condition value. */
@@ -20556,12 +20793,19 @@ function getSwapStage(data) {
       possessionStartedAt = new Date(Math.max(h, r)).toISOString();
     }
 
+    // Oct 2026 (owner's rule): 21 days is a DEADLINE, not a waiting period.
+    // The borrower can return the book any time once they have it, and must
+    // have it on its way back by the due date (21 days + any agreed
+    // extension) or the deposit is forfeited — see RETURN DEADLINES.
+    // unlockAt keeps its name for older clients but now carries the due date.
     let returnUnlockAt = '';
     let returnTimerElapsed = !needsReturn;
+    let returnDeadline = null;
     if (needsReturn && possessionStartedAt) {
-      const unlockMs = new Date(possessionStartedAt).getTime() + RETURN_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-      returnUnlockAt = new Date(unlockMs).toISOString();
-      returnTimerElapsed = Date.now() >= unlockMs;
+      returnDeadline = returnStateForSwap_(swap);
+      returnUnlockAt = (returnDeadline && returnDeadline.dueAt)
+        || new Date(new Date(possessionStartedAt).getTime() + RETURN_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      returnTimerElapsed = true;
     }
 
     const returnStage = needsReturn ? stagePartyStatus(events, 'RETURN') : { requester: {}, owner: {}, complete: true, completedAt: possessionStartedAt };
@@ -20659,7 +20903,8 @@ function getSwapStage(data) {
         logistics: Object.assign({ unlocked: logisticsUnlocked }, logistics),
         receipt: Object.assign({ unlocked: receiptUnlocked }, receipt),
         possession: { unlocked: possessionUnlocked, startedAt: possessionStartedAt },
-        returnStage: needsReturn ? Object.assign({ unlocked: returnUnlocked, unlockAt: returnUnlockAt, timerElapsed: returnTimerElapsed }, returnStage) : { applicable: false },
+        returnStage: needsReturn ? Object.assign({ unlocked: returnUnlocked, unlockAt: returnUnlockAt, dueAt: returnUnlockAt, timerElapsed: returnTimerElapsed,
+          deadline: returnDeadline }, returnStage) : { applicable: false },
         finalCondition: Object.assign({ unlocked: finalConditionUnlocked }, finalCondition),
         outcome: { unlocked: outcomeUnlocked, decided: !!outcomeEvent, type: outcomeEvent ? outcomeEvent.actionType : '', note: outcomeEvent ? outcomeEvent.note : '', decidedBy: outcomeEvent ? outcomeEvent.actorEmail : '', decidedAt: outcomeEvent ? outcomeEvent.createdAt : '' }
       },
@@ -23174,4 +23419,612 @@ function adminPlatformRevenueSummary() {
     unlockFees, unlocksPaid, unlocksByCoupon,
     total: exchangeFees + unlockFees
   };
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   SWAP MATCHING (Oct 2026)
+   ────────────────────────────────────────────────────────────────────────
+   Owner's rule: two books can be swapped only when they are
+     • the same condition grade,
+     • the same type — Paperback, Hardcover or Budget copy (a reprint), and
+     • the same rate — printed MRPs within 10% of each other.
+   src/utils/swapMatch.ts mirrors this so the swap form can grey out books
+   that won't qualify; this copy is the one that decides.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const SWAP_MRP_TOLERANCE = 0.10;
+
+/** PAPERBACK, HARDCOVER or BUDGET (a reprint, whatever its binding); UNKNOWN otherwise. */
+function swapBookType_(book) {
+  if (!book) return 'UNKNOWN';
+  if (bookEditionFrom(book) === 'REPRINT') return 'BUDGET';
+  const fmt = normalizeBookFormat(book.bookFormat || book.format);
+  return fmt === 'HARDCOVER' || fmt === 'PAPERBACK' ? fmt : 'UNKNOWN';
+}
+
+const SWAP_TYPE_LABELS = { PAPERBACK: 'paperback', HARDCOVER: 'hardcover', BUDGET: 'budget copy', UNKNOWN: 'unknown type' };
+const SWAP_CONDITION_LABELS = { AS_NEW: 'Like New', VERY_GOOD: 'Very Good', GOOD: 'Good', FAIR: 'Fair', POOR: 'Poor' };
+
+function swapBooksMatch_(a, b) {
+  if (!a || !b) return { ok: false, reasons: ['missing'], message: 'Choose one of your books to offer in exchange.' };
+  const reasons = [];
+  const parts = [];
+
+  const ca = normalizeConditionGrade(a.condition), cb = normalizeConditionGrade(b.condition);
+  if (ca !== cb) {
+    reasons.push('condition');
+    parts.push('condition (' + SWAP_CONDITION_LABELS[ca] + ' vs ' + SWAP_CONDITION_LABELS[cb] + ')');
+  }
+
+  const ta = swapBookType_(a), tb = swapBookType_(b);
+  if (ta === 'UNKNOWN' || tb === 'UNKNOWN') {
+    reasons.push('type_unknown');
+    parts.push('type (one of the books has no type set — edit the listing to add Paperback, Hardcover or Budget copy)');
+  } else if (ta !== tb) {
+    reasons.push('type');
+    parts.push('type (' + SWAP_TYPE_LABELS[ta] + ' vs ' + SWAP_TYPE_LABELS[tb] + ')');
+  }
+
+  const ma = effectiveBookMRP(a), mb = effectiveBookMRP(b);
+  if (ma === null || mb === null || !(Number(ma) > 0) || !(Number(mb) > 0)) {
+    reasons.push('mrp_unknown');
+    parts.push('MRP (one of the books has no MRP yet)');
+  } else {
+    const hi = Math.max(Number(ma), Number(mb));
+    if (Math.abs(Number(ma) - Number(mb)) > hi * SWAP_MRP_TOLERANCE) {
+      reasons.push('mrp');
+      parts.push('MRP (₹' + Math.round(ma) + ' vs ₹' + Math.round(mb) + ' — more than 10% apart)');
+    }
+  }
+
+  if (!reasons.length) return { ok: true, reasons: [], message: '' };
+  return {
+    ok: false,
+    reasons: reasons,
+    message: 'These two books can\'t be swapped: they differ in ' + parts.join(', ') + '. A swap needs the same condition, the same type and an MRP within 10%.'
+  };
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   LOCATION IN THE EXCHANGE CHAT (Oct 2026)
+   ────────────────────────────────────────────────────────────────────────
+   The chat blocks typed phone numbers and addresses (scanMessageForPII), so
+   a meeting point travels as structured data instead: a pin (lat/lng) and a
+   short place name, sent as a message with mediaType 'location' and
+   mediaUrl 'geo:<lat>,<lng>?q=<name>'. The app draws it as a map card.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/** A place name for a pin: short, and with long digit runs (phone numbers) removed. */
+function cleanPlaceLabel_(raw) {
+  return String(raw || '')
+    .replace(/\d[\d\s-]{5,}\d/g, '')   // no phone numbers smuggled in as a "place"
+    .replace(/[<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
+function locationMediaUrl_(pin, label) {
+  return 'geo:' + pin.lat + ',' + pin.lng + (label ? '?q=' + encodeURIComponent(label) : '');
+}
+
+/** Action: shareChatLocation { chatId, lat, lng, label } — sender is the session. */
+function shareChatLocation(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to share a location.' };
+  const chatId = String((data && data.chatId) || '').trim();
+  const chat = getChatById(chatId);
+  if (!chat) return { success: false, message: 'Chat not found.' };
+  if (!canAccessChat(chat, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const pin = cleanLatLng_(data && data.lat, data && data.lng);
+  if (!pin) return { success: false, message: 'That location could not be read. Try placing the pin again.' };
+  const label = cleanPlaceLabel_(data && data.label);
+  // sendChatMessage applies every existing gate: membership, the
+  // security-fee lock, archived chats, and the PII scan on the text.
+  return sendChatMessage({
+    chatId: chatId,
+    senderEmail: caller,
+    senderRole: isAdminEmail(caller) ? 'Admin' : 'User',
+    message: '📍 ' + (label ? 'Meeting point: ' + label : 'Shared a location'),
+    mediaUrl: locationMediaUrl_(pin, label),
+    mediaType: 'location'
+  });
+}
+
+/** Posts the agreed route into the exchange chat, as SwapSutra. Never throws. */
+function postRouteNoticeToChat_(swap, method, place, pin) {
+  try {
+    const chat = findChatBySwapId(swap.obj.id);
+    const chatId = chat && (chat.chatId || chat.id);
+    if (!chatId) return;
+    const label = cleanPlaceLabel_(place);
+    sendChatMessage({
+      chatId: chatId,
+      senderEmail: 'swapsutra@gmail.com',
+      senderRole: 'Admin',
+      message: method === 'courier'
+        ? '📦 Route agreed: courier. Your addresses and phone numbers are now visible to each other in the Delivery panel. Post your tracking ID there once the parcel is booked.'
+        : '🤝 Route agreed: meeting in person' + (label ? ' at ' + label : '') + '. Meet somewhere public, and confirm receipt in the Delivery panel once you have the book.',
+      mediaUrl: pin ? locationMediaUrl_(pin, label) : '',
+      mediaType: pin ? 'location' : ''
+    });
+  } catch (err) {
+    Logger.log('postRouteNoticeToChat_ failed: ' + err);
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   RETURN DEADLINES — 21 days, strict (Oct 2026, owner's rules)
+   ────────────────────────────────────────────────────────────────────────
+   Applies to every exchange where a book has to come back: RENT, LEND and
+   a TEMPORARY swap (in which both books come back).
+
+   • The clock starts when the book reaches the borrower — the first
+     handed_over / delivered / received on the way out.
+   • By the end of day 21 the book must be ON ITS WAY BACK: handed over in
+     person, or posted with the courier name and tracking ID filled in.
+     A courier that is slow after that is not the borrower's fault — the
+     deadline is met the moment it is posted (courier-delay exception).
+   • Both readers may agree to extend, once or twice, by +7 or +14 days,
+     never more than 14 days in total, and only before the deadline.
+   • If the deadline passes and the book is not on its way back, the
+     borrower's security deposit is forfeited to the book's owner. That
+     is recorded here and SwapSutra pays it out to the owner.
+   • Reminders go out at the start, with 7, 3 and 1 days left, on the last
+     day, and when a deposit is forfeited — in the app, by email, and on
+     WhatsApp when the WhatsApp Business API is configured.
+
+   runReturnDeadlines() is the daily job (installReturnDeadlineTrigger()
+   sets it up once).
+   ════════════════════════════════════════════════════════════════════════ */
+
+// RETURN_WINDOW_DAYS (21) is defined once, with the stage machine above.
+const RETURN_EXTENSION_CHOICES = [7, 14];
+const RETURN_MAX_EXTENSION_DAYS = 14;
+const RETURN_REMINDER_DAYS_LEFT = [7, 3, 1];
+const RETURN_DAY_MS = 24 * 60 * 60 * 1000;
+
+const RETURN_EXTENSION_SHEET = 'ReturnExtensions';
+const RETURN_EXTENSION_HEADERS = ['id', 'swapId', 'requestedBy', 'days', 'reason', 'status', 'decidedBy', 'createdAt', 'decidedAt'];
+const RETURN_FORFEIT_SHEET = 'ReturnForfeits';
+const RETURN_FORFEIT_HEADERS = ['id', 'swapId', 'leg', 'bookTitle', 'defaulterEmail', 'ownerEmail', 'amount', 'dueAt', 'forfeitedAt', 'payoutStatus', 'paidAt', 'paidBy', 'note'];
+
+const RETURN_POLICY_TEXT =
+  'Return rule: the book must be on its way back within 21 days of reaching you — handed over in person, ' +
+  'or posted with the courier name and tracking ID added by the end of day 21. Both of you can agree to extend ' +
+  'by +7 or +14 days (14 days at most). If the book is not on its way back by the deadline, the security deposit ' +
+  'is forfeited and paid to the book\'s owner. Courier delays after the book is posted are not held against you.';
+
+/** Does this exchange have to come back, and which legs carry the returns? */
+function returnLegsFor_(swapObj) {
+  const type = String(swapObj.serviceType || 'SWAP').toUpperCase();
+  if (type === 'RENT' || type === 'LEND') return [{ leg: 'return', outLeg: 'outbound', borrower: 'requester', owner: 'owner', deposit: 'securityDeposit' }];
+  const temporary = String(swapObj.swapPreference || swapObj.swapType || '').toLowerCase() === 'temporary';
+  if (type === 'SWAP' && temporary) {
+    return [
+      // The requester returns the owner's book; their deposit protects it.
+      { leg: 'return', outLeg: 'outbound', borrower: 'requester', owner: 'owner', deposit: 'securityDeposit' },
+      // The owner returns the requester's book; the owner's deposit protects it.
+      { leg: 'counter_return', outLeg: 'counter', borrower: 'owner', owner: 'requester', deposit: 'ownerDeposit' }
+    ];
+  }
+  return [];
+}
+
+function getReturnExtensionSheet_() {
+  const sheet = getOrCreateSheet(RETURN_EXTENSION_SHEET, RETURN_EXTENSION_HEADERS);
+  ensureSheetHeaders(sheet, RETURN_EXTENSION_HEADERS);
+  return sheet;
+}
+function getReturnForfeitSheet_() {
+  const sheet = getOrCreateSheet(RETURN_FORFEIT_SHEET, RETURN_FORFEIT_HEADERS);
+  ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
+  return sheet;
+}
+function readSheetObjects_(sheet) {
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return { headers: (values[0] || []).map(h => String(h).trim()), rows: [] };
+  const headers = values[0].map(h => String(h).trim());
+  return { headers: headers, rows: values.slice(1).map((r, i) => ({ rowIndex: i + 1, obj: rowToObject(headers, r) })) };
+}
+
+/** All journey events, grouped by swap id. */
+function journeyEventsBySwap_() {
+  const out = {};
+  readSheetObjects_(getJourneySheet()).rows.forEach(r => {
+    const id = String(r.obj.swapId);
+    (out[id] = out[id] || []).push(r.obj);
+  });
+  return out;
+}
+
+/**
+ * The full return picture for one exchange. Pure apart from its inputs, so
+ * the rules can be tested without a spreadsheet.
+ *   events      — that swap's journey rows
+ *   extensions  — that swap's ReturnExtensions rows
+ *   forfeits    — that swap's ReturnForfeits rows
+ */
+function computeReturnState_(swapObj, events, extensions, forfeits, nowMs, stageInfo) {
+  const legs = returnLegsFor_(swapObj);
+  if (!legs.length) return { applies: false };
+  const now = typeof nowMs === 'number' ? nowMs : Date.now();
+  const at = e => new Date(e.createdAt).getTime();
+  const stage = stageInfo || {};
+
+  // Start: the first moment a book reached its borrower — from the delivery
+  // timeline, or from the Stages panel's receipt confirmation.
+  const outLegs = legs.map(l => l.outLeg);
+  const arrivals = (events || [])
+    .filter(e => outLegs.indexOf(String(e.leg)) !== -1 && ['handed_over', 'delivered', 'received'].indexOf(String(e.event)) !== -1)
+    .map(at).filter(t => isFinite(t));
+  if (isFinite(stage.receiptAt)) arrivals.push(stage.receiptAt);
+  if (!arrivals.length) {
+    return { applies: true, started: false, windowDays: RETURN_WINDOW_DAYS, policy: RETURN_POLICY_TEXT, legs: [] };
+  }
+  const startedAt = Math.min.apply(null, arrivals);
+  const approved = (extensions || []).filter(x => String(x.status).toUpperCase() === 'APPROVED');
+  const extensionDays = Math.min(RETURN_MAX_EXTENSION_DAYS, approved.reduce((n, x) => n + (Number(x.days) || 0), 0));
+  const baseDueAt = startedAt + RETURN_WINDOW_DAYS * RETURN_DAY_MS;
+  const dueAt = baseDueAt + extensionDays * RETURN_DAY_MS;
+  const pending = (extensions || []).filter(x => String(x.status).toUpperCase() === 'PENDING')[0] || null;
+
+  const legStates = legs.map(l => {
+    const sent = (events || []).filter(e => String(e.leg) === l.leg && (
+      e.event === 'handed_over' ||
+      (e.event === 'dispatched' && String(e.awb || '').trim()) ||
+      e.event === 'delivered' || e.event === 'received'))
+      .map(at).filter(t => isFinite(t));
+    // The borrower confirming the return in the Stages panel counts too.
+    const stageReturn = stage.returnByRole && stage.returnByRole[l.borrower];
+    if (l.leg === 'return' && isFinite(stageReturn)) sent.push(stageReturn);
+    sent.sort((a, b) => a - b);
+    const firstSent = sent.length ? sent[0] : null;
+    const forfeited = (forfeits || []).some(f => String(f.leg) === l.leg);
+    let state;
+    if (forfeited) state = 'FORFEITED';
+    else if (firstSent !== null && firstSent <= dueAt) state = 'RETURNED_ON_TIME';
+    else if (firstSent !== null) state = 'RETURNED_LATE';   // after the deadline — the forfeit job decides
+    else if (now > dueAt) state = 'OVERDUE';
+    else state = 'DUE';
+    return { leg: l.leg, borrower: l.borrower, owner: l.owner, deposit: l.deposit, state: state, sentAt: firstSent };
+  });
+
+  const msLeft = dueAt - now;
+  return {
+    applies: true,
+    started: true,
+    windowDays: RETURN_WINDOW_DAYS,
+    startedAt: new Date(startedAt).toISOString(),
+    baseDueAt: new Date(baseDueAt).toISOString(),
+    dueAt: new Date(dueAt).toISOString(),
+    extensionDays: extensionDays,
+    extensionDaysLeft: RETURN_MAX_EXTENSION_DAYS - extensionDays,
+    extensionChoices: RETURN_EXTENSION_CHOICES.filter(d => d <= RETURN_MAX_EXTENSION_DAYS - extensionDays),
+    pendingExtension: pending ? { id: pending.id, days: Number(pending.days), requestedBy: pending.requestedBy, reason: pending.reason || '' } : null,
+    daysLeft: Math.ceil(msLeft / RETURN_DAY_MS),
+    overdue: msLeft < 0,
+    legs: legStates,
+    policy: RETURN_POLICY_TEXT
+  };
+}
+
+/**
+ * From the Stages panel's event log: when the book was confirmed received
+ * (the latest RECEIPT confirmation, i.e. when both had confirmed), and when
+ * each party first confirmed a RETURN.
+ */
+function stageReturnInfoBySwap_() {
+  const out = {};
+  readSheetObjects_(getStageEventsSheet()).rows.forEach(r => {
+    const o = r.obj;
+    const id = String(o.swapId);
+    const t = new Date(o.createdAt).getTime();
+    if (!isFinite(t)) return;
+    const info = out[id] = out[id] || { receiptAt: NaN, returnByRole: {} };
+    if (o.stage === 'RECEIPT') info.receiptAt = isFinite(info.receiptAt) ? Math.max(info.receiptAt, t) : t;
+    if (o.stage === 'RETURN' && (o.party === 'requester' || o.party === 'owner')) {
+      const prev = info.returnByRole[o.party];
+      info.returnByRole[o.party] = isFinite(prev) ? Math.min(prev, t) : t;
+    }
+  });
+  return out;
+}
+
+/** Loads everything for one swap and computes its return state. */
+function returnStateForSwap_(swap) {
+  const id = String(swap.obj.id);
+  const events = (journeyEventsBySwap_()[id]) || [];
+  const exts = readSheetObjects_(getReturnExtensionSheet_()).rows.map(r => r.obj).filter(o => String(o.swapId) === id);
+  const forfeits = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj).filter(o => String(o.swapId) === id);
+  let stage = null;
+  try { stage = stageReturnInfoBySwap_()[id] || null; } catch (e) { stage = null; }
+  return computeReturnState_(swap.obj, events, exts, forfeits, undefined, stage);
+}
+
+/** Action: getReturnStatus { swapId } — either party. */
+function getReturnStatus(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  if (!callerIsPartyTo(swap, caller) && !isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+  const state = returnStateForSwap_(swap);
+  const myRole = caller === swap.ownerEmail ? 'owner' : 'requester';
+  if (state.legs) state.legs.forEach(l => { l.youAreBorrower = l.borrower === myRole; l.youAreOwner = l.owner === myRole; });
+  if (state.pendingExtension) state.pendingExtension.youAsked = normalizeEmail(state.pendingExtension.requestedBy) === caller;
+  delete (state.pendingExtension || {}).requestedBy;
+  return Object.assign({ success: true, policy: RETURN_POLICY_TEXT }, state);
+}
+
+/** Action: requestReturnExtension { swapId, days: 7|14, reason? } */
+function requestReturnExtension(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+  const days = Number(data && data.days);
+  const state = returnStateForSwap_(swap);
+  if (!state.applies) return { success: false, message: 'This exchange has no return date.' };
+  if (!state.started) return { success: false, message: 'The return clock starts when the book reaches the borrower.' };
+  if (state.overdue) return { success: false, error: 'DEADLINE_PASSED', message: 'The return deadline has passed, so it can no longer be extended.' };
+  if (state.legs.every(l => l.state !== 'DUE')) return { success: false, message: 'The book is already on its way back.' };
+  if (state.pendingExtension) return { success: false, message: 'There is already an extension request waiting for an answer.' };
+  if (RETURN_EXTENSION_CHOICES.indexOf(days) === -1) return { success: false, message: 'An extension is +7 or +14 days.' };
+  if (days > state.extensionDaysLeft) {
+    return { success: false, error: 'EXTENSION_LIMIT', message: state.extensionDaysLeft > 0
+      ? 'Only ' + state.extensionDaysLeft + ' more days can be added (14 at most in total).'
+      : 'This exchange has already been extended by the maximum 14 days.' };
+  }
+  const sheet = getReturnExtensionSheet_();
+  const headers = ensureSheetHeaders(sheet, RETURN_EXTENSION_HEADERS);
+  const obj = {
+    id: generateId('SS_EXT_'), swapId: swap.obj.id, requestedBy: caller, days: days,
+    reason: String((data && data.reason) || '').trim().slice(0, 200), status: 'PENDING', createdAt: new Date()
+  };
+  sheet.appendRow(headers.map(h => obj[h] !== undefined ? obj[h] : ''));
+  const other = caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail;
+  returnNotify_(other, 'return_extension_requested', 'Return extension requested',
+    'The other reader has asked to extend the return of "' + (swap.obj.requestedBookTitle || 'the book') + '" by ' + days +
+    ' days. Open the exchange to accept or decline. It only applies if you agree.',
+    swap.obj.id, 'ext_req_' + obj.id, { whatsapp: false });
+  return { success: true, message: 'Extension requested. It applies once the other reader agrees.' };
+}
+
+/** Action: respondReturnExtension { swapId, extensionId, accept: true|false } — the OTHER party only. */
+function respondReturnExtension(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+  const sheet = getReturnExtensionSheet_();
+  const t = readSheetObjects_(sheet);
+  const row = t.rows.find(r => String(r.obj.id) === String(data && data.extensionId) && String(r.obj.swapId) === String(swap.obj.id));
+  if (!row) return { success: false, message: 'That extension request could not be found.' };
+  if (String(row.obj.status).toUpperCase() !== 'PENDING') return { success: false, message: 'That request has already been answered.' };
+  if (normalizeEmail(row.obj.requestedBy) === caller) return { success: false, error: 'WRONG_PARTY', message: 'The other reader has to agree to an extension, not the one who asked.' };
+  const state = returnStateForSwap_(swap);
+  const accept = data && (data.accept === true || data.accept === 'true');
+  if (accept && state.overdue) return { success: false, error: 'DEADLINE_PASSED', message: 'The deadline has already passed, so the extension can no longer be agreed.' };
+  if (accept && Number(row.obj.days) > state.extensionDaysLeft) return { success: false, error: 'EXTENSION_LIMIT', message: 'That would take the total extension past 14 days.' };
+  const set = (name, v) => { const i = t.headers.indexOf(name); if (i !== -1) sheet.getRange(row.rowIndex + 1, i + 1).setValue(v); };
+  set('status', accept ? 'APPROVED' : 'DECLINED');
+  set('decidedBy', caller);
+  set('decidedAt', new Date());
+  const newDue = accept ? new Date(new Date(state.dueAt).getTime() + Number(row.obj.days) * RETURN_DAY_MS) : null;
+  [swap.requesterEmail, swap.ownerEmail].forEach(email => returnNotify_(email,
+    accept ? 'return_extension_approved' : 'return_extension_declined',
+    accept ? 'Return date extended' : 'Extension declined',
+    accept
+      ? 'The return of "' + (swap.obj.requestedBookTitle || 'the book') + '" is now due by ' + returnDateLabel_(newDue) + '. This is the new strict deadline.'
+      : 'The extension was declined. The return is still due by ' + returnDateLabel_(new Date(state.dueAt)) + '.',
+    swap.obj.id, 'ext_' + (accept ? 'ok_' : 'no_') + row.obj.id, { whatsapp: accept }));
+  return { success: true, message: accept ? 'Extension agreed.' : 'Extension declined.' };
+}
+
+function returnDateLabel_(d) {
+  try { return Utilities.formatDate(d, 'Asia/Kolkata', 'd MMM yyyy, h:mm a'); }
+  catch (e) { return new Date(d).toDateString(); }
+}
+
+/** One message, every channel: in the app, by email, and on WhatsApp when configured. */
+function returnNotify_(email, type, title, body, swapId, dedupeKey, opts) {
+  if (!email) return;
+  const o = opts || {};
+  let isNew = true;
+  try {
+    // createNotification de-duplicates on dedupeKey, which is what stops the
+    // daily job repeating a reminder. Its result tells us whether it was new.
+    const res = createNotification(email, type, title, body, swapId, { link: '/profile', dedupeKey: dedupeKey });
+    if (res && (res.duplicate || res.deduped || res.skipped)) isNew = false;
+  } catch (e) { Logger.log('returnNotify_ in-app failed: ' + e); }
+  if (!isNew) return;
+  try {
+    sendSwapSutraEmail({
+      to: email, subject: 'SwapSutra: ' + title,
+      htmlBody: '<p>' + body.replace(/</g, '&lt;') + '</p><p style="font-size:13px;color:#555">' + RETURN_POLICY_TEXT + '</p><p>— SwapSutra</p>'
+    });
+  } catch (e) { Logger.log('returnNotify_ email failed: ' + e); }
+  if (o.whatsapp !== false) {
+    try { sendWhatsAppNotice_(email, title, body); } catch (e) { Logger.log('returnNotify_ WhatsApp failed: ' + e); }
+  }
+}
+
+/* ── WhatsApp (Meta WhatsApp Business Cloud API) ─────────────────────────
+   Off until configured. Business-initiated WhatsApp messages must use a
+   template Meta has approved, so set these Script Properties:
+     WHATSAPP_TOKEN          permanent access token
+     WHATSAPP_PHONE_ID       the sender phone-number ID
+     WHATSAPP_TEMPLATE       approved template name, with two body
+                             variables: {{1}} title, {{2}} message
+     WHATSAPP_TEMPLATE_LANG  optional, default "en"
+   The reader's number is the one they joined with. Nothing is sent, and
+   nothing fails, while any of these is missing. */
+function sendWhatsAppNotice_(email, title, body) {
+  const props = PropertiesService.getScriptProperties();
+  const token = props.getProperty('WHATSAPP_TOKEN');
+  const phoneId = props.getProperty('WHATSAPP_PHONE_ID');
+  const template = props.getProperty('WHATSAPP_TEMPLATE');
+  if (!token || !phoneId || !template) return false;
+  const to = whatsappNumberFor_(email);
+  if (!to) return false;
+  const res = UrlFetchApp.fetch('https://graph.facebook.com/v20.0/' + phoneId + '/messages', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify({
+      messaging_product: 'whatsapp', to: to, type: 'template',
+      template: {
+        name: template, language: { code: props.getProperty('WHATSAPP_TEMPLATE_LANG') || 'en' },
+        components: [{ type: 'body', parameters: [
+          { type: 'text', text: String(title).slice(0, 60) },
+          { type: 'text', text: String(body).replace(/\s+/g, ' ').slice(0, 900) }
+        ] }]
+      }
+    })
+  });
+  const code = res.getResponseCode();
+  if (code < 200 || code >= 300) Logger.log('WhatsApp send failed (' + code + '): ' + res.getContentText().slice(0, 300));
+  return code >= 200 && code < 300;
+}
+
+/** The reader's phone in international form (Indian numbers get 91), or ''. */
+function whatsappNumberFor_(email) {
+  const norm = normalizeEmail(email);
+  const row = findRowByEmail_('Subscriptions', norm) || findRowByEmail_('Users', norm) || {};
+  const digits = String(row.phone || row.whatsapp || row.phoneNumber || '').replace(/\D/g, '');
+  if (digits.length === 10) return '91' + digits;
+  if (digits.length === 12 && digits.indexOf('91') === 0) return digits;
+  if (digits.length === 11 && digits.charAt(0) === '0') return '91' + digits.slice(1);
+  return '';
+}
+
+/**
+ * The daily job. For every live exchange with a return date: sends the
+ * start notice and the 7 / 3 / 1-day and last-day reminders, and forfeits
+ * the deposit on any leg whose book is not on its way back after the
+ * deadline. Safe to run more often — every message is de-duplicated and a
+ * leg is only ever forfeited once.
+ */
+function runReturnDeadlines() {
+  const started = Date.now();
+  const summary = { checked: 0, reminders: 0, forfeited: 0, errors: 0 };
+  const swapsSheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+  const swaps = readSheetObjects_(swapsSheet);
+  const eventsBySwap = journeyEventsBySwap_();
+  const exts = readSheetObjects_(getReturnExtensionSheet_()).rows.map(r => r.obj);
+  const forfeitSheet = getReturnForfeitSheet_();
+  const forfeits = readSheetObjects_(forfeitSheet).rows.map(r => r.obj);
+  let stageInfo = {};
+  try { stageInfo = stageReturnInfoBySwap_(); } catch (e) { stageInfo = {}; }
+
+  swaps.rows.forEach(r => {
+    if (Date.now() - started > 4.5 * 60 * 1000) return;
+    const o = r.obj;
+    const status = String(o.status || '').toLowerCase();
+    if (['pending', 'declined', 'rejected', 'cancelled', 'expired', 'completed'].indexOf(status) !== -1) return;
+    if (!returnLegsFor_(o).length) return;
+    try {
+      const id = String(o.id);
+      const state = computeReturnState_(o, eventsBySwap[id] || [],
+        exts.filter(x => String(x.swapId) === id), forfeits.filter(x => String(x.swapId) === id), undefined, stageInfo[id] || null);
+      if (!state.started) return;
+      summary.checked++;
+      const swap = loadSwapForCirculation(id);
+      if (!swap) return;
+      const title = String(o.requestedBookTitle || 'the book');
+      const due = returnDateLabel_(new Date(state.dueAt));
+
+      state.legs.forEach(leg => {
+        const borrowerEmail = leg.borrower === 'owner' ? swap.ownerEmail : swap.requesterEmail;
+        const ownerEmail = leg.owner === 'owner' ? swap.ownerEmail : swap.requesterEmail;
+        const bookLabel = leg.leg === 'counter_return' ? 'the book you received in this swap' : '"' + title + '"';
+        if (leg.state === 'DUE') {
+          returnNotify_(borrowerEmail, 'return_started', 'Return due by ' + due,
+            'You have ' + bookLabel + '. It must be on its way back by ' + due + '. ' + RETURN_POLICY_TEXT,
+            id, 'ret_start_' + id + '_' + leg.leg + '_' + state.dueAt);
+          RETURN_REMINDER_DAYS_LEFT.forEach(n => {
+            if (state.daysLeft <= n && state.daysLeft > 0) {
+              returnNotify_(borrowerEmail, 'return_reminder', n + (n === 1 ? ' day' : ' days') + ' left to return the book',
+                'Please return ' + bookLabel + ' by ' + due + '. Hand it over in person, or post it and add the courier name and tracking ID. ' +
+                'If it is not on its way back by then, your security deposit will be forfeited to the owner.',
+                id, 'ret_left' + n + '_' + id + '_' + leg.leg + '_' + state.dueAt);
+              summary.reminders++;
+            }
+          });
+          if (state.daysLeft <= 0 && !state.overdue) {
+            returnNotify_(borrowerEmail, 'return_last_day', 'Last day to return the book',
+              'Today is the last day. Add the courier tracking ID or hand ' + bookLabel + ' over in person before ' + due + ', or the security deposit is forfeited.',
+              id, 'ret_last_' + id + '_' + leg.leg + '_' + state.dueAt);
+          }
+        }
+        if (leg.state === 'OVERDUE' || leg.state === 'RETURNED_LATE') {
+          const amount = Number(o[leg.deposit] || 0);
+          const headers = ensureSheetHeaders(forfeitSheet, RETURN_FORFEIT_HEADERS);
+          const rec = {
+            id: generateId('SS_FORFEIT_'), swapId: id, leg: leg.leg, bookTitle: title,
+            defaulterEmail: borrowerEmail, ownerEmail: ownerEmail, amount: amount,
+            dueAt: new Date(state.dueAt), forfeitedAt: new Date(), payoutStatus: amount > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT'
+          };
+          forfeitSheet.appendRow(headers.map(h => rec[h] !== undefined ? rec[h] : ''));
+          forfeits.push(rec);
+          summary.forfeited++;
+          try {
+            appendStageEvent({ swapId: id, stage: 'RETURN', party: 'system', actionType: 'deposit_forfeited',
+              actorEmail: 'swapsutra@gmail.com', note: 'Not returned by ' + due + '. ₹' + amount + ' forfeited to the owner.' });
+          } catch (e) { /* the forfeit record above is the source of truth */ }
+          returnNotify_(borrowerEmail, 'return_forfeited', 'Security deposit forfeited',
+            bookLabel + ' was not on its way back by ' + due + ', so your ₹' + amount + ' security deposit has been forfeited and will be paid to the owner. You must still return the book.',
+            id, 'ret_forfeit_' + id + '_' + leg.leg);
+          returnNotify_(ownerEmail, 'return_forfeited_owner', 'The deposit is coming to you',
+            'Your book was not returned by ' + due + '. The borrower\'s ₹' + amount + ' security deposit has been forfeited and SwapSutra will pay it to you. SwapSutra will also help you get the book back.',
+            id, 'ret_forfeit_owner_' + id + '_' + leg.leg);
+          returnNotify_('swapsutra@gmail.com', 'return_forfeit_admin', 'Pay out a forfeited deposit',
+            'Exchange ' + id + ': ₹' + amount + ' forfeited by ' + borrowerEmail + ' — pay it to ' + ownerEmail + ' and mark it paid in Admin → Returns.',
+            id, 'ret_forfeit_admin_' + id + '_' + leg.leg, { whatsapp: false });
+        }
+      });
+    } catch (err) {
+      summary.errors++;
+      Logger.log('runReturnDeadlines failed for ' + o.id + ': ' + err);
+    }
+  });
+  return summary;
+}
+
+/** Run once from the editor: schedules runReturnDeadlines every hour. */
+function installReturnDeadlineTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'runReturnDeadlines')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('runReturnDeadlines').timeBased().everyHours(1).create();
+  return 'runReturnDeadlines will run every hour.';
+}
+
+/** Admin action: adminListReturnForfeits — forfeits waiting to be paid to owners. */
+function adminListReturnForfeits() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const items = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
+    .sort((a, b) => new Date(b.forfeitedAt) - new Date(a.forfeitedAt));
+  return { success: true, items: items };
+}
+
+/** Admin action: adminMarkForfeitPaid { id, note? } — after paying the owner. */
+function adminMarkForfeitPaid(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const sheet = getReturnForfeitSheet_();
+  const t = readSheetObjects_(sheet);
+  const row = t.rows.find(r => String(r.obj.id) === String(data && data.id));
+  if (!row) return { success: false, message: 'Not found.' };
+  if (row.obj.payoutStatus !== 'TO_PAY_OWNER') return { success: false, message: 'This one is not waiting for a payout.' };
+  const set = (name, v) => { const i = t.headers.indexOf(name); if (i !== -1) sheet.getRange(row.rowIndex + 1, i + 1).setValue(v); };
+  set('payoutStatus', 'PAID_TO_OWNER');
+  set('paidAt', new Date());
+  set('paidBy', normalizeEmail(getAuthenticatedEmail()));
+  set('note', String((data && data.note) || '').slice(0, 300));
+  returnNotify_(row.obj.ownerEmail, 'return_forfeit_paid', 'Forfeited deposit paid to you',
+    'SwapSutra has paid you ₹' + row.obj.amount + ' — the deposit forfeited when your book was not returned on time.',
+    row.obj.swapId, 'ret_paid_' + row.obj.id);
+  return { success: true };
 }

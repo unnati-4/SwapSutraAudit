@@ -107,6 +107,12 @@ You may list a book only if **all** of the following are true:
 - **Your description is honest.** Condition (New, Gently Used, Well Loved), edition, and any damage must be described truthfully.
 - **The photographs are real and current** — of your actual copy, not stock images.
 
+**Your prices.** You set your own selling price and monthly rent for each book you offer for sale or rent.
+
+**Swaps are like for like.** Two books can be swapped only when they are in the same condition, of the same type (paperback, hardcover or budget copy), and their printed MRPs are within 10% of each other.
+
+**Returns are strict.** A rented, lent or temporarily swapped book must be on its way back within 21 days of reaching the borrower (+7 or +14 days if both readers agree, 14 at most), or the borrower's 65% MRP security deposit is forfeited and paid to the owner. See the [Refund & Security Deposit Policy](/refund-policy).
+
 Every listing is reviewed by a curator before it goes live. We may reject or remove any listing at our discretion, including for poor image quality, incomplete details, suspected inauthenticity, or content that breaches our [Community Guidelines](/community-guidelines).
 
 **Lending, renting, swapping and selling your own legally purchased physical books is lawful in India.** Once a copy has been sold, the copyright owner's control over that particular copy is exhausted. What is *not* permitted — and what will get you removed — is circulating reproductions: photocopies, scans, or PDFs.

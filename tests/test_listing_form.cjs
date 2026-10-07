@@ -179,7 +179,8 @@ check('33. Neither checkbox sets the other',
   !/setOfferLend\(true\)[\s\S]{0,80}setOfferRent\(true\)/.test(src)
   && !/offerRent \|\| offerLend/.test(src));
 
-check('34. Rent shows a monthly charge', /Monthly rent/.test(src));
+// Oct 2026: the owner sets the rent; 10% of MRP is only the suggestion.
+check('34. Rent asks the owner for a monthly charge', /Your rent per month/.test(src));
 check('35. ...at ten percent of the printed MRP',
   /listingMrpNumber \* 0\.10/.test(src));
 check('36. ...and says so in words', /10% of the printed MRP per month/.test(src));
@@ -188,7 +189,7 @@ check('37. Lend shows no monthly charge at all',
   /Lending carries no monthly charge/.test(src));
 
 check('38. Rent without an MRP is refused rather than priced at nothing',
-  /this book cannot be rented/i.test(src));
+  /a book without one can&rsquo;t be rented|a book without one can't be rented/i.test(src));
 
 // ── MRP ─────────────────────────────────────────────────────────────────
 console.log('\n--- an unknown MRP says so ---');
@@ -260,11 +261,13 @@ check('50. There is one create form, not two',
 check('51. The reader can type the printed MRP',
   /name="mrp"[\s\S]{0,500}value=\{listingMrp\}/.test(src));
 
-check('52. The allowed listing range is rendered',
-  /listingBand\.sell\.allowed_min\} &ndash; &#8377;\{listingBand\.sell\.allowed_max\}/.test(src));
+// Oct 2026 (owner's decision): the owner sets their own selling price — the
+// catalogue's band is a guide, no longer a limit.
+check('52. The owner types their own selling price, with no band limit',
+  /id="listing-sell-price"/.test(src) && !/listingBand\.sell\.allowed_min\} &ndash;/.test(src));
 
-check('53. ...the reference value and deposit too, under their own names',
-  /SwapSutra reference value/.test(src) && /security deposit/.test(src));
+check('53. ...the reference value and the 65% deposit, under their own names',
+  /Market reference/.test(src) && /security deposit of <strong>65% of the MRP/.test(src));
 
 check('54. An MRP-derived band is marked as an estimate',
   /listingBand\.is_estimate/.test(src));

@@ -179,7 +179,8 @@ check('37. Admin-verified → firm', call('isEstimatedBookValue_', { id: 'x', ef
 check('38. Automated, unverified figure → estimate',
   call('isEstimatedBookValue_', { id: 'x', effectiveMRP: 250, automatedMRP: 250, pricingSource: 'AUTOMATED_UNVERIFIED' }) === true);
 const q = plain(call('computeMutualDeposit', { id: 'x' }, null, 'RENT'));
-check('39. The estimate is still computed and charged (₹150 from the ₹250 fallback)', q.requesterDeposit === 150, JSON.stringify(q));
+// Oct 2026: 65% of the ₹250 fallback.
+check('39. The estimate is still computed and charged (₹163 from the ₹250 fallback)', q.requesterDeposit === 163, JSON.stringify(q));
 check('40. ...and flagged as an estimate', q.requesterDepositEstimated === true);
 const q2 = plain(call('computeMutualDeposit', { id: 'y', userEnteredMRP: 500, pricingSource: 'USER', condition: 'New' }, null, 'RENT'));
 check('41. A verified price is not flagged', q2.requesterDepositEstimated === false && q2.requesterDeposit > 0);

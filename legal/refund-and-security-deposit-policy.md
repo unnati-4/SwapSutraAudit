@@ -22,7 +22,7 @@ This policy covers two completely separate kinds of money. Please do not confuse
 | | **Part A — SwapSutra's fees** | **Part B — Security deposits** |
 |---|---|---|
 | Paid to | SwapSutra | SwapSutra, held against the book |
-| Amount | ₹10 per reader per exchange; ₹20 once for more than 20 listings | Up to 60% of the book's MRP |
+| Amount | ₹10 per reader per exchange; ₹20 once for more than 20 listings | 65% of the book's MRP (swap, rent, lend); none on a sale |
 | Purpose | Running the platform | Protection against a book not coming back |
 | Refunded by | SwapSutra | SwapSutra, once the return is confirmed |
 
@@ -88,13 +88,21 @@ A deposit is **security, not a fee**.
 
 ## B2. How much may be asked for
 
-A deposit may be **no more than 60% of the book's printed MRP**. This is a community rule, and asking for more is a breach of our Terms.
+The deposit is **65% of the book's printed MRP**, for a swap, a rental or a loan, whatever the book's condition. In a swap, both readers pay one, each on the book they receive. A purchase has no deposit. SwapSutra works the amount out; readers cannot change it.
+
+## B2a. The 21-day return rule (strict)
+
+- A borrowed book — rented, lent, or received in a temporary swap — must be **on its way back within 21 days** of reaching the borrower: handed over in person, or posted with the **courier name and tracking ID** entered in the app by the end of day 21.
+- Both readers may agree, in the app, to extend by **+7 or +14 days**. Extensions can be combined but never exceed **14 days in total**, and must be agreed before the deadline.
+- Once the book has been posted in time, a slow courier is not held against the borrower.
+- If the book is **not on its way back by the deadline**, the borrower's **deposit is forfeited and paid to the book's owner**. The borrower must still return the book.
+- SwapSutra sends reminders in the app and by email (and WhatsApp where available) with 7, 3 and 1 days left and on the last day.
 
 For a book with no printed MRP, readers should agree a reasonable figure based on current retail value. If you cannot agree, do not proceed with the exchange.
 
 ## B3. The deposit is returned in full when
 
-- the book is returned within the agreed period, in substantially the condition it went out in (ordinary reading wear is expected and is not damage); **or**
+- the book is on its way back within the return period (B2a), in substantially the condition it went out in (ordinary reading wear is expected and is not damage); **or**
 - the exchange is cancelled before the book changes hands; **or**
 - the owner fails to hand over the book at all.
 
@@ -104,9 +112,8 @@ For a book with no printed MRP, readers should agree a reasonable figure based o
 
 | Situation | What may be retained |
 |---|---|
-| The book is not returned at all | Up to the full deposit |
+| The book is not on its way back by the return deadline (B2a) | **The full deposit, paid to the owner** |
 | The book is returned significantly damaged beyond ordinary reading wear | A fair amount reflecting the damage — not automatically the whole deposit |
-| The book is returned very late, after reasonable reminders | A fair amount, agreed in advance if possible |
 
 **Ordinary reading wear is not damage.** A softened spine, a slightly bumped corner, or the ordinary marks of a book having been read are exactly what a book-sharing community is for. Retaining a deposit over ordinary wear is a breach of our Terms, and we will act on it.
 
@@ -122,7 +129,7 @@ For a book with no printed MRP, readers should agree a reasonable figure based o
 
 ## B6. Rent and purchase payments
 
-The same principle applies. Rent and purchase money is paid **directly between readers**. SwapSutra does not collect, hold or refund it. Terms are agreed between the two readers before the exchange, and recorded in the app.
+Rent and purchase money is paid **directly between readers**. The **owner sets their own selling price and monthly rent** on the listing. SwapSutra does not collect, hold or refund it.
 
 ## B7. Delivery and courier costs
 

@@ -227,8 +227,8 @@ check('47. ...and not for what they did not',
 // ══════════════════════════════ 8. Deposits
 console.log('\n--- Deposits ---');
 check('48. The deposit rate is defined once, not repeated as a literal',
-  run('DEPOSIT_RATE') === 0.6);
-check('49. The deposit lands on whole rupees', call('depositFor', 195) === 117);
+  run('DEPOSIT_RATE') === 0.65); // Oct 2026: flat 65%
+check('49. The deposit lands on whole rupees', call('depositFor', 195) === 127); // 65% of ₹195 = 126.75
 
 const A = { mrp: 200 }, B = { mrp: 2000 };
 check('50. A rental takes a deposit from the borrower only',

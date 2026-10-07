@@ -262,7 +262,7 @@ export const RefundPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
     </S>
 
     <S title="Security deposits">
-      <p>For a temporary exchange, the borrower pays a refundable deposit of up to 60% of the book's printed price.</p>
+      <p>For a swap, a rental or a loan, the reader receiving a book pays a refundable deposit of 65% of its printed MRP. A purchase has no deposit. A borrowed book must be on its way back within <strong>21 days</strong> of reaching the borrower (handed over, or posted with the courier name and tracking ID). Both readers may agree to extend by +7 or +14 days, 14 at most. If it isn't on its way back by the deadline, the deposit is forfeited and paid to the book's owner.</p>
       <UL items={[
         <><strong>Returned in full within 48 hours</strong> after both readers confirm the book is back in good condition, or if the exchange is cancelled before handover.</>,
         <><strong>Partly or fully kept</strong> only if the book is not returned, is damaged beyond normal reading wear, or is returned very late. The reason must be given in the exchange chat.</>,

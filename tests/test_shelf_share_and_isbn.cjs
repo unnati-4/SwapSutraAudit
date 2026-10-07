@@ -42,7 +42,7 @@ check('3. Form marks ISBN as required', /Book ISBN <span className="text-red-700
 check('4. Submit refuses a listing with no ISBN', /if \(!rawIsbn\) \{[\s\S]{0,120}ISBN is required/.test(app));
 check('5. A typed-but-not-looked-up ISBN still counts', /normalizeIsbn\(String\(manualIsbnValue\.trim\(\) \|\| isbnMetadata\?\.isbn/.test(app));
 check('6. Server refuses createBook without ISBN (ISBN_REQUIRED)', /if \(!normalizeIsbnServer\(data\.isbn\)\) \{[\s\S]{0,200}ISBN_REQUIRED/.test(gs));
-check('7. ...before pricing runs', gs.indexOf('ISBN_REQUIRED') < gs.indexOf("const pricing = resolveListingPricing(data, id);"));
+check('7. ...before pricing runs', gs.indexOf('ISBN_REQUIRED') < gs.indexOf("const pricing = resolveListingPricing("));
 check('8. Scanning fills the ISBN box', /setManualIsbnValue\(isbn\);\s*performIsbnLookup\(isbn\);/.test(app));
 
 console.log('--- Shelf cover by ISBN ---');

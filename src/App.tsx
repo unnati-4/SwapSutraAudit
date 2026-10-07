@@ -153,6 +153,10 @@ const AdminListingUnlockQueue = lazyScreen<any>(
   () => import('./components/AdminListingUnlockQueue'),
   'Opening listing unlocks'
 );
+const AdminReturnForfeits = lazyScreen<any>(
+  () => import('./components/AdminReturnForfeits'),
+  'Opening late returns'
+);
 // Community badges handed out after meetups. Admin-only, so it is split out
 // of the main bundle like the other console screens.
 const AdminReaderBadges = lazyScreen<any>(
@@ -182,6 +186,11 @@ import { shelfCoverCandidates, shelfCoverUrl } from './utils/bookCover';
 import CartPage, { type CartView } from './components/CartPage';
 import { depositLine, DEPOSIT_ESTIMATE_EXPLAINER } from './utils/deposit';
 import { buildShelfImage } from './utils/shelfImage';
+import { swapMatch } from './utils/swapMatch';
+import ReturnRuleNotice from './components/ReturnRuleNotice';
+import { LocationCard, parseGeoUrl } from './components/LocationPin';
+// The map picker carries Leaflet; it loads only when someone opens it.
+const LocationPinPicker = lazy(() => import('./components/LocationPin').then(m => ({ default: m.LocationPinPicker })));
 import ShareSheet from './components/ShareSheet';
 import { AwardedBadges } from './components/AwardedBadges';
 import DeleteAccount from './components/DeleteAccount';
@@ -972,6 +981,14 @@ interface Book {
   copyTypeDeclaration?: boolean | string;
   referenceCoverUrl?: string; // API-fetched cover shown only as "Book reference" — never the user's own photo
   conditionNotes?: string;
+  // Oct 2026: the owner's own prices (from the server; null when not offered),
+  // and the binding/edition the swap rule compares.
+  sellPrice?: number | null;
+  monthlyRent?: number | null;
+  ownerSellPrice?: number | string | null;
+  ownerRentPerMonth?: number | string | null;
+  bookFormat?: string;
+  bookEdition?: string;
 }
 
 interface Testimonial {
@@ -2714,7 +2731,12 @@ const BookCard = memo(({ book, ownerMode = false, userCoords, onShowBookDetail }
                 <Icons.Location size={12} className="opacity-50" />
                 <span className="text-2xs font-medium tracking-wide">{book.area}</span>
               </div>
-              <span className="text-2xs font-bold text-[var(--text-primary)]">₹{book.mrp}</span>
+              {/* Oct 2026: the owner's asking price comes first, then rent, then MRP. */}
+              <span className="text-2xs font-bold text-[var(--text-primary)]">
+                {Number(book.sellPrice) > 0 ? `₹${book.sellPrice}`
+                  : Number(book.monthlyRent) > 0 ? `₹${book.monthlyRent}/mo`
+                  : Number(book.mrp) > 0 ? `MRP ₹${book.mrp}` : ''}
+              </span>
             </div>
             {userCoords && book.latitude && book.longitude && (
               <p className="text-2xs text-brand-gold-text font-bold uppercase tracking-widest text-right">
@@ -3827,6 +3849,26 @@ const BookDetailModal = memo(({
                     })()}
                   </div>
                 </div>
+
+                {/* Oct 2026: what this owner charges — their own prices. */}
+                {(Number(book.sellPrice) > 0 || Number(book.monthlyRent) > 0) && (
+                  <div className="grid grid-cols-2 gap-4 rounded-2xl border border-brand-border/60 bg-[var(--bg-page)] p-4">
+                    {Number(book.sellPrice) > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-2xs text-[var(--text-secondary)] uppercase tracking-widest font-bold">To buy</p>
+                        <p className="font-serif text-lg text-[var(--text-primary)]">₹{book.sellPrice}</p>
+                        <p className="text-2xs text-[var(--text-secondary)]">Owner's price · no deposit</p>
+                      </div>
+                    )}
+                    {Number(book.monthlyRent) > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-2xs text-[var(--text-secondary)] uppercase tracking-widest font-bold">To rent</p>
+                        <p className="font-serif text-lg text-[var(--text-primary)]">₹{book.monthlyRent}<span className="text-sm text-[var(--text-secondary)]"> / month</span></p>
+                        <p className="text-2xs text-[var(--text-secondary)]">+ 65% MRP deposit · return in 21 days</p>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Book authenticity, stated plainly on the listing every
                     reader can open. */}
@@ -4984,6 +5026,8 @@ const ManagementConsole = memo(() => {
             <AdminSecurityFeeQueue />
             {/* ₹20 "unlimited listings" payments, and verified platform revenue. */}
             <AdminListingUnlockQueue />
+            {/* Deposits forfeited for late returns — owed to the book's owner. */}
+            <AdminReturnForfeits />
           </div>
         )}
 
@@ -5403,6 +5447,24 @@ const ChatModal = memo(({
   onUpgrade
 }: any) => {
     const [msgText, setMsgText] = useState('');
+    // Oct 2026: a meeting-point pin, sent as structured data (typed phone
+    // numbers and addresses are blocked in the chat; a pin is not).
+    const [showPinPicker, setShowPinPicker] = useState(false);
+    const [pinBusy, setPinBusy] = useState(false);
+    const [pinError, setPinError] = useState<string | null>(null);
+    const sendPin = async (pin: { lat: number; lng: number; label: string }) => {
+      setPinBusy(true); setPinError(null);
+      try {
+        const res = await fetch(API_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'shareChatLocation', chatId: activeChat.chatId, lat: pin.lat, lng: pin.lng, label: pin.label }),
+        }).then(r => r.json());
+        if (res?.success) setShowPinPicker(false);
+        else setPinError(res?.message || 'That location could not be sent.');
+      } catch {
+        setPinError('That location could not be sent.');
+      } finally { setPinBusy(false); }
+    };
     const [chatTab, setChatTab] = useState<'messages' | 'proofs' | 'timeline' | 'stages'>('messages');
     const [proofs, setProofs] = useState<SwapProof[]>([]);
     const [uploading, setUploading] = useState<string | null>(null);
@@ -5774,7 +5836,11 @@ const ChatModal = memo(({
                         }`}>
                           {!isMine && !isSystem && <p className="text-2xs font-bold uppercase mb-1 opacity-60">{getChatName(m.senderEmail)}</p>}
                           <div className="whitespace-pre-wrap">{m.message}</div>
-                          {m.mediaUrl && (
+                          {m.mediaType === 'location' && parseGeoUrl(m.mediaUrl) ? (
+                            <div className="mt-2 text-left not-italic">
+                              <LocationCard {...parseGeoUrl(m.mediaUrl)!} compact />
+                            </div>
+                          ) : m.mediaUrl && (
                             <div className="mt-2 rounded-lg overflow-hidden border border-black/5">
                               {m.mediaType === 'video' ? (
                                 <div className="aspect-video">
@@ -5844,13 +5910,32 @@ const ChatModal = memo(({
                       </p>
                     </div>
                   ) : (
+                    <>
+                    {showPinPicker && (
+                      <div className="mb-4 space-y-2">
+                        <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">Share a meeting point</p>
+                        <Suspense fallback={<p className="text-xs text-[var(--text-secondary)] italic">Loading the map…</p>}>
+                          <LocationPinPicker busy={pinBusy} onCancel={() => { setShowPinPicker(false); setPinError(null); }} onSubmit={sendPin} />
+                        </Suspense>
+                        {pinError && <p className="text-xs text-red-600" role="alert">{pinError}</p>}
+                      </div>
+                    )}
                     <form onSubmit={(e) => {
                       e.preventDefault();
                       if (msgText.trim()) {
                         handleSendMessage(msgText);
                         setMsgText('');
                       }
-                    }} className="flex gap-4">
+                    }} className="flex gap-2 sm:gap-4">
+                      <button
+                        type="button"
+                        onClick={() => setShowPinPicker(v => !v)}
+                        aria-label="Share a location"
+                        title="Share a meeting point on the map"
+                        className="shrink-0 px-3 rounded-xl border border-brand-border text-lg hover:border-brand-gold transition-colors"
+                      >
+                        📍
+                      </button>
                       <input
                         type="text"
                         value={msgText}
@@ -5866,6 +5951,7 @@ const ChatModal = memo(({
                         <Icons.Send size={20} />
                       </button>
                     </form>
+                    </>
                   )}
                 </div>
               </>
@@ -6985,6 +7071,9 @@ export default function App() {
   // rent figure the moment Rent is ticked — neither one ever sets the other.
   const [offerRent, setOfferRent] = useState(false);
   const [offerLend, setOfferLend] = useState(false);
+  // Oct 2026: the owner sets their own selling price and monthly rent.
+  const [offerSell, setOfferSell] = useState(false);
+  const [listingRentPrice, setListingRentPrice] = useState('');
 
   const [listingMedia, setListingMedia] = useState<Partial<Record<BookMediaField, SelectedMedia>>>({});
   const [mediaErrors, setMediaErrors] = useState<Partial<Record<BookMediaField, string>>>({});
@@ -7191,6 +7280,8 @@ export default function App() {
     setListingDetails({ title: '', author: '', publisher: '', isbn: '' });
     setOfferRent(false);
     setOfferLend(false);
+    setOfferSell(false);
+    setListingRentPrice('');
     clearAllListingMedia();
     setListingBand(null);
     setListingSellPrice('');
@@ -8923,6 +9014,18 @@ export default function App() {
 
   // Location States
   const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
+  // Oct 2026: the reader chooses how far "nearby" reaches. Remembered on
+  // this device; 25 km is the old fixed radius and stays the default.
+  const NEARBY_RADIUS_CHOICES = [2, 5, 10, 25, 50, 100];
+  const [nearbyRadiusKm, setNearbyRadiusKm] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem('swapsutraNearbyKm'));
+      return [2, 5, 10, 25, 50, 100].includes(saved) ? saved : 25;
+    } catch { return 25; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('swapsutraNearbyKm', String(nearbyRadiusKm)); } catch { /* private mode */ }
+  }, [nearbyRadiusKm]);
   const [isSearchingNearby, setIsSearchingNearby] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [locationInput, setLocationInput] = useState(''); // area or pincode manual search
@@ -10827,7 +10930,7 @@ export default function App() {
             ? haversineDistance(userCoords.lat, userCoords.lng, book.latitude, book.longitude)
             : null as number | null
         }))
-        .filter(({ dist }) => dist === null || dist <= 25) // 25km radius; unknown-distance books are kept, not excluded
+        .filter(({ dist }) => dist === null || dist <= nearbyRadiusKm) // the reader's chosen radius; unknown-distance books are kept, not excluded
         .sort((a, b) => {
           if (a.dist === null && b.dist === null) return 0;
           if (a.dist === null) return 1;
@@ -10838,7 +10941,7 @@ export default function App() {
     }
 
     return result;
-  }, [books, search, pincodeFilter, conditionFilter, genreFilter, libraryCategoryFilter, libraryShelf, userCoords]);
+  }, [books, search, pincodeFilter, conditionFilter, genreFilter, libraryCategoryFilter, libraryShelf, userCoords, nearbyRadiusKm]);
 
   // Open a shared listing once the Library has arrived.
   //
@@ -11298,6 +11401,15 @@ export default function App() {
       if (!rawIsbn) {
         throw new Error('ISBN is required. Scan the barcode on the back cover or type the ISBN printed there.');
       }
+      // Oct 2026: the owner's own prices — a sale needs a selling price and
+      // a rental a monthly rent. The server checks this again.
+      const priceOk = (v: string) => v !== '' && Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= USER_MRP_CEILING;
+      if (formData.get('readingSell') === 'on' && !priceOk(listingSellPrice)) {
+        throw new Error('Enter the price you want to sell this book for.');
+      }
+      if (formData.get('readingRent') === 'on' && !priceOk(listingRentPrice)) {
+        throw new Error('Enter the rent you want per month for this book.');
+      }
       if (!isValidIsbn(rawIsbn)) {
         throw new Error("That doesn't look like a valid ISBN. Please scan again or check the number.");
       }
@@ -11430,7 +11542,9 @@ export default function App() {
         // Honest "I don't have it" — the server treats this as an explicit
         // unknown, never as an invitation to invent a number.
         noPrintedMrp: formData.get('noPrintedMrp') === 'on',
-        sellPrice: formData.get('sellPrice') ? Number(formData.get('sellPrice')) : null,
+        // Oct 2026: the owner's own prices, only for what they actually offer.
+        sellPrice: listingStatuses.sell && listingSellPrice !== '' ? Number(listingSellPrice) : null,
+        rentPerMonth: listingStatuses.rent && listingRentPrice !== '' ? Number(listingRentPrice) : null,
         // The reader's declaration about the copy itself, kept apart from
         // which printing it is.
         authenticityStatus: listingEdition === 'UNOFFICIAL' ? 'UNAUTHORISED'
@@ -11614,7 +11728,10 @@ export default function App() {
       referenceCoverUrl: (book as any).referenceCoverUrl || '',
       conditionNotes: (book as any).conditionNotes || '',
       userEnteredMRP: (book as any).userEnteredMRP ?? (book as any).printedMrp ?? '',
-      printedMrp: (book as any).userEnteredMRP ?? (book as any).printedMrp ?? ''
+      printedMrp: (book as any).userEnteredMRP ?? (book as any).printedMrp ?? '',
+      // Oct 2026: the owner's own prices, editable.
+      sellPrice: (book as any).ownerSellPrice ?? '',
+      rentPerMonth: (book as any).ownerRentPerMonth ?? ''
     });
     setEditingBook(book);
     resetEditIsbnFlowState();
@@ -13606,6 +13723,13 @@ export default function App() {
                   </select>
                   <input className="input-classic bg-[var(--input-bg)]" required placeholder="Area" value={bookEditForm.area || ''} onChange={(e) => setBookEditForm((p: any) => ({ ...p, area: e.target.value }))} />
                   <input className="input-classic bg-[var(--input-bg)]" required placeholder="Pincode" value={bookEditForm.pincode || ''} onChange={(e) => setBookEditForm((p: any) => ({ ...p, pincode: e.target.value }))} />
+                  {/* Oct 2026: the owner's own prices. */}
+                  <input className="input-classic bg-[var(--input-bg)]" type="number" min={1} step={1} inputMode="numeric"
+                    placeholder="Your selling price (₹)" aria-label="Your selling price in rupees"
+                    value={bookEditForm.sellPrice ?? ''} onChange={(e) => setBookEditForm((p: any) => ({ ...p, sellPrice: e.target.value }))} />
+                  <input className="input-classic bg-[var(--input-bg)]" type="number" min={1} step={1} inputMode="numeric"
+                    placeholder="Your rent per month (₹)" aria-label="Your rent per month in rupees"
+                    value={bookEditForm.rentPerMonth ?? ''} onChange={(e) => setBookEditForm((p: any) => ({ ...p, rentPerMonth: e.target.value }))} />
                   {/* Read-only. This was editable, which meant a book could
                       be listed at the sheet's price and then have its value
                       edited afterwards — the same hole, one screen along.
@@ -16008,10 +16132,25 @@ export default function App() {
                                                 <p className="text-2xs text-red-500 font-bold uppercase tracking-widest">{locationError}</p>
                                               )}
                                               {userCoords && (
-                                                <div className="flex items-center justify-center gap-4 animate-fadeIn">
+                                                <div className="flex flex-wrap items-center justify-center gap-3 animate-fadeIn">
                                                   <p className="text-xs text-brand-gold-text font-bold uppercase tracking-widest">
-                                                     Showing books within 25 km radius
+                                                     Showing books within
                                                   </p>
+                                                  <div className="flex flex-wrap justify-center gap-1.5" role="group" aria-label="How far to look">
+                                                    {NEARBY_RADIUS_CHOICES.map(km => (
+                                                      <button
+                                                        key={km}
+                                                        type="button"
+                                                        aria-pressed={nearbyRadiusKm === km}
+                                                        onClick={() => setNearbyRadiusKm(km)}
+                                                        className={`min-h-[36px] px-3 rounded-full border text-xs font-semibold tabular-nums transition-colors ${nearbyRadiusKm === km
+                                                          ? 'border-brand-gold bg-brand-gold/15 text-brand-gold-text'
+                                                          : 'border-brand-border text-[var(--text-secondary)] hover:border-brand-gold'}`}
+                                                      >
+                                                        {km} km
+                                                      </button>
+                                                    ))}
+                                                  </div>
                                                   <button 
                                                     onClick={() => {
                                                       setUserCoords(null);
@@ -16257,7 +16396,7 @@ export default function App() {
                   {[
                     {step: '01', title: 'Curate', desc: 'Join and list up to 20 books from your shelf. ₹20 once lifts the limit.' },
                     {step: '02', title: 'Discover', desc: 'Browse the collective library. Temporary swaps are fixed for 1 month.' },
-                    {step: '03', title: 'Connect', desc: 'Once the owner accepts, you each pay a ₹10 platform fee and your chat opens. Temporary swaps also need a 60% MRP refundable deposit.' },
+                    {step: '03', title: 'Connect', desc: 'Once the owner accepts, you each pay a ₹10 platform fee and your chat opens. Swaps, rentals and loans also need a 65% MRP refundable deposit.' },
                   ].map(s => (
                     <div key={s.step} className="text-center group">
                       <div className="text-6xl font-serif text-brand-beige group-hover:text-brand-gold-text/20 transition-colors duration-500 mb-6">{s.step}</div>
@@ -16287,14 +16426,14 @@ export default function App() {
                         <li>• Joining: free</li>
                         <li>• Platform fee: ₹10 from each reader when an exchange is accepted (swap, lend, rent or sell)</li>
                         <li>• More than 20 listings: ₹20, once</li>
-                        <li>• Temporary swap security: 60% refundable security fee, collected only after admin approval</li>
+                        <li>• Security deposit: 65% of MRP for a swap, a rental or a loan — refundable, forfeited to the owner if the book isn't on its way back within 21 days. A purchase has none.</li>
                       </ul>
                     </div>
                   </div>
                   <div className="space-y-6">
                     <p className="flex gap-4">
                       <span className="text-brand-gold-text font-bold">III.</span>
-                      <span>Temporary swaps require a refundable security fee (60% of MRP) collected AFTER match approval.</span>
+                      <span>Swaps need two books of the same condition and type (paperback, hardcover or budget copy) with MRPs within 10%. Each reader pays a refundable 65% MRP deposit after the owner accepts.</span>
                     </p>
                     <p className="flex gap-4">
                       <span className="text-brand-gold-text font-bold">IV.</span>
@@ -16308,7 +16447,7 @@ export default function App() {
                       </div>
                       <div>
                         <p className="text-xs font-bold text-[var(--text-primary)]">Q: Is there a fee for temporary swaps?</p>
-                        <p className="text-xs opacity-70 mt-1">A: Yes. A refundable security fee equal to 60% of original MRP is collected only after admin match approval. Fully refundable on return.</p>
+                        <p className="text-xs opacity-70 mt-1">A: Yes. A refundable deposit of 65% of the MRP, from each reader, is collected after the owner accepts. Borrowed books must be on their way back within 21 days (+7 or +14 if both agree) or the deposit is forfeited to the owner. Fully refundable on return.</p>
                       </div>
                     </div>
                   </div>
@@ -18195,8 +18334,9 @@ export default function App() {
                       <span className="flex-1">Lend<span className="ml-2 text-2xs font-normal text-[var(--text-secondary)] opacity-70">no charge, just a deposit</span></span>
                     </label>
                     <label className="flex items-center gap-3 rounded-2xl border border-brand-border bg-[var(--bg-surface)] px-4 py-3 text-sm font-semibold text-[var(--text-primary)]">
-                      <input name="readingSell" type="checkbox" className="h-4 w-4 accent-brand-gold" />
-                      <span>Sell</span>
+                      <input name="readingSell" type="checkbox" className="h-4 w-4 accent-brand-gold"
+                        checked={offerSell} onChange={(e) => setOfferSell(e.target.checked)} />
+                      <span className="flex-1">Sell<span className="ml-2 text-2xs font-normal text-[var(--text-secondary)] opacity-70">your price, no deposit</span></span>
                     </label>
                   </div>
                   {/* Shelf options are secondary to sharing the book, so they
@@ -18271,7 +18411,7 @@ export default function App() {
                         Printed MRP   what the publisher charges for a new copy
                         SELL price    what this reader may charge, their choice
                         Reference     the system's valuation, not theirs
-                        Deposit       60% of the reference, never of their price
+                        Deposit       65% of the MRP, never of their price (Oct 2026)
                   */}
                   {listingEdition && listingEdition !== 'UNOFFICIAL' && (
                     <div className="space-y-2">
@@ -18346,66 +18486,20 @@ export default function App() {
                       ) : listingBand?.priceable && listingBand.sell ? (
                         <>
                           <div className="space-y-1">
-                            <p className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">
-                              You may list this book for
-                            </p>
-                            <p className="text-2xs text-[var(--text-secondary)]">
-                              &#8377;{listingBand.sell.allowed_min} &ndash; &#8377;{listingBand.sell.allowed_max}
-                              {listingBand.mrp ? ` · printed MRP ₹${listingBand.mrp}` : ''}
-                            </p>
-                          </div>
-
-                          <div className="flex items-center gap-3">
-                            <span className="font-serif text-xl text-[var(--text-primary)]">&#8377;</span>
-                            <input
-                              name="sellPrice"
-                              type="number"
-                              inputMode="numeric"
-                              min={listingBand.sell.allowed_min}
-                              max={listingBand.sell.allowed_max}
-                              value={listingSellPrice}
-                              onChange={(e) => setListingSellPrice(e.target.value)}
-                              className="input-classic bg-[var(--bg-surface)] flex-1"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setListingSellPrice(String(listingBand.sell!.suggested))}
-                              className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text underline shrink-0"
-                            >
-                              Use &#8377;{listingBand.sell.suggested}
-                            </button>
-                          </div>
-
-                          {/* The reader is told immediately, not at submit.
-                              The server checks this again and is the one
-                              that decides — this is courtesy, not security. */}
-                          {listingSellPrice && (
-                            Number(listingSellPrice) < listingBand.sell.allowed_min ||
-                            Number(listingSellPrice) > listingBand.sell.allowed_max
-                          ) && (
-                            <p className="text-xs text-red-600 leading-relaxed">
-                              For a {listingCondition.toLowerCase()} copy of this book the allowed range is
-                              &#8377;{listingBand.sell.allowed_min} to &#8377;{listingBand.sell.allowed_max}.
-                            </p>
-                          )}
-
-                          <div className="pt-3 border-t border-brand-border/40 space-y-1">
                             <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">
-                              For swap, rent and lend
+                              SwapSutra's estimate
                             </p>
                             <p className="text-sm text-[var(--text-primary)]">
-                              SwapSutra reference value <strong>&#8377;{listingBand.reference_price}</strong>
-                              {' · '}security deposit <strong>&#8377;{listingBand.deposit}</strong>
+                              Market reference <strong>&#8377;{listingBand.reference_price}</strong>
+                              {listingBand.sell?.suggested ? <>{' · '}a typical asking price is about <strong>&#8377;{listingBand.sell.suggested}</strong></> : null}
                             </p>
                             <p className="text-2xs text-[var(--text-secondary)] leading-relaxed">
                               {(!listingNoMrp && listingMrpNumber !== null)
-                                ? <>The reference value above is SwapSutra&rsquo;s own automated estimate. While that
-                                    estimate is being verified, the deposit is instead calculated from the <strong>Book
-                                    MRP you entered</strong> &mdash; never from the price you choose above, and never
-                                    from anything you type after listing.</>
-                                : <>The reference value is SwapSutra&rsquo;s own valuation for swaps and loans, not a
-                                    market price. The deposit comes from it, never from the price you choose above
-                                    &mdash; listing higher does not increase what the other reader puts down.</>}
+                                ? <>Only a guide — your selling price and rent are yours to set. Swaps, rentals and loans
+                                    take a security deposit of <strong>65% of the MRP you entered</strong>
+                                    (&#8377;{Math.round(listingMrpNumber * 0.65)}), never of the price you choose.</>
+                                : <>Only a guide — your selling price and rent are yours to set. Swaps, rentals and loans
+                                    take a security deposit of 65% of the book&rsquo;s MRP, never of the price you choose.</>}
                             </p>
                           </div>
 
@@ -18430,23 +18524,54 @@ export default function App() {
                       the charge again from the MRP it resolved, and that
                       one is what anybody pays. Lending shows nothing here,
                       because lending has no monthly charge. */}
-                  {offerRent && (
-                    <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-4">
-                      <p className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">Monthly rent</p>
-                      {listingMrpNumber === null ? (
-                        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                          Add the printed MRP above and we can work out the monthly rent. Without it, this book cannot be rented.
-                        </p>
-                      ) : (
-                        <>
-                          <p className="mt-1 font-serif text-2xl text-[var(--text-primary)]">
-                            ₹{(listingMrpNumber * 0.10).toFixed(2)}<span className="text-sm text-[var(--text-secondary)]"> / month</span>
-                          </p>
-                          <p className="mt-1 text-2xs text-[var(--text-secondary)] opacity-70">
-                            Rent is 10% of the printed MRP per month. It is not affected by the price you choose for selling.
-                          </p>
-                        </>
+                  {/* Oct 2026: the owner sets their own prices. Rent starts
+                      at a suggestion of 10% of the printed MRP per month; the
+                      owner can change it. A sale takes no deposit. */}
+                  {offerSell && (
+                    <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-4 space-y-2">
+                      <label htmlFor="listing-sell-price" className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">Your selling price</label>
+                      <div className="flex items-center gap-3">
+                        <span className="font-serif text-xl text-[var(--text-primary)]">&#8377;</span>
+                        <input id="listing-sell-price" name="sellPrice" type="number" inputMode="numeric" min={1} max={USER_MRP_CEILING} step={1}
+                          value={listingSellPrice} onChange={(e) => setListingSellPrice(e.target.value)}
+                          placeholder="e.g. 250" className="input-classic bg-[var(--bg-surface)] flex-1" />
+                      </div>
+                      {listingSellPrice !== '' && (!Number.isInteger(Number(listingSellPrice)) || Number(listingSellPrice) < 1 || Number(listingSellPrice) > USER_MRP_CEILING) && (
+                        <p className="text-xs text-red-600">Enter a whole amount between ₹1 and ₹{USER_MRP_CEILING.toLocaleString('en-IN')}.</p>
                       )}
+                      {listingMrpNumber !== null && Number(listingSellPrice) > listingMrpNumber && (
+                        <p className="text-xs text-amber-700">That's more than the printed MRP (₹{listingMrpNumber}). You can still list it, but buyers may pass.</p>
+                      )}
+                      <p className="text-2xs text-[var(--text-secondary)] opacity-80 leading-relaxed">
+                        You decide the price. The buyer pays it to you directly; there is no security deposit on a sale.
+                      </p>
+                    </div>
+                  )}
+
+                  {offerRent && (
+                    <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-4 space-y-2">
+                      <label htmlFor="listing-rent-price" className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">Your rent per month</label>
+                      <div className="flex items-center gap-3">
+                        <span className="font-serif text-xl text-[var(--text-primary)]">&#8377;</span>
+                        <input id="listing-rent-price" name="rentPerMonth" type="number" inputMode="numeric" min={1} max={USER_MRP_CEILING} step={1}
+                          value={listingRentPrice} onChange={(e) => setListingRentPrice(e.target.value)}
+                          placeholder={listingMrpNumber !== null ? String(Math.max(1, Math.round(listingMrpNumber * 0.10))) : 'e.g. 40'}
+                          className="input-classic bg-[var(--bg-surface)] flex-1" />
+                        {listingMrpNumber !== null && (
+                          <button type="button" onClick={() => setListingRentPrice(String(Math.max(1, Math.round(listingMrpNumber * 0.10))))}
+                            className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text underline shrink-0">
+                            Use ₹{Math.max(1, Math.round(listingMrpNumber * 0.10))}
+                          </button>
+                        )}
+                      </div>
+                      {listingRentPrice !== '' && (!Number.isInteger(Number(listingRentPrice)) || Number(listingRentPrice) < 1 || Number(listingRentPrice) > USER_MRP_CEILING) && (
+                        <p className="text-xs text-red-600">Enter a whole amount between ₹1 and ₹{USER_MRP_CEILING.toLocaleString('en-IN')}.</p>
+                      )}
+                      <p className="text-2xs text-[var(--text-secondary)] opacity-80 leading-relaxed">
+                        {listingMrpNumber !== null
+                          ? <>Suggested: 10% of the MRP (₹{Math.max(1, Math.round(listingMrpNumber * 0.10))}). The renter also leaves a security deposit of 65% of the MRP — ₹{Math.round(listingMrpNumber * 0.65)} — and must return the book within 21 days.</>
+                          : <>Add the printed MRP above so the 65% security deposit can be worked out — a book without one can't be rented.</>}
+                      </p>
                     </div>
                   )}
 
@@ -18504,7 +18629,7 @@ export default function App() {
                 
                 {/* Temporary Swap Fee Notice */}
                 <div className="p-4 bg-[var(--bg-surface-inset)]/40 border border-brand-border rounded-2xl text-2xs text-[var(--text-secondary)] font-medium leading-relaxed italic">
-                  Note: Temporary swaps are fixed for 1 month. A refundable security fee of 60% of MRP will be requested from both parties after admin match approval.
+                  Note: A temporary swap must be returned within 21 days (both readers can agree +7 or +14). Each reader pays a refundable deposit of 65% of the MRP after the owner accepts; it is forfeited to the owner if the book isn't on its way back in time.
                 </div>
 
                 {/* Show us your book — four required media, four previews.
@@ -18829,7 +18954,7 @@ export default function App() {
                   {/* A dropdown of the reader's own listings, not a text
                       box. The book they offer has to be a real listing so
                       it has a resolved price — that price is what the
-                      OWNER's deposit is 60% of. A typed title gave the
+                      OWNER's deposit is 65% of. A typed title gave the
                       owner's side nothing to be worked out from, which is
                       why the deposit only ever ran one way before. */}
                   {myOfferableBooks.length === 0 ? (
@@ -18843,6 +18968,15 @@ export default function App() {
                       </button>
                     </div>
                   ) : (
+                    <>
+                    {/* Oct 2026 (owner's rule): a swap is like for like — the
+                        same condition, the same type (paperback / hardcover /
+                        budget copy) and an MRP within 10%. Books that don't
+                        qualify are shown but can't be picked; the server
+                        checks again. */}
+                    <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                      You can offer a book with the <strong>same condition</strong>, the <strong>same type</strong> (paperback, hardcover or budget copy) and an <strong>MRP within 10%</strong> of this one.
+                    </p>
                     <select
                       name="offeredBookId"
                       className="input-classic !bg-[var(--bg-page)]"
@@ -18851,12 +18985,21 @@ export default function App() {
                       onChange={(e) => setOfferedBookId(e.target.value)}
                     >
                       <option value="">Choose a book from your shelf</option>
-                      {myOfferableBooks.map(b => (
-                        <option key={b.id} value={b.id}>
-                          {b.title}{b.mrp ? ` — \u20B9${b.mrp}` : ''}
-                        </option>
-                      ))}
+                      {myOfferableBooks.map(b => {
+                        const m = showSwapModal ? swapMatch(showSwapModal as any, b as any) : { ok: true, summary: '' };
+                        return (
+                          <option key={b.id} value={b.id} disabled={!m.ok}>
+                            {m.ok ? '✓ ' : '✗ '}{b.title}{b.mrp ? ` — \u20B9${b.mrp}` : ''}{m.ok ? '' : ` (${m.summary})`}
+                          </option>
+                        );
+                      })}
                     </select>
+                    {showSwapModal && myOfferableBooks.length > 0 && !myOfferableBooks.some(b => swapMatch(showSwapModal as any, b as any).ok) && (
+                      <p className="text-xs text-amber-700 leading-relaxed">
+                        None of your books match this one yet. List a book in the same condition and of the same type, with an MRP close to this one, to swap for it.
+                      </p>
+                    )}
+                    </>
                   )}
                   <div className="grid grid-cols-2 gap-4">
                     <select name="offeredBookCondition" className="input-classic !bg-[var(--bg-page)]" required>
@@ -18878,6 +19021,7 @@ export default function App() {
                     </select>
                   </div>
 
+                  {swapFormPreference === 'Temporary' && <ReturnRuleNotice />}
                   {swapFormPreference === 'Temporary' && (
                     <div className="p-6 bg-brand-gold/5 border border-brand-gold/20 rounded-3xl space-y-6 animate-in fade-in slide-in-from-top-4">
                       <div className="flex items-start gap-4">
@@ -18887,13 +19031,13 @@ export default function App() {
                         <div className="space-y-1">
                           <p className="text-2xs font-bold text-[var(--text-primary)] uppercase tracking-widest">Refundable security deposit</p>
                           <p className="text-xs text-[var(--text-secondary)] italic">
-                            Each reader puts down a percentage of the book they are receiving — 60% for New, 55% for Good/Fair, 50% for Poor condition.
+                            Each reader puts down 65% of the MRP of the book they are receiving. It comes back when that book is returned on time.
                           </p>
                         </div>
                       </div>
 
                       {/* Both numbers, shown together. They are deliberately
-                          different — each deposit is 60% of the book its
+                          different — each deposit is 65% of the book its
                           payer is HOLDING, so the person borrowing the more
                           valuable book puts down more. Hiding the other
                           side's figure would make that look arbitrary
@@ -19036,11 +19180,12 @@ export default function App() {
                     </div>
                     <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
                       {showServiceModal.serviceType === 'RENT'
-                        ? "This sends the owner a rental request — it is not a completed booking. The owner will confirm rent duration, fee, and security deposit with you directly once they accept."
-                        : "This sends the owner a buy interest request — it is not a completed purchase. The owner will confirm price and handover details with you directly once they accept."}
+                        ? `This sends the owner a rental request. ${Number(showServiceModal.book.monthlyRent) > 0 ? `Rent is ₹${showServiceModal.book.monthlyRent} a month (the owner's price).` : ''} If they accept, you pay a security deposit of 65% of the MRP plus the ₹10 platform fee, and your chat opens once SwapSutra verifies it.`
+                        : `This sends the owner a buy request. ${Number(showServiceModal.book.sellPrice) > 0 ? `The price is ₹${showServiceModal.book.sellPrice} (the owner's price).` : ''} There is no security deposit on a purchase — only the ₹10 platform fee once the owner accepts.`}
                     </p>
                   </div>
                 </div>
+                {showServiceModal.serviceType === 'RENT' && <ReturnRuleNotice />}
 
                 <textarea name="notes" placeholder={`A message for the owner (optional)...`} className="input-classic bg-[var(--input-bg)]" rows={2}></textarea>
 

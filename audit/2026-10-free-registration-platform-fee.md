@@ -44,3 +44,35 @@ The refund rules for the new fees (in-app Refunds page and `legal/refund-and-sec
 ## Tests
 
 `tests/test_platform_fees.cjs` (61 checks, against the real `appsscript.js`). Tests that asserted the old ₹49 / trial / expiry behaviour were updated to the new rules, each with a dated comment.
+
+---
+
+# Round 2 (Oct 2026): exchange rules, routes, 21-day returns
+
+## Rules (decided by the owner)
+
+| Rule | Detail |
+|---|---|
+| Security deposit | Flat **65% of MRP** for swap (both readers), rent and lend. **None on a sale.** |
+| Prices | The owner sets their own **selling price** and **monthly rent** (₹1–₹50,000). Rent is pre-filled with 10% of MRP as a suggestion. Older listings keep 10% of MRP. The catalogue band is now only a guide. |
+| Swap match | Same condition, same type (Paperback / Hardcover / Budget copy = reprint), MRPs within **±10%**. Enforced in `createSwapRequest`; the swap form greys out non-matching books (`src/utils/swapMatch.ts`, kept equal by `tests/test_swap_match_mirror.cjs`). |
+| Nearby | The reader picks 2 / 5 / 10 / 25 / 50 / 100 km (remembered on the device). |
+| Route | 1) both payments verified → 2) either reader records **meet in person** (map pin + place name) or **courier** → 3) each book's timeline → 4) return. Nothing can be logged before a route is set. Addresses and phone numbers are released **only on courier**. In a swap both books are tracked (`counter` leg). |
+| Chat pin | 📍 button sends a map pin (`shareChatLocation`), shown as a map card with Google Maps / OSM links. Typed numbers stay blocked. |
+| Courier tracking | Courier company + tracking ID required to mark "posted"; links to the courier's own tracking page; step-by-step status. No live map (needs a paid courier API). |
+| Returns | Rent, lend and **temporary** swap (both books). On its way back (handed over, or posted with tracking ID) within **21 days** of reaching the borrower. **+7 or +14** days if the other reader agrees, **14 max**, only before the deadline. Late → the borrower's deposit is **forfeited to the owner**. Posted in time = on time, even if the courier is slow. |
+| Notifications | In-app + email at start, 7 / 3 / 1 days left, last day, forfeit. WhatsApp too once configured (below). |
+
+The stage machine used to treat 21 days as a *waiting period* before a return could be logged. It now treats it as the **deadline** (`returnStage.dueAt`).
+
+## Deploy checklist
+
+1. Upload the files (zip) to GitHub; Vercel rebuilds. `package.json` now includes `leaflet`.
+2. Paste the new `appsscript.js` into Apps Script → **Deploy → Manage deployments → edit → New version**.
+3. In the Apps Script editor, run **`installReturnDeadlineTrigger`** once (Run ▶). It checks deadlines every hour.
+4. Admin → **Payments to verify** now also lists **late returns**: pay the owner by UPI, then click *I have paid the owner*.
+5. WhatsApp (optional): Meta WhatsApp Business account + an approved template with two body variables ({{1}} title, {{2}} message). Script Properties: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_TEMPLATE` (and `WHATSAPP_TEMPLATE_LANG`, default `en`). Off until set.
+
+## Tests
+
+`tests/test_returns_and_swaps.cjs` (59), `tests/test_swap_match_mirror.cjs` (19, incl. 1,350 rule combinations). Tests asserting the old 60% / band-limited price / fixed rent were updated with dated comments.

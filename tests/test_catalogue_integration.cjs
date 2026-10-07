@@ -218,9 +218,11 @@ check('29. createBook does not write a client-supplied mrp',
   !/h === 'mrp'\) row\[i\] = data\.mrp/.test(src));
 check('30. createSwapRequest does not accept a client-supplied deposit',
   !/data\.securityDeposit/.test(src));
-check('31. The deposit rate is defined once', /const DEPOSIT_RATE = 0\.6;/.test(src));
+// Oct 2026: flat 65% (owner's decision).
+check('31. The deposit rate is defined once', /const DEPOSIT_RATE = 0\.65;/.test(src));
 check('32. The listing price path runs through resolveListingPricing',
-  /const pricing = resolveListingPricing\(data, id\)/.test(src));
+  // Oct 2026: the owner's own asking price is kept out of the band check.
+  /const pricing = resolveListingPricing\(Object\.assign\(\{\}, data, \{ sellPrice: null \}\), id\)/.test(src));
 check('33. A rejected price stops the listing rather than being ignored',
   /if \(!pricing\.ok\) \{[\s\S]{0,200}return \{[\s\S]{0,200}success: false/.test(src));
 
