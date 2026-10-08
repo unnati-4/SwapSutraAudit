@@ -123,8 +123,6 @@ import { track, trackOnce, captureReferralFromUrl, storedReferralCode, clearStor
 import InviteReaders from './components/InviteReaders';
 import LibraryHero from './components/LibraryHero';
 import { downscaleImageFile, loadImageElement } from './utils/imageCompress';
-import SwapTimeline from './components/SwapTimeline';
-import DisputeReport from './components/DisputeReport';
 
 // PERF: the admin consoles and the circulation/swap machinery are roughly
 // 90KB of source that almost nobody on a given page load will open — the
@@ -137,9 +135,9 @@ const PricingAdmin = lazyScreen<any>(
   () => import('./components/PricingAdmin'),
   'Opening pricing'
 );
-const CirculationTracker = lazyScreen<any>(
-  () => import('./components/CirculationTracker'),
-  'Opening circulation'
+const ExchangeRoom = lazyScreen<any>(
+  () => import('./components/ExchangeRoom'),
+  'Opening the exchange'
 );
 const AdminDisputeConsole = lazyScreen<any>(
   () => import('./components/AdminDisputeConsole'),
@@ -176,11 +174,6 @@ const AdminMugProducts = lazyScreen<any>(
   () => import('./components/mugs/AdminMugProducts'),
   'Opening the mug shop listings'
 );
-const SwapStateMachine = lazyScreen<any>(
-  () => import('./components/SwapStateMachine'),
-  'Opening the swap'
-);
-import RateCounterparty from './components/RateCounterparty';
 import {apiUrl, SHARE_ORIGIN} from './config/runtime';
 import { shelfCoverCandidates, shelfCoverUrl } from './utils/bookCover';
 import CartPage, { type CartView } from './components/CartPage';
@@ -198,7 +191,8 @@ import DeleteAccount from './components/DeleteAccount';
 import PhotoViewer from './components/PhotoViewer';
 import NewsletterPage from './components/NewsletterPage';
 import ReadingTracker, { type TrackerBook, type TrackerChanges } from './components/ReadingTracker';
-import ListingUnlockPanel, { fetchListingAllowance, type ListingAllowance } from './components/ListingUnlockPanel';
+import SupportQr from './components/SupportQr';
+import ListingUnlockPanel, { fetchListingAllowance, needsListingUnlock, listingPopupAlreadyShown, markListingPopupShown, unlockUntilLabel, type ListingAllowance } from './components/ListingUnlockPanel';
 
 // --- CONFIGURATION ---
 const API_URL = apiUrl('/api/swapsutra');
@@ -5450,19 +5444,15 @@ const ChatModal = memo(({
         setPinError('That location could not be sent.');
       } finally { setPinBusy(false); }
     };
-    const [chatTab, setChatTab] = useState<'messages' | 'proofs' | 'timeline' | 'stages'>('messages');
-    const [proofs, setProofs] = useState<SwapProof[]>([]);
-    const [uploading, setUploading] = useState<string | null>(null);
+    // Oct 2026 (owner's request): ONE exchange room. The chat, the condition
+    // videos and the exchange stages are no longer separate tabs: the steps
+    // panel (ExchangeRoom) sits above the chat, and every step also posts a
+    // line into the chat, so the conversation is the record.
+    const chatTab = 'messages' as const;
+    const [roomOpen, setRoomOpen] = useState(true);
     const scrollRef = useRef<HTMLDivElement>(null);
     const lastMessageCount = useRef(0);
     const [isAtBottom, setIsAtBottom] = useState(true);
-    // Server-verified security-fee status for THIS swap, refetched on
-    // open and periodically — not merely computed once and trusted for
-    // the life of the modal, which would otherwise leave a chat opened
-    // before the fee was required (or before this gate existed) looking
-    // permanently "unlocked" in a stale client until the page reloads.
-    const [feeStatus, setFeeStatus] = useState<{ allApproved: boolean; required: boolean } | null>(null);
-    const [feeStatusChecked, setFeeStatusChecked] = useState(false);
 
     const currentChat = useMemo(() => {
       if (!activeChat) return null;
@@ -5473,75 +5463,21 @@ const ChatModal = memo(({
 
     const isAdminUser = allowAdminControls && isAdmin;
     const isOwner = normalizeEmail(currentChat.ownerEmail) === activeUserEmail;
-    const isRequester = normalizeEmail(currentChat.requesterEmail) === activeUserEmail;
     // A pre-swap BookRequest chat (see respondToBookRequest server-side)
-    // negotiates whether a swap happens at all, before any security-fee
-    // record can exist, so it is never subject to the chat lock below.
+    // negotiates whether a swap happens at all, so it has no exchange steps.
     const isBookRequestChat = currentChat.chatType === 'BookRequest' || String(currentChat.swapId || '').startsWith('SS_REQ_BOOK_');
-    // A book-request chat carries an SS_REQ_BOOK_ id, not a swap. The swap
-    // tools (Exchange Stages, delivery tracker, timeline, disputes, rating)
-    // all look it up in SwapRequests and could only answer "That exchange
-    // could not be found." — so they are shown for real swaps only.
     const hasRealSwap = !!currentChat.swapId && !isBookRequestChat;
-
-    // Fetch proofs when tab changes
-    useEffect(() => {
-      if (chatTab === 'proofs' || chatTab === 'timeline') {
-        const fetchProofs = async () => {
-          try {
-            const res = await fetch(`${API_URL}?action=getSwapProofs&chatId=${currentChat.chatId}&email=${encodeURIComponent(activeUserEmail || '')}`);
-            const data = await res.json();
-            if (Array.isArray(data)) setProofs(data);
-          } catch (e) {
-            console.error("Fetch proofs error:", e);
-          }
-        };
-        fetchProofs();
-      }
-    }, [chatTab, currentChat.chatId, proofs.length]); // Added proofs.length to refresh on upload
-
-    // Security-fee lock status — the visible half of the master state
-    // machine gate the backend already enforces on send/upload. Polled
-    // rather than fetched once, so an admin approval that lands while
-    // this chat is already open unlocks it here without a page reload.
-    useEffect(() => {
-      setFeeStatusChecked(false);
-      if (!currentChat.swapId || isBookRequestChat || !activeUserEmail) {
-        setFeeStatus(null);
-        setFeeStatusChecked(true);
-        return;
-      }
-      let cancelled = false;
-      const fetchFeeStatus = async () => {
-        try {
-          const res = await fetch(`${API_URL}?action=getSecurityFeeStatus&swapId=${encodeURIComponent(String(currentChat.swapId))}&email=${encodeURIComponent(activeUserEmail)}`);
-          const data = await res.json();
-          if (!cancelled) {
-            setFeeStatus(data?.success ? { allApproved: !!data.allApproved, required: !!data.required } : null);
-            setFeeStatusChecked(true);
-          }
-        } catch {
-          if (!cancelled) setFeeStatusChecked(true);
-        }
-      };
-      fetchFeeStatus();
-      const interval = setInterval(fetchFeeStatus, 20000);
-      return () => { cancelled = true; clearInterval(interval); };
-    }, [currentChat.swapId, isBookRequestChat, activeUserEmail]);
 
     // Auto-scroll logic
     useEffect(() => {
       if (chatTab === 'messages' && scrollRef.current) {
         const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
         const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
-        
         const isNewMessage = messages.length > lastMessageCount.current;
         const lastMsgIsMine = messages.length > 0 && normalizeEmail(messages[messages.length - 1].senderEmail) === activeUserEmail;
-
         if (lastMessageCount.current === 0 || lastMsgIsMine || (isNewMessage && isNearBottom)) {
           scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-        
         lastMessageCount.current = messages.length;
       }
     }, [messages, activeUserEmail, chatTab]);
@@ -5553,63 +5489,7 @@ const ChatModal = memo(({
       }
     };
 
-    const handleUploadProof = async (e: React.ChangeEvent<HTMLInputElement>, phase: string) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      setUploading(phase);
-      try {
-        const base64 = await fileToBase64(file);
-        const res = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'uploadSwapProof',
-            chatId: activeChat.chatId,
-            swapId: activeChat.swapId,
-            uploaderEmail: activeUserEmail,
-            phase: phase,
-            fileData: base64,
-            fileName: file.name,
-            mimeType: file.type,
-            mediaType: file.type.startsWith('image') ? 'image' : 'video'
-          })
-        });
-        const data = await res.json();
-        if (data.success) {
-          // Add to local state
-          setProofs(prev => [...prev, {
-            id: data.id,
-            chatId: activeChat.chatId,
-            swapId: activeChat.swapId,
-            uploaderEmail: activeUserEmail!,
-            mediaUrl: data.mediaUrl,
-            mediaType: file.type.startsWith('image') ? 'image' : 'video',
-            phase: phase as any,
-            timestamp: new Date().toISOString()
-          }]);
-        } else if (data.error === 'SECURITY_FEE_PENDING') {
-          // Same server-side gate as sendChatMessage — surface it the
-          // same way, rather than letting the upload silently no-op.
-          notify.error(data.message || 'Uploads unlock once SwapSutra has approved every required security-fee payment on this exchange.');
-        } else {
-          notify.error(data.message || 'That upload could not be saved.');
-        }
-      } catch (e) {
-        console.error("Upload error:", e);
-        notify.error('That upload could not be saved.');
-      } finally {
-        setUploading(null);
-      }
-    };
-
     const isArchived = currentChat.chatStatus === 'Archived';
-    // Visible mirror of the backend's SECURITY_FEE_PENDING gate: locked
-    // until we have positively confirmed every required payer is
-    // ADMIN_APPROVED. isAdminUser and BookRequest (pre-swap) chats are
-    // never locked by this. Unknown/unchecked never reads as unlocked.
-    const chatLocked = !isAdminUser && !isBookRequestChat
-      && feeStatusChecked && !!feeStatus && feeStatus.required && !feeStatus.allApproved;
 
     const handleAdminChatAction = async (action: string) => {
       if (!isAdminUser || !confirm(`Confirm ${action}?`)) return;
@@ -5617,11 +5497,7 @@ const ChatModal = memo(({
         const res = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action,
-            chatId: currentChat.chatId,
-            adminEmail: activeUserEmail
-          })
+          body: JSON.stringify({ action, chatId: currentChat.chatId, adminEmail: activeUserEmail })
         });
         const data = await res.json();
         if (data.success) {
@@ -5635,62 +5511,18 @@ const ChatModal = memo(({
       }
     };
 
-    const handleOwnerFinalConfirmation = async () => {
-      if (!isOwner || !confirm("Confirm you have received your book safely and this swap is fully complete? This will allow the admin to issue the refund.")) return;
-      try {
-        const res = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'markOwnerFinalConfirmation',
-            chatId: currentChat.chatId,
-            ownerEmail: activeUserEmail
-          })
-        });
-        const data = await res.json();
-        if (data.success) {
-          notify.success("Thank you! Your final confirmation has been recorded.");
-          if (onActionTaken) onActionTaken();
-        } else {
-          notify.error(data.message || "Something went wrong.");
-        }
-      } catch (e) {
-        console.error("Final confirmation error:", e);
-      }
-    };
-
     const handleUpdateAdminNotes = async (notes: string) => {
       try {
         const res = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'updateAdminNotes',
-            chatId: currentChat.chatId,
-            adminEmail: activeUserEmail,
-            notes
-          })
+          body: JSON.stringify({ action: 'updateAdminNotes', chatId: currentChat.chatId, adminEmail: activeUserEmail, notes })
         });
         const data = await res.json();
-        if (data.success) {
-          if (onActionTaken) onActionTaken();
-        }
+        if (data.success && onActionTaken) onActionTaken();
       } catch (e) {
         console.error("Update notes error:", e);
       }
-    };
-
-    // markHandedOver is deprecated server-side — it used to flip
-    // Chats.chatStatus straight to 'Handed Over'/'Returned'/'Completed'
-    // from one party's say-so, bypassing the master state machine's
-    // security-fee gate, two-party confirmation and dispute check
-    // entirely. Handover/return/receipt are now tracked exclusively
-    // through stageAction (uploadStageEvidence / confirmStage) on the
-    // "Stages" tab, so this just sends the reader there instead of
-    // calling the dead endpoint.
-    const handleMarkSwapAction = async (_type: 'handover' | 'return' | 'confirm_return') => {
-      notify.success("This step now happens in the Stages tab, where SwapSutra verifies each party's evidence and security-fee payment before the swap can advance.");
-      setChatTab('stages');
     };
 
     const getChatName = (email: string | undefined) => {
@@ -5705,8 +5537,6 @@ const ChatModal = memo(({
     const otherParticipant = normalizeEmail(currentChat.ownerEmail) === activeUserEmail ? currentChat.requesterEmail : currentChat.ownerEmail;
     const displayRecipient = getChatName(otherParticipant);
 
-    const phaseProofs = (phase: string) => proofs.filter(p => p.phase === phase);
-    const chatStatus = currentChat.chatStatus; // 'Active', 'Handed Over', 'Returned', 'Completed', 'Archived'
 
     return (
       <AnimatePresence>
@@ -5727,68 +5557,57 @@ const ChatModal = memo(({
                 <span className="text-2xs font-bold uppercase tracking-widest">This chat is archived / dissolved</span>
               </div>
             )}
-            {/* Security-fee lock banner — visible even outside the Chat
-                tab, since the lock also covers uploads and delivery
-                coordination, not just messages. */}
-            {!isArchived && chatLocked && (
-              <div className="bg-amber-600 text-white px-6 py-2 text-center flex items-center justify-center gap-2">
-                <Icons.Shield size={14} />
-                <span className="text-2xs font-bold uppercase tracking-widest">
-                  Chat locked — waiting on security fee approval
-                </span>
-              </div>
-            )}
-            {/* Header */}
-            {/* Phone: title row (with room for the close button), then the
-                tabs as one full-width row of equal buttons. */}
-            <div className="relative p-4 sm:p-6 border-b border-brand-border bg-[var(--bg-surface)] flex justify-between items-stretch sm:items-center sm:flex-row flex-col gap-3 sm:gap-4">
-              <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-10 sm:pr-0">
-                <div className="w-10 h-10 rounded-full bg-brand-gold/10 flex items-center justify-center text-brand-gold-text font-serif font-bold text-xs uppercase">
+            {/* Header: who you're talking to, and the steps toggle. */}
+            <div className="relative px-4 py-3 sm:px-6 sm:py-4 border-b border-brand-border bg-[var(--bg-surface)] flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 shrink-0 rounded-full bg-brand-gold/10 flex items-center justify-center text-brand-gold-text font-serif font-bold text-xs uppercase">
                   {displayRecipient.charAt(0)}
                 </div>
                 <div className="min-w-0">
                   <h4 className="truncate text-2xs font-bold text-[var(--text-primary)] uppercase tracking-widest leading-tight mb-1">
-                    {isAdminUser ? `${isBookRequestChat ? 'Book Request' : 'Swap'}: ${activeChat.ownerEmail.split('@')[0]} & ${activeChat.requesterEmail.split('@')[0]}` : `Conversation with ${displayRecipient}`}
+                    {isAdminUser ? `${isBookRequestChat ? 'Book Request' : 'Exchange'}: ${activeChat.ownerEmail.split('@')[0]} & ${activeChat.requesterEmail.split('@')[0]}` : `Exchange with ${displayRecipient}`}
                   </h4>
-                  <p className="text-2xs text-[var(--text-secondary)] italic opacity-60">{isBookRequestChat ? 'Book request chat · Admin included' : 'Verified Swap Connection'}</p>
+                  <p className="text-2xs text-[var(--text-secondary)] italic opacity-60">{isBookRequestChat ? 'Book request chat · Admin included' : 'Chat and every step, in one place'}</p>
                 </div>
               </div>
-              
-              <div className="flex w-full sm:w-auto bg-[var(--bg-surface-inset)]/60 p-1 rounded-xl">
-                <button 
-                  onClick={() => setChatTab('messages')}
-                  className={`flex-1 sm:flex-none whitespace-nowrap px-2 sm:px-4 py-2 rounded-lg text-2xs font-bold uppercase tracking-wider sm:tracking-widest transition-all ${chatTab === 'messages' ? 'bg-[var(--bg-surface)] text-brand-gold-text shadow-sm' : 'text-[var(--text-secondary)]'}`}
-                >
-                  Chat
-                </button>
-                <button
-                  onClick={() => setChatTab('proofs')}
-                  className={`flex-1 sm:flex-none whitespace-nowrap px-2 sm:px-4 py-2 rounded-lg text-2xs font-bold uppercase tracking-wider sm:tracking-widest transition-all ${chatTab === 'proofs' ? 'bg-[var(--bg-surface)] text-brand-gold-text shadow-sm' : 'text-[var(--text-secondary)]'}`}
-                >
-                  Condition
-                </button>
+              <div className="flex items-center gap-1 shrink-0">
                 {hasRealSwap && (
-                  <button
-                    onClick={() => setChatTab('stages')}
-                    className={`flex-1 sm:flex-none whitespace-nowrap px-2 sm:px-4 py-2 rounded-lg text-2xs font-bold uppercase tracking-wider sm:tracking-widest transition-all ${chatTab === 'stages' ? 'bg-[var(--bg-surface)] text-brand-gold-text shadow-sm' : 'text-[var(--text-secondary)]'}`}
-                  >
-                    <span className="sm:hidden">Stages</span><span className="hidden sm:inline">Exchange Stages</span>
+                  <button type="button" onClick={() => setRoomOpen(v => !v)} aria-expanded={roomOpen}
+                    className="px-3 py-1.5 rounded-full border border-brand-border text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)] hover:border-brand-gold" data-testid="room-toggle">
+                    {roomOpen ? 'Hide steps' : 'Steps'}
                   </button>
                 )}
-                {(isAdminUser || chatTab === 'timeline') && (
-                  <button 
-                    onClick={() => setChatTab('timeline')}
-                    className={`flex-1 sm:flex-none whitespace-nowrap px-2 sm:px-4 py-2 rounded-lg text-2xs font-bold uppercase tracking-wider sm:tracking-widest transition-all ${chatTab === 'timeline' ? 'bg-[var(--bg-surface)] text-brand-gold-text shadow-sm' : 'text-[var(--text-secondary)]'}`}
-                  >
-                    Timeline
-                  </button>
+                <button onClick={() => setActiveChat(null)} aria-label="Close chat" className="p-2 hover:bg-[var(--bg-surface-inset)]/60 rounded-full transition-colors text-[var(--text-secondary)]">
+                  <Icons.Close size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* The steps of the exchange, above the chat. */}
+            {hasRealSwap && roomOpen && (
+              <div className="shrink-0 max-h-[52%] overflow-y-auto border-b border-brand-border bg-[var(--bg-page)] p-3 sm:p-4 space-y-3" data-testid="room-panel">
+                <ExchangeRoom swapId={String(currentChat.swapId)} isAdmin={isAdminUser} onChanged={onActionTaken} />
+                {isAdminUser && (
+                  <details className="bg-gray-100 p-4 rounded-2xl border border-gray-200">
+                    <summary className="cursor-pointer text-2xs font-bold uppercase tracking-widest text-gray-600">Admin tools</summary>
+                    <div className="mt-3 space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => handleAdminChatAction('markRefundIssued')} disabled={currentChat.refundIssued === true}
+                          className={`py-3 rounded-xl text-2xs font-bold uppercase tracking-widest ${currentChat.refundIssued === true ? 'bg-green-100 text-green-700' : 'bg-[var(--bg-surface)] border border-brand-border text-[var(--text-primary)]'}`}>
+                          {currentChat.refundIssued === true ? 'Refund Issued' : 'Mark Refund Issued'}
+                        </button>
+                        <button onClick={() => handleAdminChatAction(isArchived ? 'reopenArchivedChatForAdmin' : 'archiveCompletedChat')}
+                          className="py-3 bg-[var(--bg-surface)] border border-brand-border rounded-xl text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)]">
+                          {isArchived ? 'Reopen Chat' : 'Archive Chat'}
+                        </button>
+                      </div>
+                      <textarea className="w-full bg-[var(--bg-surface)] border border-gray-200 rounded-xl p-3 text-2xs min-h-[60px]"
+                        placeholder="Internal admin notes (private)" defaultValue={currentChat.adminNotes || ''} onBlur={(e) => handleUpdateAdminNotes(e.target.value)} />
+                    </div>
+                  </details>
                 )}
               </div>
-
-              <button onClick={() => setActiveChat(null)} aria-label="Close chat" className="p-2 hover:bg-[var(--bg-surface-inset)]/60 rounded-full transition-colors text-[var(--text-secondary)] absolute top-3 right-3 sm:relative sm:top-0 sm:right-0">
-                <Icons.Close size={20} />
-              </button>
-            </div>
+            )}
 
             {/* Main Content Area */}
             {chatTab === 'messages' && (
@@ -5887,13 +5706,6 @@ const ChatModal = memo(({
                     <div className="p-4 bg-gray-50 border border-dashed border-gray-200 rounded-2xl text-center">
                       <p className="text-2xs text-[var(--text-secondary)] font-bold uppercase tracking-widest italic">Conversation has been archived. Read-only access.</p>
                     </div>
-                  ) : chatLocked ? (
-                    <div className="p-4 bg-amber-50 border border-dashed border-amber-300 rounded-2xl text-center flex items-center justify-center gap-2">
-                      <Icons.Shield size={14} className="text-amber-600 shrink-0" />
-                      <p className="text-2xs text-amber-700 font-bold uppercase tracking-widest">
-                        Chat locked — waiting on security fee approval. Pay and submit your security fee in the Exchange Stages tab to unlock chat.
-                      </p>
-                    </div>
                   ) : (
                     <>
                     {showPinPicker && (
@@ -5942,212 +5754,6 @@ const ChatModal = memo(({
               </>
             )}
 
-            {chatTab === 'proofs' && (
-              <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6 sm:space-y-10">
-                <div className="text-center space-y-2">
-                  <h3 className="font-serif text-2xl text-[var(--text-primary)]">Condition Protection</h3>
-                  <p className="text-2xs text-[var(--text-secondary)] uppercase tracking-widest font-bold">Video evidence for every book — quality, packing, receiving</p>
-                </div>
-
-                {chatLocked && (
-                  <div className="p-4 bg-amber-50 border border-dashed border-amber-300 rounded-2xl text-center flex items-center justify-center gap-2">
-                    <Icons.Shield size={14} className="text-amber-600 shrink-0" />
-                    <p className="text-2xs text-amber-700 font-bold uppercase tracking-widest">
-                      Route, delivery address, condition proof and delivery updates unlock once SwapSutra has approved every required security-fee payment on this exchange.
-                    </p>
-                  </div>
-                )}
-
-                {/* The journey, above the condition photos. The four proof
-                    phases below record what the book LOOKED like at each
-                    end; this records how it travelled and where it has got
-                    to — which is what a reader actually wants to know while
-                    they are waiting, and what a dispute needs to point at. */}
-                {hasRealSwap && (
-                  <CirculationTracker
-                    swapId={String(currentChat.swapId)}
-                    isOwner={isOwner}
-                    chatStatus={chatStatus}
-                  />
-                )}
-
-                {/* One aggregated view of everything recorded about this
-                    exchange (requests, proofs, journey, disputes), and the
-                    user-facing dispute entry point beside it — both read
-                    from data the systems above already produce. */}
-                {hasRealSwap && (
-                  <SwapTimeline swapId={String(currentChat.swapId)} />
-                )}
-
-                {hasRealSwap && (isOwner || isRequester) && (
-                  <DisputeReport swapId={String(currentChat.swapId)} />
-                )}
-
-                {hasRealSwap && (isOwner || isRequester) && (
-                  <RateCounterparty swapId={String(currentChat.swapId)} />
-                )}
-
-                {/* The four photo "proof phases" that lived here were replaced
-                    on 7 Oct (owner's request) by the video evidence system:
-                    quality, packing and receiving videos for every book, in the
-                    Delivery panel above. Old proofs still appear in the
-                    timeline and in the admin dispute review. */}
-
-                <div className="space-y-4">
-                  {/* Admin Controls */}
-                  {isAdminUser && (
-                    <div className="bg-gray-100 p-6 rounded-3xl border border-gray-200 space-y-4">
-                      <h5 className="text-2xs font-bold uppercase tracking-widest text-gray-600">Admin Control Panel</h5>
-                      <div className="grid grid-cols-2 gap-4">
-                        <button 
-                          onClick={() => handleAdminChatAction('markRefundIssued')}
-                          disabled={currentChat.refundIssued === true}
-                          className={`py-3 rounded-xl text-2xs font-bold uppercase tracking-widest transition-all ${
-                            currentChat.refundIssued === true ? 'bg-green-100 text-green-700' : 'bg-[var(--bg-surface)] border border-brand-border text-[var(--text-primary)] hover:bg-[var(--bg-page-alt)]'
-                          }`}
-                        >
-                          {currentChat.refundIssued === true ? ' Refund Issued' : 'Mark Refund Issued'}
-                        </button>
-                        <button 
-                          onClick={() => handleAdminChatAction(isArchived ? 'reopenArchivedChatForAdmin' : 'archiveCompletedChat')}
-                          className="py-3 bg-[var(--bg-surface)] border border-brand-border rounded-xl text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)] hover:bg-[var(--bg-page-alt)]"
-                        >
-                          {isArchived ? 'Reopen Chat' : 'Archive Chat'}
-                        </button>
-                      </div>
-                      <div className="space-y-2">
-                         <label className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">Internal Admin Notes (Private)</label>
-                         <textarea 
-                           className="w-full bg-[var(--bg-surface)] border border-gray-200 rounded-xl p-3 text-2xs min-h-[60px] outline-none focus:ring-1 ring-brand-gold/40"
-                           placeholder="Add internal notes for dispute resolution or tracking..."
-                           defaultValue={currentChat.adminNotes || ""}
-                           onBlur={(e) => handleUpdateAdminNotes(e.target.value)}
-                         />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Premium-Only Archive Control */}
-                  {!isAdminUser && chatStatus === 'Completed' && !isArchived && (
-                    <div className="bg-brand-gold/5 p-6 rounded-3xl border border-brand-gold/15 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h5 className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">Archive Conversation</h5>
-                        <span className="text-2xs bg-brand-gold text-[var(--text-primary)] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">Premium Feature</span>
-                      </div>
-                      <p className="text-2xs text-[var(--text-secondary)] italic leading-relaxed">Keep your bookshelf conversations perfectly neat and organized.</p>
-                      {userTier === 'premium' ? (
-                        <button 
-                          onClick={() => {
-                            handleAdminChatAction('archiveCompletedChat');
-                          }}
-                          className="w-full py-3 bg-[var(--bg-surface)] border border-brand-gold/30 text-[var(--text-primary)] hover:bg-[var(--bg-page-alt)] rounded-xl text-2xs font-bold uppercase tracking-widest transition-all"
-                        >
-                          Archive Completed Chat
-                        </button>
-                      ) : (
-                        <button 
-                          onClick={() => {
-                            setQuillPromptModal({
-                              isOpen: true,
-                              title: "Keep your shelf pristine 🌸",
-                              message: "Quill says: 'A clean desk makes for sweet writing! Archiving completed chats is reserved for members of our premium circles to help keep their conversation rooms completely tidy. Would you like to continue your reading journey and support a home built for readers?'",
-                              confirmText: "Continue Journey",
-                              onConfirm: () => {
-                                setQuillPromptModal(prev => ({ ...prev, isOpen: false }));
-                                onUpgrade?.();
-                              }
-                            });
-                          }}
-                          className="w-full py-3 bg-brand-gold/15 text-brand-gold-text border border-brand-gold/30 hover:bg-brand-gold/25 rounded-xl text-2xs font-bold uppercase tracking-widest transition-all"
-                        >
-                          Archive Chat (Premium Only)
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Owner Final Confirmation Button */}
-                  {isOwner && !isArchived && chatStatus === 'Completed' && !currentChat.ownerFinalConfirmation && (
-                    <div className="bg-brand-gold/10 p-6 rounded-3xl border border-brand-gold/20 space-y-4">
-                      <h5 className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">Final Step: Owner Confirmation</h5>
-                      <p className="text-2xs text-[var(--text-secondary)] italic">Please confirm that you have received your book safely to dissolve this chat and trigger the refund.</p>
-                      <button 
-                        onClick={handleOwnerFinalConfirmation}
-                        className="w-full py-4 bg-brand-gold text-[var(--text-primary)] rounded-xl text-2xs font-bold uppercase tracking-widest hover:bg-brand-brown hover:text-brand-offwhite transition-all shadow-lg"
-                      >
-                        Confirm Final Book Receipt
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="bg-brand-brown/5 p-6 rounded-3xl border border-brand-brown/10">
-                    <div className="flex items-start gap-4">
-                      <Icons.Shield className="text-brand-gold-text shrink-0 mt-1" size={20} />
-                      <div className="space-y-1">
-                        <h5 className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">SwapSutra Protection Protocol</h5>
-                        <p className="text-2xs text-[var(--text-secondary)] leading-relaxed italic">
-                          Deposit refund and admin resolution are enabled only after the Owner confirms the final return received proof or after admin intervention.
-                        </p>
-                        {currentChat.refundIssued && <p className="text-2xs text-green-600 font-bold uppercase mt-2 italic">Refund has been marked as issued by Admin.</p>}
-                        {currentChat.ownerFinalConfirmation && <p className="text-2xs text-blue-600 font-bold uppercase mt-1 italic">Owner has confirmed final safe receipt of the book.</p>}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {chatTab === 'stages' && hasRealSwap && (
-              <div className="flex-1 overflow-y-auto p-4 sm:p-8">
-                <SwapStateMachine
-                  swapId={String(currentChat.swapId)}
-                  isAdmin={isAdminUser}
-                />
-              </div>
-            )}
-
-            {chatTab === 'timeline' && (
-              <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6 sm:space-y-8">
-                 <div className="text-center space-y-2 mb-10">
-                  <h3 className="font-serif text-2xl text-[var(--text-primary)]">Swap Timeline</h3>
-                  <p className="text-2xs text-[var(--text-secondary)] uppercase tracking-widest font-bold">Chronological Swap Evidence</p>
-                </div>
-
-                <div className="space-y-6 max-w-lg mx-auto">
-                   {proofs.length > 0 ? [...proofs].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()).map((p, i) => (
-                     <div key={p.id} className="relative pl-10 border-l border-brand-border last:border-l-transparent pb-8">
-                        <div className="absolute left-[-5px] top-0 w-2.5 h-2.5 rounded-full bg-brand-gold shadow-[0_0_0_4px_white]" />
-                        <div className="space-y-3">
-                           <div className="flex justify-between items-center">
-                              <span className="text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)]">
-                                {p.phase.replace(/_/g, ' ')}
-                              </span>
-                              <span className="text-2xs text-[var(--text-secondary)] opacity-60">
-                                {new Date(p.timestamp).toLocaleString()}
-                              </span>
-                           </div>
-                           <p className="text-2xs text-[var(--text-secondary)] italic">Uploaded by: {p.uploaderEmail}</p>
-                           <div className="aspect-video w-full rounded-2xl overflow-hidden shadow-sm border border-brand-border group relative">
-                              {p.mediaType === 'video' ? (
-                                <div className="w-full h-full flex flex-col items-center justify-center bg-brand-brown/5">
-                                   <Icons.Film size={32} className="text-brand-gold-text/40 mb-2" />
-                                   <a href={p.mediaUrl} target="_blank" rel="noreferrer" className="text-2xs font-bold text-brand-gold-text uppercase tracking-widest underline">Watch on Drive</a>
-                                 </div>
-                              ) : (
-                                <img src={normalizeImageUrl(p.mediaUrl)} alt="Transaction audit evidence" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                              )}
-                           </div>
-                        </div>
-                     </div>
-                   )) : (
-                     <div className="text-center py-20 opacity-40">
-                        <Icons.Clock size={48} className="mx-auto mb-4 text-brand-gold-text" />
-                        <p className="text-sm font-serif">No evidence recorded yet.</p>
-                     </div>
-                   )}
-                </div>
-              </div>
-            )}
           </motion.div>
         </div>
       </AnimatePresence>
@@ -6847,6 +6453,7 @@ export default function App() {
   // Listing allowance: 20 free, then ₹20 once or a coupon for unlimited.
   const [listingAllowance, setListingAllowance] = useState<ListingAllowance | null>(null);
   const [showListingUnlock, setShowListingUnlock] = useState(false);
+  const [showSupportQr, setShowSupportQr] = useState(false);
   const [showMembershipNudge, setShowMembershipNudge] = useState(false);
   const [showListingForm, setShowListingForm] = useState<Subscription | null>(null);
 
@@ -7527,8 +7134,22 @@ export default function App() {
     // open the form and let createBook have the final word.
     const allowance = await fetchListingAllowance();
     if (allowance) setListingAllowance(allowance);
-    if (allowance && !allowance.canList) { setShowListingUnlock(true); return; }
+    if (allowance && !allowance.canList) { offerListingUnlock(); return; }
     setShowListingForm(activeSubscription || profileData?.subscription || ({ email: activeUserEmail } as any));
+  };
+
+  // Oct 2026 (owner's rule): the "list more books" popup appears ONCE, when
+  // a reader has used their 20 free listings. After that it opens only from
+  // the profile's "list more books" button; trying to add a book just says
+  // where that is.
+  const offerListingUnlock = () => {
+    const email = String(activeUserEmail || '');
+    if (!listingPopupAlreadyShown(email)) {
+      markListingPopupShown(email);
+      setShowListingUnlock(true);
+      return;
+    }
+    setErrorMessage("You've used your 20 free listings. To list more books (₹20 for 3 months), open your Profile → Reading Space → \"List more books\".");
   };
 
   const promptMembershipGate = (reason?: string) => {
@@ -11460,7 +11081,15 @@ export default function App() {
         resetIsbnFlowState();
         // Only the shelf needs re-reading, not events/testimonials/settings.
         void refreshBooks();
-        void fetchListingAllowance().then(a => { if (a) setListingAllowance(a); });
+        void fetchListingAllowance().then(a => {
+          if (!a) return;
+          setListingAllowance(a);
+          // That was the 20th free listing: offer more, once.
+          if (needsListingUnlock(a) && !a.pendingUnlock && !listingPopupAlreadyShown(String(activeUserEmail || ''))) {
+            markListingPopupShown(String(activeUserEmail || ''));
+            setShowListingUnlock(true);
+          }
+        });
 
         // Onboarding Step 4 -> 5
         if (!onboardingCompleted && onboardingStep === 4) {
@@ -11474,7 +11103,7 @@ export default function App() {
         // the reader learns exactly what to do next.
         if (data.allowance) setListingAllowance(data.allowance);
         setShowListingForm(null);
-        setShowListingUnlock(true);
+        offerListingUnlock();
       } else {
         setErrorMessage(data.message || 'Listing failed.');
       }
@@ -14354,6 +13983,17 @@ export default function App() {
                 </span>
               )}
             </button>
+            {/* Support SwapSutra — for everyone: the UPI QR, no amount. */}
+            <button
+              type="button"
+              className="ss-header__icon relative"
+              aria-label="Support SwapSutra"
+              title="Support SwapSutra"
+              onClick={() => setShowSupportQr(true)}
+              data-testid="header-support"
+            >
+              <Icons.Heart size={21} />
+            </button>
             {activeUserEmail && (
               <button 
                 onClick={() => navigateTo('notifications')}
@@ -16272,7 +15912,7 @@ export default function App() {
                       </div>
                       <div>
                         <p className="text-xs font-bold text-[var(--text-primary)]">Q: Is there a fee for temporary swaps?</p>
-                        <p className="text-xs opacity-70 mt-1">A: Yes. A refundable deposit of 65% of the MRP, from each reader, is collected after the owner accepts. Borrowed books must be on their way back within 21 days (+7 or +14 if both agree) or the deposit is forfeited to the owner. Fully refundable on return.</p>
+                        <p className="text-xs opacity-70 mt-1">A: Yes. A refundable deposit of 65% of the MRP, from each reader, is collected after the owner accepts. Borrowed books must be on their way back within 21 days (the borrower can ask once for +7; the owner agrees) or the deposit is forfeited to the owner. Fully refundable on return.</p>
                       </div>
                     </div>
                   </div>
@@ -16488,20 +16128,12 @@ export default function App() {
                                     <span>🌱</span>
                                     <span>
                                       {listingAllowance?.unlimited
-                                        ? 'Member · Unlimited listings'
+                                        ? (listingAllowance.unlockedUntil ? `Member · More listings until ${unlockUntilLabel(listingAllowance.unlockedUntil)}` : 'Member · Unlimited listings')
                                         : listingAllowance
                                           ? `Member · ${listingAllowance.used} of ${listingAllowance.limit} free listings`
                                           : 'Member'}
                                     </span>
                                   </span>
-                                  {listingAllowance && !listingAllowance.unlimited && (
-                                    <button
-                                      onClick={() => setShowListingUnlock(true)}
-                                      className="inline-flex items-center gap-1 px-3 py-1 bg-brand-gold text-[var(--text-primary)] rounded-full text-2xs uppercase tracking-widest font-black shadow-sm hover:bg-brand-brown transition-colors"
-                                    >
-                                      {listingAllowance.pendingUnlock ? 'Unlock being verified' : 'List unlimited — ₹20'}
-                                    </button>
-                                  )}
                                 </div>
                               ) : (
                                 <span className="px-3 py-1 bg-red-50 text-red-800 border border-red-200 rounded-full text-2xs font-bold uppercase tracking-widest flex items-center gap-1">
@@ -16775,9 +16407,9 @@ export default function App() {
                                 </p>
                               ) : listingAllowance?.unlimited || userTier === 'premium' ? (
                                 <div className="space-y-2">
-                                  <p className="text-xs font-serif text-[var(--text-primary)]">Unlimited listings</p>
+                                  <p className="text-xs font-serif text-[var(--text-primary)]">{listingAllowance?.unlockedUntil ? 'More listings' : 'Unlimited listings'}</p>
                                   <p className="text-2xs text-[var(--text-secondary)] leading-relaxed">
-                                    You've listed {listingAllowance?.used ?? myListedBookCount} {(listingAllowance?.used ?? myListedBookCount) === 1 ? 'book' : 'books'}. Add as many as you like.
+                                    You've listed {listingAllowance?.used ?? myListedBookCount} {(listingAllowance?.used ?? myListedBookCount) === 1 ? 'book' : 'books'}. Add as many as you like{listingAllowance?.unlockedUntil ? ` until ${unlockUntilLabel(listingAllowance.unlockedUntil)}` : ''}.
                                   </p>
                                 </div>
                               ) : (
@@ -16794,12 +16426,24 @@ export default function App() {
                                       />
                                     </div>
                                   ) : null}
-                                  <button
-                                    onClick={() => setShowListingUnlock(true)}
-                                    className="w-full py-2 bg-brand-gold text-[var(--text-primary)] text-2xs font-bold uppercase tracking-widest rounded-xl hover:bg-brand-brown transition-colors"
-                                  >
-                                    {listingAllowance?.pendingUnlock ? 'Unlock payment being verified' : 'List unlimited — ₹20 once'}
-                                  </button>
+                                  {/* Oct 2026: the one place to buy more listings, after the
+                                      free 20 are used (the popup appears only once). */}
+                                  {listingAllowance && (needsListingUnlock(listingAllowance) || listingAllowance.pendingUnlock) && (
+                                    <div className="space-y-2 pt-1" data-testid="list-more-books">
+                                      <p className="text-2xs text-[var(--text-secondary)] leading-relaxed">
+                                        {listingAllowance.unlockExpired
+                                          ? "Your 3 months of extra listings have ended. If you'd like to list more books, it's ₹20 for another 3 months."
+                                          : "If you'd like to list more books, it's ₹20 for 3 months."}
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowListingUnlock(true)}
+                                        className="w-full py-2 bg-brand-gold text-[var(--text-primary)] text-2xs font-bold uppercase tracking-widest rounded-xl hover:bg-brand-brown transition-colors"
+                                      >
+                                        {listingAllowance.pendingUnlock ? 'Payment being verified' : 'List more books — ₹20 / 3 months'}
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -17153,14 +16797,24 @@ export default function App() {
                             </div>
 
                             <div className="mt-8 flex flex-wrap items-center gap-4">
-                              {userTier !== 'expired' && listingAllowance && !listingAllowance.unlimited && (
-                                <button
-                                  type="button"
-                                  onClick={() => setShowListingUnlock(true)}
-                                  className="btn-primary !py-4 !px-8 text-2xs uppercase tracking-widest"
-                                >
-                                  {listingAllowance.pendingUnlock ? 'Unlock payment being verified' : 'List unlimited — ₹20 once'}
-                                </button>
+                              {userTier !== 'expired' && listingAllowance && (needsListingUnlock(listingAllowance) || listingAllowance.pendingUnlock) && (
+                                <div className="w-full rounded-2xl border border-brand-gold/30 bg-brand-gold/10 p-5 space-y-3" data-testid="list-more-books">
+                                  <p className="text-sm text-[var(--text-primary)] leading-relaxed">
+                                    {listingAllowance.unlockExpired
+                                      ? "Your 3 months of extra listings have ended. If you'd like to list more books, it's ₹20 for another 3 months."
+                                      : "You've used your 20 free listings. If you'd like to list more books, it's ₹20 for 3 months."}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowListingUnlock(true)}
+                                    className="btn-primary !py-3 !px-6 text-2xs uppercase tracking-widest"
+                                  >
+                                    {listingAllowance.pendingUnlock ? 'Payment being verified' : 'List more books — ₹20 / 3 months'}
+                                  </button>
+                                </div>
+                              )}
+                              {listingAllowance?.unlimited && listingAllowance.unlockedUntil && (
+                                <p className="text-xs text-[var(--text-secondary)]">You can list more books until {unlockUntilLabel(listingAllowance.unlockedUntil)}.</p>
                               )}
                             </div>
                           </div>
@@ -17768,6 +17422,7 @@ export default function App() {
       {/* MODALS */}
       <AnimatePresence>
         {/* Subscription Form Modal */}
+        <SupportQr open={showSupportQr} onClose={() => setShowSupportQr(false)} />
         <ListingUnlockPanel
           open={showListingUnlock}
           onClose={() => setShowListingUnlock(false)}
@@ -18469,7 +18124,7 @@ export default function App() {
                 
                 {/* Temporary Swap Fee Notice */}
                 <div className="p-4 bg-[var(--bg-surface-inset)]/40 border border-brand-border rounded-2xl text-2xs text-[var(--text-secondary)] font-medium leading-relaxed italic">
-                  Note: A temporary swap must be returned within 21 days (both readers can agree +7 or +14). Each reader pays a refundable deposit of 65% of the MRP after the owner accepts; it is forfeited to the owner if the book isn't on its way back in time.
+                  Note: A temporary swap must be returned within 21 days (the borrower can ask once for +7 days; the owner agrees). Each reader pays a refundable deposit of 65% of the MRP after the owner accepts; it is forfeited to the owner if the book isn't on its way back in time.
                 </div>
 
                 {/* Show us your book — four required media, four previews.

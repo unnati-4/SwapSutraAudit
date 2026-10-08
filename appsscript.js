@@ -6412,6 +6412,9 @@ function doPostHandler_(e) {
     if (action === 'shareChatLocation') return respondJson(shareChatLocation(data));
     // Oct 2026 — VMS video evidence.
     if (action === 'getExchangeVideos') return respondJson(getExchangeVideos(data));
+    // Oct 2026 — the Exchange Room (one place: chat + every step).
+    if (action === 'getExchangeRoom') return respondJson(getExchangeRoom(data));
+    if (action === 'exchangeRoomAction') return respondJson(exchangeRoomAction(data));
     if (action === 'vmsStartUpload') return respondJson(vmsStartUpload(data));
     if (action === 'vmsUploadChunk') return respondJson(vmsUploadChunk(data));
     if (action === 'vmsFinishUpload') return respondJson(vmsFinishUpload(data));
@@ -6913,10 +6916,11 @@ function doPostHandler_(e) {
         chatId: chatId,
         senderEmail: 'swapsutra@gmail.com',
         senderRole: 'Admin',
-        message: '🛡️ SwapSutra Protection Protocol is ACTIVE.\n\nTo ensure a safe exchange:\n1. Owner: Upload book condition photo before handover.\n2. Both: Mark "Handed Over" only after physical meet.\n3. Recipient: Upload verification photo on receiving.\n\nThis evidence protects both parties and helps admin resolve any disputes.'
+        message: roomIntroMessage_(request)
       });
       
-      createNotification(request.senderEmail, 'swap_accepted', 'Swap Request Accepted!', `Your swap request was accepted. You can now chat.`, id);
+      createNotification(request.senderEmail, 'swap_accepted', 'Swap Request Accepted!', `Your request was accepted. Open the exchange room to chat and follow the steps — the owner records the condition video first, then you have 48 hours to pay.`, id);
+      try { appendStageEvent({ swapId: id, stage: 'ROOM', party: 'owner', actionType: 'accepted', actorEmail: ownerEmail, note: 'Request accepted; exchange room opened.' }); } catch (e) { /* the chat row is the record */ }
       
       // Notify sender via Email
       try {
@@ -13077,13 +13081,18 @@ function sendChatMessage(data) {
   // than being skipped whenever chat.swapId happens to be missing/blank —
   // a falsy swapId on a real swap chat must never be read as "no gate
   // applies", only as "this exchange cannot be verified as unlocked".
+  // Oct 2026 (Exchange Room): the chat is part of the one exchange room and
+  // is open from acceptance, so both readers can talk while the condition
+  // video and the payment happen. Contact details are still blocked by the
+  // PII scan below; addresses are shared only on a courier route, after
+  // payment. A real swap chat still fails CLOSED without a swapId.
   const isPreSwapDiscussionChat = chat.chatType === 'BookRequest' || String(chat.swapId || '').indexOf('SS_REQ_BOOK_') === 0;
   if (!isAdminEmail(senderEmail) && !isPreSwapDiscussionChat) {
-    if (!chat.swapId || !swapChatUnlocked(chat.swapId)) {
+    if (!chat.swapId || !roomChatOpen_(chat.swapId)) {
       return {
         success: false,
-        error: 'SECURITY_FEE_PENDING',
-        message: 'Chat unlocks once SwapSutra has approved every required security-fee payment on this exchange.'
+        error: 'ROOM_CLOSED',
+        message: 'This exchange room is not open.'
       };
     }
   }
@@ -18518,7 +18527,9 @@ function setSwapRoute(data) {
     // cross at the same meeting, or both are posted — so it is always
     // recorded on the outbound leg. Either reader may set it (they agree
     // in the chat), and setting it again replaces it.
-    const leg = 'outbound';
+    // Exchange Room (Oct 2026): the way back is agreed separately (phase
+    // 'back'), recorded on the return leg.
+    const leg = String((data && data.phase) || '') === 'back' ? 'return' : 'outbound';
     const pin = method === 'in_person' ? cleanLatLng_(data && data.meetingLat, data && data.meetingLng) : null;
     const place = String((data && data.meetingPoint) || '').trim().slice(0, 200);
 
@@ -18541,7 +18552,7 @@ function setSwapRoute(data) {
       expectedBy: data && data.expectedBy
     }, swap);
     if (result && result.success !== false) {
-      postRouteNoticeToChat_(swap, method, place, pin);
+      postRouteNoticeToChat_(swap, method, place, pin, leg === 'return');
     }
     return result;
   } catch (err) {
@@ -18605,7 +18616,9 @@ function logJourneyEvent(data) {
       const vmsRoute = latestSwapRoute_(swapId);
       const vmsMethod = vmsRoute ? vmsRoute.method : 'courier';
       if ((event === 'dispatched' || event === 'handed_over') && caller === senderEmail) {
-        const missing = vmsMissing_(swap, leg, 'sender', vmsMethod);
+        // Posting comes before the handover video (it records the parcel
+        // going to the courier), so posting needs condition + packaging.
+        const missing = vmsMissing_(swap, leg, 'sender', vmsMethod).filter(k => event !== 'dispatched' || k !== 'HANDOVER');
         if (missing.length) {
           return { success: false, error: 'VIDEO_REQUIRED', missing: missing,
             message: 'Record the ' + missing.map(k => VMS_KIND_LABELS[k]).join(' and the ') + ' first. They protect you if anything is disputed.' };
@@ -20770,7 +20783,8 @@ function markSwapCompletedInChat(swap) {
     if (swapIdx === -1 || statusIdx === -1) return;
     for (let r = 1; r < values.length; r++) {
       if (String(values[r][swapIdx]) !== String(swap.obj.id)) continue;
-      if (String(values[r][statusIdx]) !== 'Completed') {
+      // An archived room is closed for good — never pull it back to Completed.
+      if (String(values[r][statusIdx]) !== 'Completed' && String(values[r][statusIdx]) !== 'Archived') {
         chatSheet.getRange(r + 1, statusIdx + 1).setValue('Completed');
       }
     }
@@ -23268,12 +23282,28 @@ function loadListingUnlockRows_() {
   return { sheet, headers, rows };
 }
 
+// Oct 2026 (owner's rule): a paid unlock (₹20) lasts 3 months; after that
+// the reader pays again to add more books (books already listed stay). A
+// coupon unlock (a partner code) does not expire.
+const LISTING_UNLOCK_DAYS = 90;
+
+/** When a paid unlock stops covering new listings (ms), or Infinity for a coupon. */
+function listingUnlockExpiresAt_(obj) {
+  if (String(obj.method || '').toUpperCase() === 'COUPON') return Infinity;
+  const from = new Date(obj.reviewedAt || obj.createdAt).getTime();
+  return isFinite(from) ? from + LISTING_UNLOCK_DAYS * 24 * 60 * 60 * 1000 : Infinity;
+}
+
 function listingUnlockStateFor_(normEmail, rows) {
   const mine = (rows || loadListingUnlockRows_().rows).filter(r => normalizeEmail(r.obj.email) === normEmail);
-  const approved = mine.find(r => String(r.obj.status).toUpperCase() === 'APPROVED') || null;
+  const now = Date.now();
+  const approvedAll = mine.filter(r => String(r.obj.status).toUpperCase() === 'APPROVED');
+  const approved = approvedAll.filter(r => listingUnlockExpiresAt_(r.obj) > now)
+    .sort((a, b) => listingUnlockExpiresAt_(b.obj) - listingUnlockExpiresAt_(a.obj))[0] || null;
+  const expired = !approved && approvedAll.length ? approvedAll[approvedAll.length - 1] : null;
   const pending = mine.find(r => String(r.obj.status).toUpperCase() === 'PENDING') || null;
   const rejected = mine.filter(r => String(r.obj.status).toUpperCase() === 'REJECTED').pop() || null;
-  return { approved, pending, rejected };
+  return { approved, pending, rejected, expired };
 }
 
 /** How many books this reader may list, and how to lift the limit. */
@@ -23288,6 +23318,10 @@ function getListingAllowanceFor_(email, knownUsed) {
     limit: unlimited ? null : limit,
     unlimited: unlimited,
     unlockedVia: unlimited ? String(state.approved.obj.method || '') : '',
+    // A paid unlock lasts 3 months (Oct 2026).
+    unlockedUntil: unlimited && state.approved.obj && isFinite(listingUnlockExpiresAt_(state.approved.obj)) ? new Date(listingUnlockExpiresAt_(state.approved.obj)).toISOString() : '',
+    unlockExpired: !unlimited && !!state.expired,
+    unlockDays: LISTING_UNLOCK_DAYS,
     remaining: unlimited ? null : Math.max(0, limit - used),
     canList: unlimited || used < limit,
     unlockFee: listingUnlockFee_(),
@@ -23307,7 +23341,10 @@ function listingLimitMessage_(allowance) {
   if (allowance.pendingUnlock) {
     return `You've listed ${allowance.used} of ${allowance.limit} free books. Your ₹${allowance.unlockFee} unlock payment is being verified — you can add more as soon as it's approved.`;
   }
-  return `You've listed ${allowance.used} of ${allowance.limit} free books. Pay ₹${allowance.unlockFee} once, or enter a coupon code, to list as many as you like.`;
+  if (allowance.unlockExpired) {
+    return `Your 3 months of extra listings have ended. Pay ₹${allowance.unlockFee} to list more books for another 3 months — your books already listed stay.`;
+  }
+  return `You've listed ${allowance.used} of ${allowance.limit} free books. If you'd like to list more, it's ₹${allowance.unlockFee} for 3 months (or enter a coupon code).`;
 }
 
 /** Action: getListingAllowance */
@@ -23352,7 +23389,7 @@ function submitListingUnlockPayment(data) {
 
   const { sheet, headers, rows } = loadListingUnlockRows_();
   const state = listingUnlockStateFor_(caller, rows);
-  if (state.approved) return { success: false, message: 'Your listings are already unlimited.' };
+  if (state.approved) return { success: false, message: 'You can already list more books' + (isFinite(listingUnlockExpiresAt_(state.approved.obj)) ? ' until ' + returnDateLabel_(new Date(listingUnlockExpiresAt_(state.approved.obj))) : '') + '.' };
   if (state.pending) return { success: false, message: 'Your payment is already being verified. You will be notified when it is approved.' };
 
   const utr = String((data && data.utr) || '').trim();
@@ -23374,7 +23411,7 @@ function submitListingUnlockPayment(data) {
 
   createNotification(
     'swapsutra@gmail.com', 'listing_unlock_submitted', 'Listing unlock payment to verify',
-    `${caller} paid ₹${amount} to unlock unlimited listings (UTR ${utr}). Please review.`,
+    `${caller} paid ₹${amount} to list more books for 3 months (UTR ${utr}). Please review.`,
     '', { link: '/management' }
   );
   return { success: true, allowance: getListingAllowanceFor_(caller), message: 'Payment submitted. SwapSutra will verify it shortly.' };
@@ -23443,9 +23480,9 @@ function adminReviewListingUnlock(data) {
   createNotification(
     row.obj.email,
     decision === 'APPROVE' ? 'listing_unlock_approved' : 'listing_unlock_rejected',
-    decision === 'APPROVE' ? 'Unlimited listings unlocked' : 'Your listing unlock payment needs attention',
+    decision === 'APPROVE' ? 'More listings unlocked for 3 months' : 'Your listing unlock payment needs attention',
     decision === 'APPROVE'
-      ? 'Your payment is verified. You can now list as many books as you like.'
+      ? 'Your payment is verified. You can list as many books as you like for the next 3 months.'
       : `We couldn't verify your payment: ${reason}. Please submit it again from Add a book.`,
     row.obj.id,
     { link: '/profile', dedupeKey: 'unlock_' + decision.toLowerCase() + '_' + row.obj.id }
@@ -23598,7 +23635,7 @@ function shareChatLocation(data) {
 }
 
 /** Posts the agreed route into the exchange chat, as SwapSutra. Never throws. */
-function postRouteNoticeToChat_(swap, method, place, pin) {
+function postRouteNoticeToChat_(swap, method, place, pin, isReturn) {
   try {
     const chat = findChatBySwapId(swap.obj.id);
     const chatId = chat && (chat.chatId || chat.id);
@@ -23608,9 +23645,9 @@ function postRouteNoticeToChat_(swap, method, place, pin) {
       chatId: chatId,
       senderEmail: 'swapsutra@gmail.com',
       senderRole: 'Admin',
-      message: method === 'courier'
-        ? '📦 Route agreed: courier. Your addresses and phone numbers are now visible to each other in the Delivery panel. Post your tracking ID there once the parcel is booked.'
-        : '🤝 Route agreed: meeting in person' + (label ? ' at ' + label : '') + '. Meet somewhere public, and confirm receipt in the Delivery panel once you have the book.',
+      message: (isReturn ? '📌 Step 12 · Return route: ' : '📌 Step 6 · Route: ') + (method === 'courier'
+        ? 'courier. Your addresses and phone numbers are now visible to each other at the top of this room. Add the courier and tracking ID there once the parcel is booked.'
+        : 'meeting in person' + (label ? ' at ' + label : '') + '. Meet somewhere public, record the handover video, and both mark it at the top of this room.'),
       mediaUrl: pin ? locationMediaUrl_(pin, label) : '',
       mediaType: pin ? 'location' : ''
     });
@@ -23632,8 +23669,9 @@ function postRouteNoticeToChat_(swap, method, place, pin) {
      person, or posted with the courier name and tracking ID filled in.
      A courier that is slow after that is not the borrower's fault — the
      deadline is met the moment it is posted (courier-delay exception).
-   • Both readers may agree to extend, once or twice, by +7 or +14 days,
-     never more than 14 days in total, and only before the deadline.
+   • One extension of +7 days: with 7 days left a reminder goes into the
+     exchange chat; in the next 3 days the reader who has the book can ask
+     for +7, and it applies if the owner agrees (Exchange Room, Oct 2026).
    • If the deadline passes and the book is not on its way back, the
      borrower's security deposit is forfeited to the book's owner. That
      is recorded here and SwapSutra pays it out to the owner.
@@ -23646,8 +23684,13 @@ function postRouteNoticeToChat_(swap, method, place, pin) {
    ════════════════════════════════════════════════════════════════════════ */
 
 // RETURN_WINDOW_DAYS (21) is defined once, with the stage machine above.
-const RETURN_EXTENSION_CHOICES = [7, 14];
-const RETURN_MAX_EXTENSION_DAYS = 14;
+// Oct 2026 (owner's rule, Exchange Room): one extension of +7 days, asked
+// for by the reader who has the book in the 3 days after the "7 days left"
+// reminder, and agreed by the owner.
+const RETURN_EXTENSION_CHOICES = [7];
+const RETURN_MAX_EXTENSION_DAYS = 7;
+const RETURN_EXTENSION_NOTICE_DAYS = 7;   // the reminder goes out with 7 days left
+const RETURN_EXTENSION_WINDOW_DAYS = 3;   // ...and +7 can be asked for in the 3 days after it
 const RETURN_REMINDER_DAYS_LEFT = [7, 3, 1];
 const RETURN_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -23658,8 +23701,8 @@ const RETURN_FORFEIT_HEADERS = ['id', 'swapId', 'leg', 'bookTitle', 'defaulterEm
 
 const RETURN_POLICY_TEXT =
   'Return rule: the book must be on its way back within 21 days of reaching you — handed over in person, ' +
-  'or posted with the courier name and tracking ID added by the end of day 21. Both of you can agree to extend ' +
-  'by +7 or +14 days (14 days at most). If the book is not on its way back by the deadline, the security deposit ' +
+  'or posted with the courier name and tracking ID added by the end of day 21. With 7 days left you get a reminder, ' +
+  'and in the next 3 days the reader who has the book can ask for +7 days once; it applies if the owner agrees. If the book is not on its way back by the deadline, the security deposit ' +
   'is forfeited and paid to the book\'s owner. Courier delays after the book is posted are not held against you.';
 
 /** Does this exchange have to come back, and which legs carry the returns? */
@@ -23758,9 +23801,20 @@ function computeReturnState_(swapObj, events, extensions, forfeits, nowMs, stage
   });
 
   const msLeft = dueAt - now;
+  // The +7 window: from the "7 days left" reminder, for 3 days.
+  const windowOpensAt = baseDueAt - RETURN_EXTENSION_NOTICE_DAYS * RETURN_DAY_MS;
+  const windowClosesAt = windowOpensAt + RETURN_EXTENSION_WINDOW_DAYS * RETURN_DAY_MS;
+  const askedBefore = (extensions || []).length > 0;
+  const anyDue = legStates.some(l => l.state === 'DUE');
   return {
     applies: true,
     started: true,
+    extensionWindow: {
+      opensAt: new Date(windowOpensAt).toISOString(),
+      closesAt: new Date(windowClosesAt).toISOString(),
+      open: now >= windowOpensAt && now <= windowClosesAt && !askedBefore && extensionDays < RETURN_MAX_EXTENSION_DAYS && anyDue,
+      used: askedBefore
+    },
     windowDays: RETURN_WINDOW_DAYS,
     startedAt: new Date(startedAt).toISOString(),
     baseDueAt: new Date(baseDueAt).toISOString(),
@@ -23836,11 +23890,23 @@ function requestReturnExtension(data) {
   if (state.overdue) return { success: false, error: 'DEADLINE_PASSED', message: 'The return deadline has passed, so it can no longer be extended.' };
   if (state.legs.every(l => l.state !== 'DUE')) return { success: false, message: 'The book is already on its way back.' };
   if (state.pendingExtension) return { success: false, message: 'There is already an extension request waiting for an answer.' };
-  if (RETURN_EXTENSION_CHOICES.indexOf(days) === -1) return { success: false, message: 'An extension is +7 or +14 days.' };
+  if (RETURN_EXTENSION_CHOICES.indexOf(days) === -1) return { success: false, message: 'An extension is +7 days.' };
+  // The reader who has the book asks; the owner agrees. (In a temporary
+  // swap both readers hold a book, so either may ask.)
+  if (String(swap.obj.serviceType || 'SWAP').toUpperCase() !== 'SWAP' && caller !== swap.requesterEmail) {
+    return { success: false, error: 'WRONG_PARTY', message: 'The reader who has the book asks for more time; you agree or decline it.' };
+  }
+  if (state.extensionWindow && state.extensionWindow.used) {
+    return { success: false, error: 'EXTENSION_LIMIT', message: 'An extension can be asked for once per exchange.' };
+  }
+  if (state.extensionWindow && !state.extensionWindow.open) {
+    return { success: false, error: 'EXTENSION_WINDOW', message: '+7 days can be asked for between ' +
+      returnDateLabel_(new Date(state.extensionWindow.opensAt)) + ' and ' + returnDateLabel_(new Date(state.extensionWindow.closesAt)) + ' (the 3 days after the 7-days-left reminder).' };
+  }
   if (days > state.extensionDaysLeft) {
     return { success: false, error: 'EXTENSION_LIMIT', message: state.extensionDaysLeft > 0
-      ? 'Only ' + state.extensionDaysLeft + ' more days can be added (14 at most in total).'
-      : 'This exchange has already been extended by the maximum 14 days.' };
+      ? 'Only ' + state.extensionDaysLeft + ' more days can be added.'
+      : 'This exchange has already been extended by 7 days.' };
   }
   const sheet = getReturnExtensionSheet_();
   const headers = ensureSheetHeaders(sheet, RETURN_EXTENSION_HEADERS);
@@ -23872,7 +23938,11 @@ function respondReturnExtension(data) {
   const state = returnStateForSwap_(swap);
   const accept = data && (data.accept === true || data.accept === 'true');
   if (accept && state.overdue) return { success: false, error: 'DEADLINE_PASSED', message: 'The deadline has already passed, so the extension can no longer be agreed.' };
-  if (accept && Number(row.obj.days) > state.extensionDaysLeft) return { success: false, error: 'EXTENSION_LIMIT', message: 'That would take the total extension past 14 days.' };
+  if (accept && Number(row.obj.days) > state.extensionDaysLeft) return { success: false, error: 'EXTENSION_LIMIT', message: 'That would take the total extension past 7 days.' };
+  // RENT / LEND: the owner answers (the borrower asked).
+  if (String(swap.obj.serviceType || 'SWAP').toUpperCase() !== 'SWAP' && caller !== swap.ownerEmail) {
+    return { success: false, error: 'WRONG_PARTY', message: 'The book\'s owner answers an extension request.' };
+  }
   const set = (name, v) => { const i = t.headers.indexOf(name); if (i !== -1) sheet.getRange(row.rowIndex + 1, i + 1).setValue(v); };
   set('status', accept ? 'APPROVED' : 'DECLINED');
   set('decidedBy', caller);
@@ -23984,6 +24054,9 @@ function runReturnDeadlines() {
   try { stageInfo = stageReturnInfoBySwap_(); } catch (e) { stageInfo = {}; }
   // Sales whose buyer never closed them (Oct 2026).
   try { summary.sales = runSaleAutoRelease_(); } catch (e) { Logger.log('runSaleAutoRelease_ failed: ' + e); }
+  // Exchange Room timers: 48-hour condition video / payment, the +7 notice,
+  // refunds, and closing rooms after the rating step.
+  try { summary.rooms = runExchangeRoomTicks_(); } catch (e) { Logger.log('runExchangeRoomTicks_ failed: ' + e); }
 
   swaps.rows.forEach(r => {
     if (Date.now() - started > 4.5 * 60 * 1000) return;
@@ -24100,6 +24173,7 @@ function adminMarkForfeitPaid(data) {
   set('paidBy', normalizeEmail(getAuthenticatedEmail()));
   set('note', String((data && data.note) || '').slice(0, 300));
   const kindOfPayout = String(row.obj.leg) === 'sale' ? 'the payment for your sale of "' + row.obj.bookTitle + '" (price minus the platform fee)'
+    : String(row.obj.leg).indexOf('refund:') === 0 ? 'the refund of your payment / security deposit on "' + row.obj.bookTitle + '"'
     : String(row.obj.leg).indexOf('dispute:') === 0 ? 'the deposit awarded to you after SwapSutra reviewed the exchange videos'
     : 'the deposit forfeited when your book was not returned on time';
   const account = readPayoutAccount_(row.obj.ownerEmail);
@@ -24142,7 +24216,9 @@ const VMS_UPLOAD_HEADERS = ['id', 'swapId', 'leg', 'kind', 'uploaderEmail', 'mim
 const VMS_CHUNK_BYTES = 2621440;           // 2.5 MB — a multiple of 256 KB, as Drive requires
 const VMS_MAX_BYTES = 80 * 1024 * 1024;    // 80 MB per video
 const VMS_ALLOWED_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v', 'video/3gpp'];
-const VMS_KIND_LABELS = { QUALITY: 'book quality video', PACKING: 'packing video', RECEIVING: 'receiving / unboxing video' };
+// Oct 2026 (Exchange Room): the sender records three videos for every book,
+// whichever route — condition, packaging and handover — and the receiver one.
+const VMS_KIND_LABELS = { QUALITY: 'book condition video', PACKING: 'packaging video', HANDOVER: 'handover video', RECEIVING: 'receiving / unboxing video' };
 
 function getVmsVideoSheet_() { const s = getOrCreateSheet(VMS_VIDEO_SHEET, VMS_VIDEO_HEADERS); ensureSheetHeaders(s, VMS_VIDEO_HEADERS); return s; }
 function getVmsUploadSheet_() { const s = getOrCreateSheet(VMS_UPLOAD_SHEET, VMS_UPLOAD_HEADERS); ensureSheetHeaders(s, VMS_UPLOAD_HEADERS); return s; }
@@ -24158,10 +24234,10 @@ function vmsLegsFor_(swap) {
   return legs;
 }
 
-/** Which videos a leg needs: sender QUALITY (+ PACKING by courier), receiver RECEIVING. */
+/** Which videos a leg needs: sender QUALITY + PACKING + HANDOVER, receiver RECEIVING (any route). */
 function vmsKindsFor_(method) {
   return {
-    sender: method === 'courier' ? ['QUALITY', 'PACKING'] : ['QUALITY'],
+    sender: ['QUALITY', 'PACKING', 'HANDOVER'],
     receiver: ['RECEIVING']
   };
 }
@@ -24210,7 +24286,7 @@ function getExchangeVideos(data) {
     };
   });
   return { success: true, swapId: swap.obj.id, routeMethod: method, legs: legs, stampCode: vmsStampCode_(swap.obj.id),
-    rule: 'Every book that travels needs three videos: its condition and its packing (sender) and its opening (receiver). In a dispute SwapSutra decides the deposit from these videos.' };
+    rule: 'Every book that travels needs four videos: its condition, its packaging and its handover (sender) and its opening (receiver). In a dispute SwapSutra decides the deposit from these videos.' };
 }
 
 /** A short code the in-app recorder burns into every frame, tying a video to this exchange. */
@@ -24225,21 +24301,28 @@ function vmsStartUpload(data) {
   const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
   if (!swap) return { success: false, message: 'That exchange could not be found.' };
   if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
-  if (!swapChatUnlocked(swap.obj.id)) {
-    return { success: false, error: 'SECURITY_FEE_PENDING', message: 'Videos unlock once both payments on this exchange are verified.' };
-  }
   const route = latestSwapRoute_(swap.obj.id);
   const routeMethod = route ? route.method : 'courier'; // no route yet: allow every video
 
   const leg = String((data && data.leg) || '');
   if (vmsLegsFor_(swap).indexOf(leg) === -1) return { success: false, message: 'That book does not travel on this exchange.' };
   const kind = String((data && data.kind) || '').toUpperCase();
+  // Exchange Room (Oct 2026): the condition video comes BEFORE payment, so
+  // the reader paying can see the book first. Every other video waits for
+  // the payment to be verified.
+  if (!roomSwapAccepted_(swap.obj.status)) {
+    return { success: false, error: 'NOT_ACCEPTED', message: 'Videos start once the request is accepted.' };
+  }
+  const conditionFirst = kind === 'QUALITY' && (leg === 'outbound' || leg === 'counter');
+  if (!conditionFirst && !swapChatUnlocked(swap.obj.id)) {
+    return { success: false, error: 'SECURITY_FEE_PENDING', message: 'This video unlocks once the payment on this exchange is verified.' };
+  }
   const parties = journeyLegParties_(swap, leg);
   const side = parties.sender === caller ? 'sender' : parties.receiver === caller ? 'receiver' : '';
   const allowed = side ? vmsKindsFor_(routeMethod)[side] : [];
   if (allowed.indexOf(kind) === -1) {
     return { success: false, error: 'WRONG_PARTY', message: side === 'sender'
-      ? 'As the sender you record the book quality' + (routeMethod === 'courier' ? ' and packing videos.' : ' video.')
+      ? 'As the sender you record the condition, packaging and handover videos.'
       : 'As the receiver you record the receiving / unboxing video.' };
   }
   const mimeType = String((data && data.mimeType) || '').split(';')[0].trim().toLowerCase();
@@ -24362,7 +24445,7 @@ function vmsFinishUpload(data) {
     const chatId = chat && (chat.chatId || chat.id);
     if (chatId) {
       sendChatMessage({ chatId: chatId, senderEmail: 'swapsutra@gmail.com', senderRole: 'Admin',
-        message: '🎥 ' + caller.split('@')[0] + ' recorded the ' + VMS_KIND_LABELS[up.kind] + '. It is saved with this exchange in case it is ever needed.' });
+        message: '🎥 Step ' + roomStepForVideo_(up.leg, up.kind) + ' · ' + roomName_(caller) + ' recorded the ' + VMS_KIND_LABELS[up.kind] + '. It is saved with this exchange in case it is ever needed.' });
     }
   } catch (e) { Logger.log('vmsFinishUpload chat notice failed: ' + e); }
   return { success: true, video: { id: rec.id, url: url, kind: rec.kind, leg: rec.leg } };
@@ -24686,6 +24769,937 @@ function runSaleAutoRelease_() {
       id, 'sale_auto_seller_' + id);
     returnNotify_('swapsutra@gmail.com', 'sale_payout_admin', 'Pay a seller (auto-released)',
       'Sale ' + id + ': pay ₹' + st.sellerReceives + ' to ' + swap.ownerEmail + '.', id, 'sale_auto_admin_' + id, { whatsapp: false });
+  });
+  return summary;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   EXCHANGE ROOM — one place for the whole exchange (Oct 2026, owner's rules)
+   ────────────────────────────────────────────────────────────────────────
+   Chat, condition protection and the delivery/stages panels are now ONE
+   room. Both readers chat in it, and every step is recorded in it — each
+   step also posts a line into the chat, so the conversation is the record.
+   The same 16 steps run for every kind of exchange (sell, rent, lend, swap);
+   steps 10–14 (the return) apply only where the book comes back.
+
+     1  Requested                       swap request created
+     2  Accepted                        owner accepts → the room opens
+     3  Book condition video            sender(s), BEFORE payment; 48 hours
+     4  Payment — or close              payer(s), 48 hours after step 3,
+                                        or the request closes by itself
+     5  Book packaging video            sender(s)
+     6  Meeting point or courier        either reader
+     7  Place / courier + tracking ID   in person: the pinned place;
+                                        courier: courier name + tracking ID
+     8  Book handover video             sender(s)
+     9  Delivered + received            sender marks delivered, receiver
+                                        records the unboxing video and marks
+                                        received (a buyer also says "happy")
+    10  21 days with the reader         the return deadline is running
+    11  7 days left → reminder          posted into the chat
+    12  +7 days, or return route        the reader with the book may ask +7
+                                        in the next 3 days; the owner agrees.
+                                        Then: courier or in person, back
+    13  Return videos                   packaging + condition + handover
+    14  Returned + received             both mark it
+    15  Reflect & rate                  each reader rates the other and
+                                        SwapSutra (Google review optional)
+    16  Closed                          the room disappears from both
+                                        readers' chats; SwapSutra keeps it
+
+   The room is derived from the records that already exist (payments,
+   videos, the journey ledger, return deadlines, ratings) — nothing new is
+   trusted from the client. computeExchangeRoom_ is pure, so the rules are
+   tested without a spreadsheet.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const ROOM_WINDOW_HOURS = 48;          // condition video, then payment
+const ROOM_REMIND_HOURS = 24;          // a nudge half-way through each window
+// Exchanges accepted before the room existed get their 48 hours from here.
+const ROOM_TIMERS_START_ISO = '2026-10-09T00:00:00+05:30';
+const ROOM_RATING_WINDOW_DAYS = 7;     // the room closes by itself after this
+const ROOM_HOUR_MS = 60 * 60 * 1000;
+const PLATFORM_FEEDBACK_SHEET = 'PlatformFeedback';
+const PLATFORM_FEEDBACK_HEADERS = ['id', 'swapId', 'email', 'role', 'platformRating', 'platformComment', 'readerRating', 'createdAt'];
+const ROOM_CLOSED_STATUSES = ['', 'pending', 'declined', 'rejected', 'cancelled', 'expired'];
+
+const ROOM_STEP_TITLES = {
+  1: 'Requested',
+  2: 'Accepted',
+  3: 'Book condition video',
+  4: 'Payment — or close',
+  5: 'Book packaging video',
+  6: 'Meeting point or courier',
+  7: 'Place, or courier & tracking ID',
+  8: 'Book handover video',
+  9: 'Delivered & received — both mark',
+  10: '21 days with the reader',
+  11: 'Reminder: 7 days left',
+  12: '+7 days, or choose how to return',
+  13: 'Return: packaging, condition & handover videos',
+  14: 'Returned & received — both mark',
+  15: 'Reflect & rate',
+  16: 'Room closed (saved with SwapSutra)'
+};
+
+function roomSwapAccepted_(status) {
+  return ROOM_CLOSED_STATUSES.indexOf(String(status || '').trim().toLowerCase()) === -1;
+}
+
+/** The chat of an exchange is open while the request stands accepted. */
+function roomChatOpen_(swapId) {
+  try {
+    const swap = loadSwapForCirculation(swapId);
+    return !!swap && roomSwapAccepted_(swap.obj.status);
+  } catch (err) {
+    Logger.log('roomChatOpen_ failed: ' + err);
+    return false;
+  }
+}
+
+function roomName_(email) {
+  try { return firstNameOnly(publicReaderName('', email) || humanizeEmailLocalPart(email)) || String(email).split('@')[0]; }
+  catch (e) { return String(email || '').split('@')[0]; }
+}
+
+/** Who sends and who receives on a leg, by role. */
+function roomLegRoles_(leg) {
+  if (leg === 'outbound' || leg === 'counter_return') return { sender: 'owner', receiver: 'requester' };
+  return { sender: 'requester', receiver: 'owner' }; // counter, return
+}
+
+function roomOutLegs_(swapObj) {
+  return String(swapObj.serviceType || 'SWAP').toUpperCase() === 'SWAP' ? ['outbound', 'counter'] : ['outbound'];
+}
+
+function roomBackLegs_(swapObj) {
+  return returnLegsFor_(swapObj).map(l => l.leg);
+}
+
+/** The step a video belongs to, for the chat line. */
+function roomStepForVideo_(leg, kind) {
+  const back = leg === 'return' || leg === 'counter_return';
+  if (kind === 'RECEIVING') return back ? 14 : 9;
+  if (back) return 13;
+  return kind === 'QUALITY' ? 3 : kind === 'PACKING' ? 5 : 8;
+}
+
+function roomIntroMessage_(request) {
+  const type = String((request && request.serviceType) || 'SWAP').toUpperCase();
+  const back = type === 'RENT' || type === 'LEND' || (type === 'SWAP' && String(request.swapPreference || '').toLowerCase() === 'temporary');
+  return '🛡️ This is your exchange room. Chat here, and follow the steps at the top — every step is recorded here.\n\n' +
+    '3. The book\'s condition video (by whoever sends a book) — within 48 hours\n' +
+    '4. Payment through SwapSutra — within 48 hours after that, or the request closes\n' +
+    '5. Packaging video · 6. Meet in person or courier · 7. Place, or courier + tracking ID\n' +
+    '8. Handover video · 9. Sender marks delivered, receiver records the unboxing video and marks received\n' +
+    (back ? '10–14. 21 days with the reader; with 7 days left you can ask for +7 once (the owner agrees); then the return, with the same videos, and both mark it\n' : '') +
+    '15. Rate each other and SwapSutra · 16. The room closes — SwapSutra keeps the record.\n\n' +
+    'Do not share phone numbers, addresses, OTPs or UPI PINs in the chat.';
+}
+
+/** Posts one line into the exchange chat, as SwapSutra. Never throws. */
+function roomPost_(swapId, message) {
+  try {
+    const chat = findChatBySwapId(swapId);
+    const chatId = chat && (chat.chatId || chat.id);
+    if (!chatId) return;
+    sendChatMessage({ chatId: chatId, senderEmail: 'swapsutra@gmail.com', senderRole: 'Admin', message: message });
+  } catch (err) {
+    Logger.log('roomPost_ failed: ' + err);
+  }
+}
+
+function getPlatformFeedbackSheet_() {
+  const s = getOrCreateSheet(PLATFORM_FEEDBACK_SHEET, PLATFORM_FEEDBACK_HEADERS);
+  ensureSheetHeaders(s, PLATFORM_FEEDBACK_HEADERS);
+  return s;
+}
+
+/**
+ * THE room, from plain inputs (pure). Input:
+ *   swapObj, ownerEmail, requesterEmail, viewerRole ('owner'|'requester'|'admin'),
+ *   acceptedAtMs, chatStatus, fee {payers, allApproved}, videos[], events[]
+ *   (journey rows), returnState, extensions[], readerRatings[], feedback[],
+ *   roomEvents[] (stage events with stage ROOM), disputeOpen, myAddressSaved,
+ *   myPayoutAccount, nowMs
+ */
+function computeExchangeRoom_(input) {
+  const o = input.swapObj || {};
+  const now = typeof input.nowMs === 'number' ? input.nowMs : Date.now();
+  const type = String(o.serviceType || 'SWAP').toUpperCase();
+  const emailOf = { owner: normalizeEmail(input.ownerEmail), requester: normalizeEmail(input.requesterEmail) };
+  const viewer = input.viewerRole || '';
+  const outLegs = roomOutLegs_(o);
+  const backLegs = roomBackLegs_(o);
+  const needsReturn = backLegs.length > 0;
+  const videos = input.videos || [];
+  const events = (input.events || []).slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const roomEvents = input.roomEvents || [];
+  const fee = input.fee || { payers: [], allApproved: true };
+  const ret = input.returnState || { applies: false };
+  const t = v => { const x = new Date(v).getTime(); return isFinite(x) ? x : NaN; };
+  const iso = ms => isFinite(ms) ? new Date(ms).toISOString() : '';
+  const when = v => { const ms = typeof v === 'number' ? v : t(v); return isFinite(ms) ? returnDateLabel_(new Date(ms)) : ''; };
+
+  const status = String(o.status || '').trim().toLowerCase();
+  const accepted = roomSwapAccepted_(o.status);
+  const archived = String(input.chatStatus || '') === 'Archived';
+  const closedEarly = !accepted && status !== 'pending' && status !== '';
+
+  // ── per leg ──────────────────────────────────────────────────────────
+  const video = (leg, kind) => {
+    const r = roomLegRoles_(leg);
+    const who = kind === 'RECEIVING' ? emailOf[r.receiver] : emailOf[r.sender];
+    const list = videos.filter(v => String(v.leg) === leg && v.kind === kind && normalizeEmail(v.uploaderEmail) === who)
+      .sort((a, b) => t(a.createdAt) - t(b.createdAt));
+    return list.length ? list[list.length - 1] : null;
+  };
+  const legEvents = leg => events.filter(e => String(e.leg) === leg);
+  const legInfo = leg => {
+    const r = roomLegRoles_(leg);
+    const ev = legEvents(leg);
+    const dispatched = ev.filter(e => e.event === 'dispatched' && String(e.awb || '').trim()).pop() || null;
+    const senderMark = ev.find(e => e.event === 'handed_over' || (e.event === 'delivered' && normalizeEmail(e.actorEmail) === emailOf[r.sender])) || null;
+    const received = ev.find(e => e.event === 'received') || null;
+    const v = {};
+    ['QUALITY', 'PACKING', 'HANDOVER', 'RECEIVING'].forEach(k => {
+      const x = video(leg, k);
+      v[k] = x ? { done: true, url: x.url || '', at: iso(t(x.createdAt)), recordedInApp: String(x.recordedInApp) === 'true' } : { done: false };
+    });
+    return {
+      leg: leg, sender: r.sender, receiver: r.receiver,
+      youSend: viewer === r.sender, youReceive: viewer === r.receiver,
+      videos: v,
+      courierName: dispatched ? dispatched.courierName || '' : '',
+      awb: dispatched ? String(dispatched.awb || '') : '',
+      trackingUrl: dispatched ? courierTrackingUrl(dispatched.courierName, dispatched.awb) : '',
+      senderMarkedAt: senderMark ? iso(t(senderMark.createdAt)) : '',
+      receivedAt: received ? iso(t(received.createdAt)) : ''
+    };
+  };
+  const out = outLegs.map(legInfo);
+  const back = backLegs.map(legInfo);
+
+  const routeOf = isBack => {
+    const rs = events.filter(e => e.event === 'route_set' && ((String(e.leg) === 'return') === isBack));
+    const r = rs.length ? rs[rs.length - 1] : null;
+    if (!r) return null;
+    const lat = r.lat === '' || r.lat === undefined ? null : Number(r.lat);
+    const lng = r.lng === '' || r.lng === undefined ? null : Number(r.lng);
+    return { method: r.method, note: r.note || '', lat: isFinite(lat) ? lat : null, lng: isFinite(lng) ? lng : null,
+      setBy: normalizeEmail(r.actorEmail) === emailOf.owner ? 'owner' : 'requester', at: iso(t(r.createdAt)) };
+  };
+  const outRoute = routeOf(false);
+  const backRoute = routeOf(true);
+
+  const all = (legs, fn) => legs.length > 0 && legs.every(fn);
+  const has = (l, k) => l.videos[k].done;
+  const roomEvent = name => roomEvents.filter(e => e.actionType === name).pop() || null;
+  const noticeEvent = roomEvent('extension_notice');
+  const doneEvent = roomEvent('exchange_done');
+  const closedEvent = roomEvent('room_closed');
+
+  // ── raw step completion ──────────────────────────────────────────────
+  const raw = {};
+  raw[1] = true;
+  raw[2] = accepted || archived;
+  raw[3] = all(out, l => has(l, 'QUALITY'));
+  raw[4] = !!fee.allApproved;
+  raw[5] = all(out, l => has(l, 'PACKING'));
+  raw[6] = !!outRoute;
+  raw[7] = !!outRoute && (outRoute.method !== 'courier' || all(out, l => !!l.awb));
+  raw[8] = all(out, l => has(l, 'HANDOVER'));
+  raw[9] = all(out, l => !!l.senderMarkedAt && !!l.receivedAt);
+  if (needsReturn) {
+    raw[10] = !!noticeEvent || !!backRoute;
+    raw[11] = !!noticeEvent || !!backRoute;
+    raw[12] = !!backRoute;
+    raw[13] = all(back, l => has(l, 'QUALITY') && has(l, 'PACKING') && has(l, 'HANDOVER')) &&
+      (!backRoute || backRoute.method !== 'courier' || all(back, l => !!l.awb));
+    raw[14] = all(back, l => !!l.senderMarkedAt && !!l.receivedAt);
+  }
+  const ratedBy = role => (input.feedback || []).some(f => normalizeEmail(f.email) === emailOf[role]);
+  raw[15] = ratedBy('owner') && ratedBy('requester');
+  raw[16] = archived;
+
+  // A later step being done means the earlier ones are behind us (this
+  // also carries exchanges that began before the room existed).
+  const order = [];
+  for (let n = 1; n <= 16; n++) if (needsReturn || n < 10 || n > 14) order.push(n);
+  const done = {};
+  order.forEach(n => { done[n] = !!raw[n]; });
+  for (let i = order.length - 2; i >= 0; i--) {
+    const n = order[i];
+    if (n === 15) continue; // closing without rating (timeout) does not mean both rated
+    if (done[order[i + 1]] && order[i + 1] !== 16) done[n] = true;
+    if (n < 15 && done[16] && !closedEarly) done[n] = true;
+  }
+  const exchangeDone = !closedEarly && (needsReturn ? !!done[14] : !!done[9]);
+
+  // ── deadlines ────────────────────────────────────────────────────────
+  const clockStart = Math.max(isFinite(input.acceptedAtMs) ? input.acceptedAtMs : now, t(ROOM_TIMERS_START_ISO));
+  const conditionDoneAt = raw[3] ? Math.max.apply(null, out.map(l => t(l.videos.QUALITY.at))) : NaN;
+  const conditionBy = clockStart + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
+  const payBy = (isFinite(conditionDoneAt) ? Math.max(conditionDoneAt, clockStart) : NaN) + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
+  const unpaid = (fee.payers || []).filter(p => p.adminStatus === 'NOT_SUBMITTED' || p.adminStatus === 'ADMIN_REJECTED' || !p.adminStatus);
+  const paymentPhase = accepted && !done[4];
+
+  // ── steps for the screen ─────────────────────────────────────────────
+  const firstOpen = order.find(n => !done[n]);
+  const current = closedEarly ? 16 : (firstOpen || 16);
+  const sale = type === 'SELL';
+  const titles = Object.assign({}, ROOM_STEP_TITLES);
+  if (sale) { titles[4] = 'Payment (book price + fee) — or close'; titles[9] = 'Delivered & received — buyer closes the purchase'; }
+  const legNames = l => out.length > 1 ? (l.sender === viewer ? 'your book' : 'their book') : 'the book';
+  const detail = {};
+  detail[3] = (out.length > 1 ? 'Each of you records your own book\'s condition' : (viewer === 'owner' ? 'You record the book\'s condition' : 'The owner records the book\'s condition')) +
+    ' — before anyone pays.' + (paymentPhase && !raw[3] ? ' Due by ' + when(conditionBy) + '.' : '');
+  detail[4] = (fee.payers || []).length
+    ? (fee.payers || []).map(p => (p.payerRole === viewer ? 'You' : p.payerRole === 'owner' ? 'The owner' : 'The requester') + ': ₹' + p.requiredAmount + ' — ' +
+      (p.adminStatus === 'ADMIN_APPROVED' ? 'verified' : p.adminStatus === 'ADMIN_PENDING' ? 'paid, SwapSutra is verifying' : p.adminStatus === 'ADMIN_REJECTED' ? 'not accepted, pay again' : 'to pay')).join(' · ')
+    : 'Nothing to pay on this exchange.';
+  if (paymentPhase && raw[3] && unpaid.length) detail[4] += ' · Pay by ' + when(payBy) + ', or the request closes.';
+  detail[6] = outRoute ? (outRoute.method === 'courier' ? 'Courier' : 'In person') : 'Decide together in the chat; either of you records it.';
+  detail[7] = outRoute ? (outRoute.method === 'courier'
+    ? out.map(l => legNames(l) + ': ' + (l.awb ? l.courierName + ' ' + l.awb : 'tracking ID to add')).join(' · ')
+    : (outRoute.note || 'Meeting point pinned')) : '';
+  detail[9] = out.map(l => legNames(l) + ': ' + (l.senderMarkedAt ? 'delivered ✓' : 'delivered —') + ' / ' + (l.receivedAt ? 'received ✓' : 'received —')).join(' · ');
+  if (needsReturn) {
+    detail[10] = ret.started ? 'Return due by ' + when(ret.dueAt) + (ret.daysLeft > 0 ? ' (' + ret.daysLeft + ' days left)' : '') + '. You can return it any time before.' : 'Starts when the book reaches the reader.';
+    detail[11] = noticeEvent ? 'Reminder posted in the chat.' : 'Posted in the chat when 7 days are left.';
+    const w = ret.extensionWindow || {};
+    detail[12] = (ret.pendingExtension ? '+7 days asked — waiting for the owner. ' : ret.extensionDays ? 'Extended by ' + ret.extensionDays + ' days. ' :
+      w.opensAt ? '+7 days can be asked for between ' + when(w.opensAt) + ' and ' + when(w.closesAt) + '. ' : '') +
+      (backRoute ? 'Return route: ' + (backRoute.method === 'courier' ? 'courier' : 'in person' + (backRoute.note ? ' — ' + backRoute.note : '')) : 'Then choose: courier or in person.');
+    detail[14] = back.map(l => (l.sender === viewer ? 'you send' : 'they send') + ': ' + (l.senderMarkedAt ? 'returned ✓' : 'returned —') + ' / ' + (l.receivedAt ? 'received ✓' : 'received —')).join(' · ');
+  }
+  detail[15] = 'Owner ' + (ratedBy('owner') ? '✓' : '—') + ' · Requester ' + (ratedBy('requester') ? '✓' : '—');
+  const at = {};
+  at[1] = iso(t(o.createdAt));
+  at[2] = iso(input.acceptedAtMs);
+  at[6] = outRoute ? outRoute.at : '';
+  at[11] = noticeEvent ? iso(t(noticeEvent.createdAt)) : '';
+  at[12] = backRoute ? backRoute.at : '';
+  at[16] = closedEvent ? iso(t(closedEvent.createdAt)) : '';
+
+  const steps = [];
+  for (let n = 1; n <= 16; n++) {
+    const applies = needsReturn || n < 10 || n > 14;
+    let state;
+    if (!applies) state = 'skipped';
+    else if (done[n]) state = 'done';
+    else if (closedEarly) state = n === 16 ? 'done' : 'closed';
+    else if (n === current) state = 'current';
+    else state = 'upcoming';
+    steps.push({ n: n, title: titles[n], state: state,
+      detail: !applies ? (sale ? 'Not needed — a sale is final.' : 'Not needed — this exchange is permanent.') : (detail[n] || ''),
+      at: at[n] || '' });
+  }
+
+  // ── what the viewer can do now ───────────────────────────────────────
+  const actions = [];
+  const me = viewer === 'owner' || viewer === 'requester' ? viewer : '';
+  const push = a => actions.push(a);
+  const blocked = !me || closedEarly || archived || input.disputeOpen;
+  if (!blocked) {
+    if (paymentPhase) {
+      out.filter(l => l.youSend && !has(l, 'QUALITY')).forEach(l => push({ type: 'video', step: 3, leg: l.leg, kind: 'QUALITY' }));
+      const myFee = (fee.payers || []).find(p => p.payerRole === me);
+      if (raw[3] && myFee && unpaid.indexOf(myFee) !== -1) push({ type: 'pay', step: 4, amount: myFee.requiredAmount });
+      push({ type: 'close', step: 4 });
+    } else if (accepted && !done[9]) {
+      const legSteps = (legs, route, firstStep) => {
+        // firstStep: 3 on the way out, 13 on the way back
+        const isBack = firstStep === 13;
+        legs.filter(l => l.youSend).forEach(l => {
+          if (!has(l, 'QUALITY')) push({ type: 'video', step: isBack ? 13 : 3, leg: l.leg, kind: 'QUALITY' });
+          if (!has(l, 'PACKING')) push({ type: 'video', step: isBack ? 13 : 5, leg: l.leg, kind: 'PACKING' });
+        });
+        if (!route) { push({ type: 'setRoute', step: isBack ? 12 : 6, phase: isBack ? 'back' : 'out' }); return; }
+        if (route.method === 'courier') {
+          if (legs.some(l => l.youReceive) && !input.myAddressSaved) push({ type: 'address', step: isBack ? 12 : 7 });
+          legs.filter(l => l.youSend && !l.awb && has(l, 'QUALITY') && has(l, 'PACKING'))
+            .forEach(l => push({ type: 'courier', step: isBack ? 13 : 7, leg: l.leg }));
+        }
+        legs.filter(l => l.youSend).forEach(l => {
+          if (!has(l, 'HANDOVER')) push({ type: 'video', step: isBack ? 13 : 8, leg: l.leg, kind: 'HANDOVER' });
+          else if (!l.senderMarkedAt && has(l, 'QUALITY') && has(l, 'PACKING') && (route.method !== 'courier' || l.awb)) {
+            push({ type: 'markDelivered', step: isBack ? 14 : 9, leg: l.leg, method: route.method });
+          }
+        });
+        legs.filter(l => l.youReceive && !l.receivedAt).forEach(l => {
+          if (!has(l, 'RECEIVING')) push({ type: 'video', step: isBack ? 14 : 9, leg: l.leg, kind: 'RECEIVING' });
+          else push({ type: 'markReceived', step: isBack ? 14 : 9, leg: l.leg, sale: sale && l.leg === 'outbound' });
+        });
+      };
+      legSteps(out, outRoute, 3);
+    } else if (accepted && needsReturn && !done[14]) {
+      const w = ret.extensionWindow || {};
+      const canAsk = type === 'SWAP' || me === 'requester';
+      if (!backRoute && w.open && canAsk && !ret.pendingExtension) push({ type: 'requestExtension', step: 12, days: 7, closesAt: w.closesAt });
+      if (ret.pendingExtension && normalizeEmail(ret.pendingExtension.requestedBy) !== emailOf[me] && (type === 'SWAP' || me === 'owner')) {
+        push({ type: 'answerExtension', step: 12, extensionId: ret.pendingExtension.id, days: ret.pendingExtension.days, reason: ret.pendingExtension.reason || '' });
+      }
+      if (!backRoute) push({ type: 'setRoute', step: 12, phase: 'back' });
+      else {
+        // Reuse the leg logic for the way back.
+        const legsB = back;
+        legsB.filter(l => l.youSend).forEach(l => {
+          if (!has(l, 'PACKING')) push({ type: 'video', step: 13, leg: l.leg, kind: 'PACKING' });
+          if (!has(l, 'QUALITY')) push({ type: 'video', step: 13, leg: l.leg, kind: 'QUALITY' });
+        });
+        if (backRoute.method === 'courier') {
+          if (legsB.some(l => l.youReceive) && !input.myAddressSaved) push({ type: 'address', step: 12 });
+          legsB.filter(l => l.youSend && !l.awb && has(l, 'QUALITY') && has(l, 'PACKING')).forEach(l => push({ type: 'courier', step: 13, leg: l.leg }));
+        }
+        legsB.filter(l => l.youSend).forEach(l => {
+          if (!has(l, 'HANDOVER')) push({ type: 'video', step: 13, leg: l.leg, kind: 'HANDOVER' });
+          else if (!l.senderMarkedAt && has(l, 'QUALITY') && has(l, 'PACKING') && (backRoute.method !== 'courier' || l.awb)) {
+            push({ type: 'markDelivered', step: 14, leg: l.leg, method: backRoute.method });
+          }
+        });
+        legsB.filter(l => l.youReceive && !l.receivedAt).forEach(l => {
+          if (!has(l, 'RECEIVING')) push({ type: 'video', step: 14, leg: l.leg, kind: 'RECEIVING' });
+          else push({ type: 'markReceived', step: 14, leg: l.leg, sale: false });
+        });
+      }
+    }
+    if (exchangeDone && !ratedBy(me)) push({ type: 'rate', step: 15 });
+  }
+  // Money owed to the viewer needs somewhere to go.
+  if (me && !closedEarly && !input.myPayoutAccount) {
+    const owedSale = sale && me === 'owner';
+    const owedRefund = exchangeDone && (fee.payers || []).some(p => p.payerRole === me && Number(p.depositAmount || 0) > 0);
+    if (owedSale || owedRefund) push({ type: 'payoutAccount', step: sale ? 9 : (needsReturn ? 14 : 9) });
+  }
+
+  // What the viewer is waiting for, when there is nothing for them to do.
+  let waitingOn = '';
+  const otherName = me === 'owner' ? 'the other reader' : me === 'requester' ? (type === 'SELL' ? 'the seller' : 'the owner') : 'the readers';
+  if (closedEarly) waitingOn = '';
+  else if (input.disputeOpen) waitingOn = 'A problem was reported. SwapSutra is reviewing the videos; the steps are paused until then.';
+  else if (archived) waitingOn = '';
+  else if (!actions.some(a => a.type !== 'close' && a.type !== 'payoutAccount')) {
+    if (paymentPhase && !raw[3]) waitingOn = 'Waiting for ' + otherName + ' to record the book\'s condition video.';
+    else if (paymentPhase && unpaid.length) waitingOn = 'Waiting for the payment.';
+    else if (paymentPhase) waitingOn = 'SwapSutra is verifying the payment — usually within a few hours.';
+    else if (needsReturn && done[9] && !done[12] && !(ret.extensionWindow || {}).open) waitingOn = ret.started ? 'Enjoy the book. The return is due by ' + when(ret.dueAt) + '.' : '';
+    else if (exchangeDone && ratedBy(me)) waitingOn = 'Thanks for rating. The room closes once ' + otherName + ' rates too (or in ' + ROOM_RATING_WINDOW_DAYS + ' days).';
+    else if (firstOpen) waitingOn = 'Waiting for ' + otherName + ' — step ' + firstOpen + ': ' + titles[firstOpen] + '.';
+  }
+
+  return {
+    type: type,
+    needsReturn: needsReturn,
+    accepted: accepted,
+    closed: closedEarly || archived,
+    closedReason: closedEarly ? (closedEvent ? closedEvent.note : 'This request was closed.') : (archived ? (closedEvent ? closedEvent.note : 'Exchange complete.') : ''),
+    current: current,
+    steps: steps,
+    actions: actions,
+    waitingOn: waitingOn,
+    legs: { out: out, back: back },
+    route: { out: outRoute, back: backRoute },
+    deadlines: {
+      conditionBy: paymentPhase && !raw[3] ? iso(conditionBy) : '',
+      payBy: paymentPhase && raw[3] && unpaid.length ? iso(payBy) : ''
+    },
+    exchangeDone: exchangeDone,
+    exchangeDoneAt: doneEvent ? iso(t(doneEvent.createdAt)) : '',
+    finishedRecorded: !!doneEvent,
+    noticePosted: !!noticeEvent,
+    rated: { owner: ratedBy('owner'), requester: ratedBy('requester') },
+    _raw: raw,
+    _timers: { clockStart: clockStart, conditionBy: conditionBy, payBy: payBy, conditionDone: !!raw[3], unpaidRoles: unpaid.map(p => p.payerRole) }
+  };
+}
+
+/** Loads everything the room needs for one exchange. */
+function roomInputFor_(swap, viewerEmail, nowMs) {
+  const id = String(swap.obj.id);
+  const viewer = normalizeEmail(viewerEmail);
+  const chat = findChatBySwapId(id) || {};
+  const role = viewer === swap.ownerEmail ? 'owner' : viewer === swap.requesterEmail ? 'requester' : (isAuthenticatedAdmin() ? 'admin' : '');
+  let acceptedAtMs = new Date(chat.createdAt).getTime();
+  if (!isFinite(acceptedAtMs)) acceptedAtMs = new Date(swap.obj.updatedAt || swap.obj.createdAt).getTime();
+  const fee = securityFeeStatus(swap, viewer, role === 'admin');
+  const stageEvents = loadStageEvents(id);
+  const ratings = readSheetObjects_(getReaderRatingsSheet()).rows.map(r => r.obj).filter(r => String(r.swapId) === id);
+  const feedback = readSheetObjects_(getPlatformFeedbackSheet_()).rows.map(r => r.obj).filter(r => String(r.swapId) === id);
+  const extensions = readSheetObjects_(getReturnExtensionSheet_()).rows.map(r => r.obj).filter(o => String(o.swapId) === id);
+  return {
+    swapObj: swap.obj,
+    ownerEmail: swap.ownerEmail,
+    requesterEmail: swap.requesterEmail,
+    viewerRole: role,
+    acceptedAtMs: acceptedAtMs,
+    chatStatus: chat.chatStatus || '',
+    chatId: chat.chatId || chat.id || '',
+    fee: fee,
+    videos: vmsVideosForSwap_(id),
+    events: journeyEventsBySwap_()[id] || [],
+    returnState: returnStateForSwap_(swap),
+    extensions: extensions,
+    readerRatings: ratings,
+    feedback: feedback,
+    roomEvents: stageEvents.filter(e => e.stage === 'ROOM'),
+    disputeOpen: swapHasOpenDispute(id),
+    myAddressSaved: !!(viewer && readDeliveryAddress(viewer)),
+    myPayoutAccount: viewer ? readPayoutAccount_(viewer) : null,
+    nowMs: nowMs
+  };
+}
+
+/** Action: getExchangeRoom { swapId } — either reader, or SwapSutra. */
+function getExchangeRoom(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to open the exchange.' };
+    const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, caller) && !isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    const input = roomInputFor_(swap, caller);
+    const room = computeExchangeRoom_(input);
+    delete room._raw; delete room._timers;
+    const ret = input.returnState || {};
+    const pending = ret.pendingExtension ? { id: ret.pendingExtension.id, days: ret.pendingExtension.days, reason: ret.pendingExtension.reason || '',
+      youAsked: normalizeEmail(ret.pendingExtension.requestedBy) === caller } : null;
+    return Object.assign({ success: true, swapId: swap.obj.id, role: input.viewerRole, chatId: input.chatId,
+      bookTitle: String(swap.obj.requestedBookTitle || ''),
+      otherName: roomName_(caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail),
+      disputeOpen: input.disputeOpen,
+      payment: { payers: input.fee.payers, allApproved: input.fee.allApproved, upi: { vpa: SWAPSM_UPI_VPA, payee: SWAPSM_UPI_PAYEE } },
+      returnInfo: ret.applies && ret.started ? { dueAt: ret.dueAt, daysLeft: ret.daysLeft, overdue: ret.overdue, extensionDays: ret.extensionDays,
+        window: ret.extensionWindow || null, pendingExtension: pending } : null,
+      sale: String(swap.obj.serviceType || '').toUpperCase() === 'SELL' ? saleStatusFor_(swap) : null,
+      payoutAccount: input.myPayoutAccount,
+      myAddressSaved: input.myAddressSaved,
+      stampCode: vmsStampCode_(swap.obj.id),
+      couriers: Object.keys(COURIERS),
+      reviewUrl: GOOGLE_REVIEW_URL,
+      policy: RETURN_POLICY_TEXT
+    }, room);
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/** The legs a phase covers. */
+function roomPhaseOfLeg_(leg) {
+  return leg === 'return' || leg === 'counter_return' ? 'back' : 'out';
+}
+
+/**
+ * Action: exchangeRoomAction { swapId, act, ... } — the steps that are not
+ * a video or a payment (those use vmsStartUpload… and submitSecurityFeePayment).
+ *   close              before payment is complete: closes the request
+ *   setRoute           { phase: out|back, method, meetingLat, meetingLng, meetingPoint }
+ *   courierDetails     { leg, courierName, awb }
+ *   markDelivered      { leg }              the sender
+ *   markReceived       { leg, happy? }      the receiver (a buyer must be happy)
+ *   requestExtension   { reason? }          +7, in the window
+ *   answerExtension    { extensionId, accept }
+ *   rate               { readerRating, readerComment?, platformRating, platformComment? }
+ */
+function exchangeRoomAction(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to continue.' };
+    const swapId = String((data && data.swapId) || '').trim();
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    const role = swapPartyRole(swap, caller);
+    if (!role) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    const act = String((data && data.act) || '');
+    const input = roomInputFor_(swap, caller);
+    const room = computeExchangeRoom_(input);
+    if (room.closed) return { success: false, error: 'ROOM_CLOSED', message: 'This exchange room is closed.' };
+    if (input.disputeOpen && act !== 'close') {
+      return { success: false, error: 'DISPUTE_OPEN', message: 'A problem is being reviewed on this exchange. The steps are paused until SwapSutra decides.' };
+    }
+    const name = roomName_(caller);
+    const title = String(swap.obj.requestedBookTitle || 'the book');
+    const allowed = type => room.actions.some(a => a.type === type && (!data.leg || !a.leg || a.leg === data.leg));
+    const legOk = (leg) => (room.legs.out.concat(room.legs.back)).find(l => l.leg === leg) || null;
+
+    if (act === 'close') {
+      if (input.fee.allApproved) return { success: false, message: 'The payment is already complete, so the request can no longer be closed here. Report a problem if something is wrong.' };
+      return roomCloseRequest_(swap, caller, 'Closed by ' + name + ' before payment' + (data.reason ? ': ' + String(data.reason).slice(0, 120) : '') + '.', false);
+    }
+
+    if (act === 'setRoute') {
+      const phase = String(data.phase || 'out') === 'back' ? 'back' : 'out';
+      if (!room.actions.some(a => a.type === 'setRoute' && a.phase === phase)) {
+        return { success: false, error: 'STEP_LOCKED', message: phase === 'back' ? 'The return route is chosen after the book has been delivered and received.' : 'The route is chosen once the payment is verified.' };
+      }
+      return setSwapRoute({ swapId: swapId, method: data.method, meetingLat: data.meetingLat, meetingLng: data.meetingLng, meetingPoint: data.meetingPoint, phase: phase });
+    }
+
+    if (act === 'courierDetails') {
+      const leg = String(data.leg || '');
+      const l = legOk(leg);
+      if (!l || !l.youSend) return { success: false, error: 'WRONG_PARTY', message: 'Only the reader sending this book adds its tracking ID.' };
+      if (!allowed('courier')) return { success: false, error: 'STEP_LOCKED', message: 'Record the condition and packaging videos first, on a courier route.' };
+      const courierName = String(data.courierName || '').trim();
+      const awb = String(data.awb || '').trim().toUpperCase();
+      if (!Object.prototype.hasOwnProperty.call(COURIERS, courierName)) return { success: false, message: 'Choose the courier company.' };
+      if (!/^[A-Z0-9-]{4,40}$/.test(awb)) return { success: false, message: 'Enter the tracking ID (AWB) exactly as on the receipt.' };
+      const res = appendJourneyEvent({ swapId: swapId, leg: leg, event: 'dispatched', actorEmail: caller, method: 'courier', courierName: courierName, awb: awb,
+        note: 'Posted with ' + courierName }, swap);
+      if (res && res.success === false) return res;
+      roomPost_(swapId, '📦 Step ' + (roomPhaseOfLeg_(leg) === 'back' ? 13 : 7) + ' · ' + name + ' posted ' + (roomPhaseOfLeg_(leg) === 'back' ? 'the book back' : 'the book') +
+        ' with ' + courierName + '. Tracking ID: ' + awb + '.');
+      return { success: true, message: 'Tracking ID saved. Now record the handover video.' };
+    }
+
+    if (act === 'markDelivered') {
+      const leg = String(data.leg || '');
+      const l = legOk(leg);
+      if (!l || !l.youSend) return { success: false, error: 'WRONG_PARTY', message: 'Only the reader sending this book marks it delivered.' };
+      if (l.senderMarkedAt) return { success: false, message: 'You have already marked this book delivered.' };
+      if (!allowed('markDelivered')) {
+        const missing = ['QUALITY', 'PACKING', 'HANDOVER'].filter(k => !l.videos[k].done);
+        return { success: false, error: missing.length ? 'VIDEO_REQUIRED' : 'STEP_LOCKED', missing: missing,
+          message: missing.length ? 'Record the ' + missing.map(k => VMS_KIND_LABELS[k]).join(', the ') + ' first.' : 'Add the courier and tracking ID first.' };
+      }
+      const route = roomPhaseOfLeg_(leg) === 'back' ? room.route.back : room.route.out;
+      const res = appendJourneyEvent({ swapId: swapId, leg: leg, event: route && route.method === 'courier' ? 'delivered' : 'handed_over', actorEmail: caller,
+        method: route ? route.method : '', note: 'Marked delivered by the sender' }, swap);
+      if (res && res.success === false) return res;
+      roomPost_(swapId, '✅ Step ' + (roomPhaseOfLeg_(leg) === 'back' ? 14 : 9) + ' · ' + name + ' marked ' + (roomPhaseOfLeg_(leg) === 'back' ? 'the book returned' : 'the book delivered') + '.');
+      roomAfterMark_(swap);
+      return { success: true, message: 'Marked delivered.' };
+    }
+
+    if (act === 'markReceived') {
+      const leg = String(data.leg || '');
+      const l = legOk(leg);
+      if (!l || !l.youReceive) return { success: false, error: 'WRONG_PARTY', message: 'Only the reader receiving this book marks it received.' };
+      if (l.receivedAt) return { success: false, message: 'You have already marked this book received.' };
+      if (!l.videos.RECEIVING.done) return { success: false, error: 'VIDEO_REQUIRED', missing: ['RECEIVING'], message: 'Record the receiving / unboxing video first — start before you open the parcel.' };
+      if (!allowed('markReceived')) return { success: false, error: 'STEP_LOCKED', message: 'This book is not on its way to you yet.' };
+      const isSale = String(swap.obj.serviceType || '').toUpperCase() === 'SELL' && leg === 'outbound';
+      const happy = data && (data.happy === true || data.happy === 'true');
+      if (isSale && saleEscrowAppliesToSwap_(swap.obj) && !happy) {
+        return { success: false, error: 'NOT_HAPPY', message: 'If something is wrong with the book, report a problem instead — SwapSutra will review the videos before the seller is paid.' };
+      }
+      const res = appendJourneyEvent({ swapId: swapId, leg: leg, event: 'received', actorEmail: caller, method: '', note: happy ? 'Received — happy with the book' : 'Received' }, swap);
+      if (res && res.success === false) return res;
+      roomPost_(swapId, '📗 Step ' + (roomPhaseOfLeg_(leg) === 'back' ? 14 : 9) + ' · ' + name + ' marked ' + (roomPhaseOfLeg_(leg) === 'back' ? 'their book received back' : 'the book received') + (happy ? ' and is happy with it' : '') + '.');
+      let saleResult = null;
+      if (isSale && saleEscrowAppliesToSwap_(swap.obj)) saleResult = confirmSaleComplete({ swapId: swapId, happy: true });
+      roomAfterMark_(swap);
+      return { success: true, message: isSale ? 'Purchase closed — the seller will be paid. Enjoy the book!' : 'Marked received.', sale: saleResult };
+    }
+
+    if (act === 'requestExtension') {
+      if (!allowed('requestExtension')) {
+        const w = (input.returnState || {}).extensionWindow || {};
+        return { success: false, error: 'EXTENSION_WINDOW', message: w.used ? 'An extension can be asked for once per exchange.'
+          : w.opensAt ? '+7 days can be asked for in the 3 days after the 7-days-left reminder.' : 'There is no return date to extend yet.' };
+      }
+      const res = requestReturnExtension({ swapId: swapId, days: 7, reason: data.reason });
+      if (res && res.success) roomPost_(swapId, '⏳ Step 12 · ' + name + ' asked for 7 more days' + (data.reason ? ' — "' + String(data.reason).slice(0, 120) + '"' : '') + '. The owner can agree or decline at the top of this room.');
+      return res;
+    }
+
+    if (act === 'answerExtension') {
+      if (!allowed('answerExtension')) return { success: false, error: 'WRONG_PARTY', message: 'There is no extension request for you to answer.' };
+      const accept = data && (data.accept === true || data.accept === 'true');
+      const res = respondReturnExtension({ swapId: swapId, extensionId: data.extensionId, accept: accept });
+      if (res && res.success) {
+        const st = returnStateForSwap_(swap);
+        roomPost_(swapId, accept ? '✅ Step 12 · ' + name + ' agreed to +7 days. The return is now due by ' + returnDateLabel_(new Date(st.dueAt)) + '.'
+          : '✖️ Step 12 · ' + name + ' declined the extension. The return is due by ' + returnDateLabel_(new Date(st.dueAt)) + ' — choose courier or in person to start it.');
+      }
+      return res;
+    }
+
+    if (act === 'rate') return roomRate_(swap, caller, role, data, room);
+
+    return { success: false, message: 'Unknown step.' };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/** After a delivered/received mark: if that finished the exchange, record it. */
+function roomAfterMark_(swap) {
+  try {
+    const room = computeExchangeRoom_(roomInputFor_(swap, swap.ownerEmail));
+    if (room.exchangeDone && !room.finishedRecorded) roomFinishExchange_(swap, room);
+  } catch (err) {
+    Logger.log('roomAfterMark_ failed: ' + err);
+  }
+}
+
+/** The books have arrived (and come back, where they must): open the rating step. */
+function roomFinishExchange_(swap, room) {
+  const id = String(swap.obj.id);
+  appendStageEvent({ swapId: id, stage: 'ROOM', party: 'system', actionType: 'exchange_done', actorEmail: 'swapsutra@gmail.com',
+    note: room && room.needsReturn ? 'Returned and received by both readers.' : 'Delivered and received.' });
+  markSwapCompletedInChat(swap);
+  const refunds = roomCreateRefunds_(swap);
+  roomPost_(id, '🎉 ' + (room && room.needsReturn ? 'Step 14 done — the book is back with its owner.' : 'Step 9 done — the exchange is complete.') +
+    (refunds.length ? ' SwapSutra will refund ₹' + refunds.map(r => r.amount).join(' and ₹') + ' of security deposit to the UPI ID in your settings.' : '') +
+    '\n\nStep 15 · Reflect & rate: rate each other and SwapSutra at the top of this room. The room then closes (it stays saved with SwapSutra).');
+  [swap.ownerEmail, swap.requesterEmail].forEach(email => {
+    try {
+      createNotification(email, 'room_rate', 'Exchange complete — please rate', 'Rate the other reader and SwapSutra to close the exchange room for "' +
+        (swap.obj.requestedBookTitle || 'the book') + '".', id, { link: '/profile', dedupeKey: 'room_done_' + id + '_' + email });
+    } catch (e) { /* the chat line above is enough */ }
+  });
+}
+
+/**
+ * Deposit refunds once the exchange is complete: every verified deposit
+ * goes back to the reader who paid it — unless it was forfeited (late
+ * return) or SwapSutra decided it in a dispute. Waits while a dispute is
+ * open. Idempotent: one refund record per reader.
+ */
+function roomCreateRefunds_(swap) {
+  const id = String(swap.obj.id);
+  if (swapHasOpenDispute(id)) return [];
+  const sheet = getReturnForfeitSheet_();
+  const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
+  const existing = readSheetObjects_(sheet).rows.map(r => r.obj).filter(f => String(f.swapId) === id);
+  const created = [];
+  loadSecurityFeeRows(id).rows.map(r => r.obj).forEach(rec => {
+    if (rec.adminStatus !== 'ADMIN_APPROVED') return;
+    const deposit = feeRecordBreakdown_(rec).depositAmount;
+    if (!(deposit > 0)) return;
+    const role = rec.payerRole;
+    // The deposit that protected a late-returned book is the owner's now.
+    const forfeitLeg = role === 'requester' ? 'return' : 'counter_return';
+    if (existing.some(f => String(f.leg) === forfeitLeg)) return;
+    if (existing.some(f => /^dispute:/.test(String(f.leg)) && String(f.leg).split(':').pop() === role)) return;
+    if (existing.some(f => String(f.leg) === 'refund:' + role)) return;
+    const rec2 = {
+      id: generateId('SS_REFUND_'), swapId: id, leg: 'refund:' + role, bookTitle: String(swap.obj.requestedBookTitle || 'the book'),
+      defaulterEmail: '', ownerEmail: normalizeEmail(rec.payerEmail), amount: deposit, dueAt: '', forfeitedAt: new Date(),
+      payoutStatus: 'TO_PAY_OWNER', note: 'Security deposit refund — exchange completed.'
+    };
+    sheet.appendRow(headers.map(k => rec2[k] !== undefined ? rec2[k] : ''));
+    existing.push(rec2);
+    created.push(rec2);
+    try {
+      returnNotify_('swapsutra@gmail.com', 'room_refund_admin', 'Refund a security deposit',
+        'Exchange ' + id + ' is complete. Refund ₹' + deposit + ' to ' + rec.payerEmail + ' and mark it paid in Admin → Payouts.', id, 'room_refund_admin_' + id + '_' + role, { whatsapp: false });
+    } catch (e) { /* the payout record is the source of truth */ }
+  });
+  return created;
+}
+
+/** Closes a request before (or instead of) payment. Anything already paid is refunded. */
+function roomCloseRequest_(swap, actorEmail, reason, automatic) {
+  const id = String(swap.obj.id);
+  const statusIdx = swap.headers.indexOf('status');
+  if (statusIdx !== -1) swap.sheet.getRange(swap.rowIndex + 1, statusIdx + 1).setValue(automatic ? 'Expired' : 'Cancelled');
+  const upd = swap.headers.indexOf('updatedAt');
+  if (upd !== -1) swap.sheet.getRange(swap.rowIndex + 1, upd + 1).setValue(new Date());
+  swap.obj.status = automatic ? 'Expired' : 'Cancelled';
+
+  // Money already sent comes back in full (fee included — nothing happened).
+  const sheet = getReturnForfeitSheet_();
+  const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
+  const existing = readSheetObjects_(sheet).rows.map(r => r.obj).filter(f => String(f.swapId) === id);
+  const refunds = [];
+  loadSecurityFeeRows(id).rows.map(r => r.obj).forEach(rec => {
+    if (rec.adminStatus !== 'ADMIN_APPROVED' && rec.adminStatus !== 'ADMIN_PENDING') return;
+    if (existing.some(f => String(f.leg) === 'refund:' + rec.payerRole)) return;
+    const amount = Number(rec.requiredAmount || 0);
+    if (!(amount > 0)) return;
+    const r = { id: generateId('SS_REFUND_'), swapId: id, leg: 'refund:' + rec.payerRole, bookTitle: String(swap.obj.requestedBookTitle || 'the book'),
+      defaulterEmail: '', ownerEmail: normalizeEmail(rec.payerEmail), amount: amount, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'TO_PAY_OWNER',
+      note: 'Request closed before the exchange — full refund.' + (rec.adminStatus === 'ADMIN_PENDING' ? ' Check the payment arrived first (UTR ' + (rec.utr || '?') + ').' : '') };
+    sheet.appendRow(headers.map(k => r[k] !== undefined ? r[k] : ''));
+    refunds.push(r);
+  });
+
+  appendStageEvent({ swapId: id, stage: 'ROOM', party: automatic ? 'system' : swapPartyRole(swap, actorEmail) || 'system', actionType: 'room_closed',
+    actorEmail: normalizeEmail(actorEmail) || 'swapsutra@gmail.com', note: reason });
+  roomArchive_(swap, '🔒 Step 4 · ' + reason + (refunds.length ? ' Anything already paid will be refunded in full.' : '') + ' This room is now closed.', reason);
+  [swap.ownerEmail, swap.requesterEmail].forEach(email => {
+    try {
+      returnNotify_(email, 'room_request_closed', 'Request closed', '"' + (swap.obj.requestedBookTitle || 'The book') + '": ' + reason +
+        (refunds.some(r => r.ownerEmail === email) ? ' Your payment will be refunded in full.' : ''), id, 'room_closed_' + id + '_' + email, { whatsapp: !!automatic });
+    } catch (e) { /* best effort */ }
+  });
+  refunds.forEach(r => {
+    try {
+      returnNotify_('swapsutra@gmail.com', 'room_refund_admin', 'Refund a closed request',
+        'Request ' + id + ' closed (' + reason + '). Refund ₹' + r.amount + ' to ' + r.ownerEmail + '.', id, 'room_close_refund_' + r.id, { whatsapp: false });
+    } catch (e) { /* the payout record is the source of truth */ }
+  });
+  return { success: true, closed: true, message: 'The request is closed.' };
+}
+
+/** Archives the exchange chat: it leaves both readers' chats; SwapSutra keeps it. */
+function roomArchive_(swap, lastMessage, reason) {
+  const id = String(swap.obj.id);
+  if (lastMessage) roomPost_(id, lastMessage);
+  try {
+    const sheet = getOrCreateSheet('Chats', []);
+    const headers = ensureSheetHeaders(sheet, ['chatId', 'swapId', 'chatStatus', 'archivedAt', 'archivedReason', 'archivedBy']);
+    const values = sheet.getDataRange().getValues();
+    const swapIdx = headers.indexOf('swapId');
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][swapIdx]) !== id) continue;
+      sheet.getRange(r + 1, headers.indexOf('chatStatus') + 1).setValue('Archived');
+      sheet.getRange(r + 1, headers.indexOf('archivedAt') + 1).setValue(new Date());
+      sheet.getRange(r + 1, headers.indexOf('archivedReason') + 1).setValue(String(reason || '').slice(0, 200));
+      sheet.getRange(r + 1, headers.indexOf('archivedBy') + 1).setValue('System');
+      try { chatThreadCacheClear_(values[r][headers.indexOf('chatId')]); } catch (e) { /* cache is advisory */ }
+    }
+  } catch (err) {
+    Logger.log('roomArchive_ failed: ' + err);
+  }
+}
+
+/** Step 15: rate the other reader and SwapSutra. When both have, the room closes. */
+function roomRate_(swap, caller, role, data, room) {
+  const id = String(swap.obj.id);
+  if (!room.exchangeDone) return { success: false, error: 'STEP_LOCKED', message: 'Rating opens once the exchange is complete.' };
+  if (room.rated[role]) return { success: false, error: 'ALREADY_RATED', message: 'You have already rated this exchange.' };
+  const readerRating = Math.round(Number(data && data.readerRating));
+  const platformRating = Math.round(Number(data && data.platformRating));
+  if (!(readerRating >= 1 && readerRating <= 5)) return { success: false, message: 'Rate the other reader from 1 to 5 stars.' };
+  if (!(platformRating >= 1 && platformRating <= 5)) return { success: false, message: 'Rate SwapSutra from 1 to 5 stars.' };
+  const readerComment = String((data && data.readerComment) || '').trim().slice(0, 500);
+  const platformComment = String((data && data.platformComment) || '').trim().slice(0, 500);
+  // Free text is public-ish (a reader's rating shows on their profile): no contact details.
+  if ([readerComment, platformComment].some(c => c && scanMessageForPII(c).blocked)) {
+    return { success: false, blocked: true, message: 'Please leave phone numbers, emails and addresses out of your comments.' };
+  }
+  // An exchange that finished before the room recorded it: record it now
+  // (this also marks the chat Completed, which the reader rating needs).
+  if (!room.finishedRecorded) roomFinishExchange_(swap, room);
+
+  const rr = rateCounterparty({ swapId: id, rating: readerRating, comment: readerComment });
+  if (!rr.success && rr.error !== 'ALREADY_RATED') return rr;
+  const sheet = getPlatformFeedbackSheet_();
+  const headers = ensureSheetHeaders(sheet, PLATFORM_FEEDBACK_HEADERS);
+  const rec = { id: generateId('SS_PFB_'), swapId: id, email: caller, role: role, platformRating: platformRating, platformComment: platformComment,
+    readerRating: readerRating, createdAt: new Date() };
+  sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  roomPost_(id, '⭐ Step 15 · ' + roomName_(caller) + ' shared their reflection and rating.');
+  if (platformRating <= 2) {
+    try {
+      returnNotify_('swapsutra@gmail.com', 'room_low_rating', 'Low SwapSutra rating (' + platformRating + '★)',
+        'Exchange ' + id + ': ' + caller + ' rated SwapSutra ' + platformRating + '/5. ' + platformComment, id, 'room_low_' + rec.id, { whatsapp: false });
+    } catch (e) { /* best effort */ }
+  }
+  const otherRole = role === 'owner' ? 'requester' : 'owner';
+  let closed = false;
+  if (room.rated[otherRole]) {
+    appendStageEvent({ swapId: id, stage: 'ROOM', party: 'system', actionType: 'room_closed', actorEmail: 'swapsutra@gmail.com', note: 'Exchange complete — both readers rated.' });
+    roomArchive_(swap, '🏁 Step 16 · Both of you have rated. This exchange is complete and the room is now closed — it disappears from your chats, and SwapSutra keeps the full record. Happy reading!', 'Exchange complete — both readers rated.');
+    closed = true;
+  }
+  return { success: true, closed: closed, reviewUrl: GOOGLE_REVIEW_URL, message: platformRating >= 4 ? 'Thank you! If you have a minute, a Google review helps other readers find SwapSutra.' : 'Thank you — we read every reflection.' };
+}
+
+/**
+ * Hourly (from runReturnDeadlines): the room's clocks.
+ *   • condition video not recorded within 48 hours of acceptance → closes
+ *   • not paid within 48 hours of the condition video → closes
+ *     (a payment that was submitted and is being verified is never closed)
+ *   • reminders half-way through each
+ *   • with 7 days left on a return: the +7 reminder in the chat
+ *   • finished exchanges: completion record, refunds (after a dispute too)
+ *   • rooms still open 7 days after completion close by themselves
+ */
+function runExchangeRoomTicks_(nowMs) {
+  const started = Date.now();
+  const now = typeof nowMs === 'number' ? nowMs : Date.now();
+  const summary = { checked: 0, closed: 0, reminders: 0, notices: 0, finished: 0, archived: 0, errors: 0 };
+  const rows = readSheetObjects_(getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests)).rows.map(r => r.obj);
+  rows.forEach(o => {
+    if (Date.now() - started > 4 * 60 * 1000) return;
+    if (!roomSwapAccepted_(o.status)) return;
+    try {
+      const swap = loadSwapForCirculation(String(o.id));
+      if (!swap) return;
+      const input = roomInputFor_(swap, swap.ownerEmail, now);
+      if (!input.chatId || String(input.chatStatus) === 'Archived') return;
+      summary.checked++;
+      const room = computeExchangeRoom_(input);
+      const id = String(o.id);
+      const title = String(o.requestedBookTitle || 'the book');
+      const tm = room._timers;
+      const legsOut = room.legs.out;
+
+      if (!room._raw[4] && !input.disputeOpen) {
+        if (!tm.conditionDone) {
+          if (now > tm.conditionBy) {
+            roomCloseRequest_(swap, '', 'Closed automatically: the book condition video was not recorded within 48 hours of acceptance.', true);
+            summary.closed++;
+            return;
+          }
+          if (now > tm.conditionBy - (ROOM_WINDOW_HOURS - ROOM_REMIND_HOURS) * ROOM_HOUR_MS) {
+            legsOut.filter(l => !l.videos.QUALITY.done).forEach(l => {
+              const email = l.sender === 'owner' ? swap.ownerEmail : swap.requesterEmail;
+              returnNotify_(email, 'room_condition_reminder', 'Record the condition video for "' + title + '"',
+                'The other reader is waiting. Record the book\'s condition video in the exchange room by ' + returnDateLabel_(new Date(tm.conditionBy)) + ', or the request closes.',
+                id, 'room_cond_rem_' + id + '_' + l.leg);
+              summary.reminders++;
+            });
+          }
+        } else if (tm.unpaidRoles.length) {
+          if (now > tm.payBy) {
+            roomCloseRequest_(swap, '', 'Closed automatically: the payment was not made within 48 hours.', true);
+            summary.closed++;
+            return;
+          }
+          if (now > tm.payBy - (ROOM_WINDOW_HOURS - ROOM_REMIND_HOURS) * ROOM_HOUR_MS) {
+            tm.unpaidRoles.forEach(r => {
+              const email = r === 'owner' ? swap.ownerEmail : swap.requesterEmail;
+              returnNotify_(email, 'room_payment_reminder', 'Pay for "' + title + '" to continue',
+                'The condition video is in. Pay through the exchange room by ' + returnDateLabel_(new Date(tm.payBy)) + ', or the request closes automatically.',
+                id, 'room_pay_rem_' + id + '_' + r);
+              summary.reminders++;
+            });
+          }
+        }
+      }
+
+      // The +7 reminder, in the chat, with 7 days left.
+      const ret = input.returnState || {};
+      if (room.needsReturn && room._raw[9] && !room.route.back && !room.noticePosted && ret.started && !ret.overdue &&
+          new Date(ret.dueAt).getTime() - now <= RETURN_EXTENSION_NOTICE_DAYS * RETURN_DAY_MS) {
+        appendStageEvent({ swapId: id, stage: 'ROOM', party: 'system', actionType: 'extension_notice', actorEmail: 'swapsutra@gmail.com', note: 'Due ' + ret.dueAt });
+        const w = ret.extensionWindow || {};
+        roomPost_(id, '⏰ Step 11 · 7 days left: "' + title + '" is due back by ' + returnDateLabel_(new Date(ret.dueAt)) + '.\n\n' +
+          'Step 12 · Need longer? The reader who has the book can ask for +7 days ' + (w.closesAt ? 'until ' + returnDateLabel_(new Date(w.closesAt)) : 'in the next 3 days') +
+          ' (once); it applies if the owner agrees. Otherwise choose courier or in person to return it.');
+        returnLegsFor_(o).forEach(l => {
+          const email = l.borrower === 'owner' ? swap.ownerEmail : swap.requesterEmail;
+          returnNotify_(email, 'room_extension_notice', '7 days left to return "' + title + '"',
+            'Return it by ' + returnDateLabel_(new Date(ret.dueAt)) + '. Need longer? Ask for +7 days in the exchange room in the next 3 days — the owner has to agree.',
+            id, 'room_notice_' + id + '_' + l.leg);
+        });
+        summary.notices++;
+      }
+
+      if (room.exchangeDone && !room.finishedRecorded) {
+        roomFinishExchange_(swap, room);
+        summary.finished++;
+        return;
+      }
+      if (room.exchangeDone) {
+        roomCreateRefunds_(swap);
+        const doneAt = new Date(room.exchangeDoneAt).getTime();
+        if (isFinite(doneAt) && now - doneAt > ROOM_RATING_WINDOW_DAYS * RETURN_DAY_MS && !input.disputeOpen) {
+          appendStageEvent({ swapId: id, stage: 'ROOM', party: 'system', actionType: 'room_closed', actorEmail: 'swapsutra@gmail.com', note: 'Closed ' + ROOM_RATING_WINDOW_DAYS + ' days after completion.' });
+          roomArchive_(swap, '🏁 Step 16 · This exchange finished ' + ROOM_RATING_WINDOW_DAYS + ' days ago, so the room is now closed. SwapSutra keeps the full record. Happy reading!', 'Closed ' + ROOM_RATING_WINDOW_DAYS + ' days after completion.');
+          summary.archived++;
+        }
+      }
+    } catch (err) {
+      summary.errors++;
+      Logger.log('runExchangeRoomTicks_ failed for ' + o.id + ': ' + err);
+    }
   });
   return summary;
 }

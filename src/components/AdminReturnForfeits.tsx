@@ -65,7 +65,7 @@ export default function AdminReturnForfeits() {
       {toPay.map(f => (
         <div key={f.id} className="rounded-2xl border border-red-200 bg-[var(--bg-surface)] p-4 space-y-2">
           <p className="text-sm font-semibold text-[var(--text-primary)]">
-            {String(f.leg) === 'sale' ? 'Sale payout · ' : ''}Pay ₹{f.amount} to <span className="break-all">{f.ownerEmail}</span>
+            {String(f.leg) === 'sale' ? 'Sale payout · ' : String(f.leg).startsWith('refund:') ? 'Refund · ' : ''}Pay ₹{f.amount} to <span className="break-all">{f.ownerEmail}</span>
           </p>
           {f.payTo ? (
             <p className="text-xs text-[var(--text-primary)]">
@@ -77,7 +77,7 @@ export default function AdminReturnForfeits() {
           )}
           {f.note && <p className="text-2xs text-[var(--text-secondary)]">{f.note}</p>}
           <p className="text-xs text-[var(--text-secondary)]">
-            &ldquo;{f.bookTitle}&rdquo; · {String(f.leg) === 'sale' ? 'buyer closed the purchase' : String(f.leg).startsWith('dispute:') ? 'dispute decision' : `not returned by ${when(f.dueAt)}`} · from <span className="break-all">{f.defaulterEmail}</span> · exchange {f.swapId}
+            &ldquo;{f.bookTitle}&rdquo; · {String(f.leg) === 'sale' ? 'buyer closed the purchase' : String(f.leg).startsWith('refund:') ? 'refund to the reader who paid' : String(f.leg).startsWith('dispute:') ? 'dispute decision' : `not returned by ${when(f.dueAt)}`}{f.defaulterEmail ? <> · from <span className="break-all">{f.defaulterEmail}</span></> : null} · exchange {f.swapId}
           </p>
           <button onClick={() => markPaid(f.id)} disabled={busy === f.id} className="px-3 py-2 rounded-lg bg-green-600 text-white text-xs font-semibold disabled:opacity-50">
             {busy === f.id ? 'Saving…' : 'I have paid this'}

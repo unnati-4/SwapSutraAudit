@@ -133,7 +133,7 @@ function makeEnv() {
 const JOURNEY_HEADERS = ['id', 'swapId', 'leg', 'event', 'actorEmail', 'method', 'courierName', 'awb', 'note', 'mediaUrl', 'expectedBy', 'createdAt', 'lat', 'lng'];
 function setup(serviceType, method, extra) {
   const env = makeEnv();
-  const swap = { obj: Object.assign({ id: 'S1', serviceType, requestedBookTitle: 'Dune', securityDeposit: 260, ownerDeposit: 0, swapPreference: '' }, extra || {}),
+  const swap = { obj: Object.assign({ id: 'S1', serviceType, status: 'Accepted', requestedBookTitle: 'Dune', securityDeposit: 260, ownerDeposit: 0, swapPreference: '' }, extra || {}),
     ownerEmail: 'own@x.com', requesterEmail: 'req@x.com' };
   env.swapsById.S1 = swap;
   const j = env.ctx.getOrCreateSheet('SwapJourney', JOURNEY_HEADERS);
@@ -148,9 +148,11 @@ function addVideo(env, leg, kind, email) {
 console.log('--- which videos, for whom ---');
 {
   const { env, swap } = setup('RENT', 'courier');
-  check('1. Courier: sender records quality + packing, receiver records receiving',
-    JSON.stringify(env.api.vmsKindsFor_('courier')) === JSON.stringify({ sender: ['QUALITY', 'PACKING'], receiver: ['RECEIVING'] }));
-  check('2. In person: no packing video', JSON.stringify(env.api.vmsKindsFor_('in_person').sender) === JSON.stringify(['QUALITY']));
+  // 8 Oct 2026 (Exchange Room): condition, packaging and handover videos for
+  // the sender on every route; the receiver records the unboxing.
+  check('1. Courier: sender records condition + packaging + handover, receiver records receiving',
+    JSON.stringify(env.api.vmsKindsFor_('courier')) === JSON.stringify({ sender: ['QUALITY', 'PACKING', 'HANDOVER'], receiver: ['RECEIVING'] }));
+  check('2. In person: the same three sender videos', JSON.stringify(env.api.vmsKindsFor_('in_person').sender) === JSON.stringify(['QUALITY', 'PACKING', 'HANDOVER']));
   check('3. A rental: the book out and the book back', JSON.stringify(env.api.vmsLegsFor_(swap)) === JSON.stringify(['outbound', 'return']));
   const tswap = { obj: { id: 'S2', serviceType: 'SWAP', swapPreference: 'Temporary' }, ownerEmail: 'o', requesterEmail: 'r' };
   check('4. A temporary swap: both books, both ways', JSON.stringify(env.api.vmsLegsFor_(tswap)) === JSON.stringify(['outbound', 'counter', 'return', 'counter_return']));
@@ -184,17 +186,19 @@ console.log('--- the timeline refuses without videos ---');
   const { env } = setup('SWAP', 'in_person', { ownerDeposit: 240 });
   env.as('req@x.com');
   let r = env.api.logJourneyEvent({ swapId: 'S1', leg: 'counter', event: 'handed_over' });
-  check('14. In a swap the requester\'s own book needs its quality video before handover', r.error === 'VIDEO_REQUIRED' && r.missing.join() === 'QUALITY');
-  addVideo(env, 'counter', 'QUALITY', 'req@x.com');
-  check('15. In person, the quality video alone is enough to hand over', env.api.logJourneyEvent({ swapId: 'S1', leg: 'counter', event: 'handed_over' }).success === true);
+  check('14. In a swap the requester\'s own book needs its videos before handover', r.error === 'VIDEO_REQUIRED' && r.missing.join() === 'QUALITY,PACKING,HANDOVER');
+  addVideo(env, 'counter', 'QUALITY', 'req@x.com'); addVideo(env, 'counter', 'PACKING', 'req@x.com');
+  check('15a. In person, the handover video is needed too', env.api.logJourneyEvent({ swapId: 'S1', leg: 'counter', event: 'handed_over' }).missing.join() === 'HANDOVER');
+  addVideo(env, 'counter', 'HANDOVER', 'req@x.com');
+  check('15. With all three, the handover goes through', env.api.logJourneyEvent({ swapId: 'S1', leg: 'counter', event: 'handed_over' }).success === true);
 }
 
 console.log('--- the Stages panel asks for the same ---');
 {
   const { env, swap } = setup('SWAP', 'courier', { ownerDeposit: 240 });
-  check('16. Handover (owner): their outbound quality + packing', env.api.vmsStageMissing_(swap, 'HANDOVER', 'owner').join() === 'QUALITY,PACKING');
+  check('16. Handover (owner): their outbound condition + packaging + handover', env.api.vmsStageMissing_(swap, 'HANDOVER', 'owner').join() === 'QUALITY,PACKING,HANDOVER');
   check('17. Receipt (owner, in a swap): unboxing of the requester\'s book', env.api.vmsStageMissing_(swap, 'RECEIPT', 'owner').join() === 'RECEIVING');
-  addVideo(env, 'outbound', 'QUALITY', 'own@x.com'); addVideo(env, 'outbound', 'PACKING', 'own@x.com');
+  addVideo(env, 'outbound', 'QUALITY', 'own@x.com'); addVideo(env, 'outbound', 'PACKING', 'own@x.com'); addVideo(env, 'outbound', 'HANDOVER', 'own@x.com');
   check('18. Once recorded, nothing is missing', env.api.vmsStageMissing_(swap, 'HANDOVER', 'owner').length === 0);
   check('19. confirmStage enforces it', /const vmsGap = vmsStageMissing_\(swap, stage, role\);/.test(gs));
 }
@@ -225,7 +229,7 @@ console.log('--- chunked upload ---');
   env.as('own@x.com');
   const fin = env.api.vmsFinishUpload({ uploadId: st.uploadId, durationSec: 42, recordedInApp: true });
   check('32. Finishing registers the video', fin.success && fin.video.kind === 'QUALITY');
-  check('33. ...and posts a note in the exchange chat', env.chats.some(c => /book quality video/.test(c.message)));
+  check('33. ...and posts a note in the exchange chat', env.chats.some(c => /book condition video/.test(c.message) && /Step 3/.test(c.message)));
   const view = env.api.getExchangeVideos({ swapId: 'S1' });
   check('34. The checklist shows it done, by you', view.legs[0].items.find(i => i.kind === 'QUALITY').done && view.legs[0].items.find(i => i.kind === 'QUALITY').byYou);
   check('35. Every exchange gets its own stamp code', /^SS-[0-9A-F]{6}$/.test(view.stampCode) && view.stampCode !== env.api.vmsStampCode_('S2'));

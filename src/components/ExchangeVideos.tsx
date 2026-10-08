@@ -4,8 +4,9 @@ import { apiUrl } from '../config/runtime';
 /**
  * VMS — video evidence for every book that travels (Oct 2026).
  *
- *   sender   QUALITY   the book's condition, before it goes
- *            PACKING   packing the parcel (courier only)
+ *   sender   QUALITY   the book's condition, before anyone pays
+ *            PACKING   packing the book
+ *            HANDOVER  handing it over (in person, or to the courier)
  *   receiver RECEIVING opening the parcel / checking the book
  *
  * The recorder runs in the app: it draws the camera onto a canvas with the
@@ -21,7 +22,7 @@ const API_URL = apiUrl('/api/swapsutra');
 const MAX_SECONDS = 90;
 const MAX_BYTES = 80 * 1024 * 1024;
 
-export type VmsKind = 'QUALITY' | 'PACKING' | 'RECEIVING';
+export type VmsKind = 'QUALITY' | 'PACKING' | 'HANDOVER' | 'RECEIVING';
 export type VmsLeg = 'outbound' | 'counter' | 'return' | 'counter_return';
 
 export interface VmsItem {
@@ -35,9 +36,14 @@ export interface VmsItem {
 export interface VmsLegState { leg: VmsLeg; youSend: boolean; youReceive: boolean; items: VmsItem[] }
 export interface VmsState { routeMethod: string; legs: VmsLegState[]; stampCode: string; rule: string }
 
+export const VMS_TITLES: Record<VmsKind, string> = {
+  QUALITY: 'Book condition', PACKING: 'Packaging', HANDOVER: 'Handover', RECEIVING: 'Receiving / unboxing',
+};
+
 const HOW_TO: Record<VmsKind, string> = {
   QUALITY: 'Show the front and back cover, the spine, the corners, then flip through the pages slowly. Point out any marks.',
-  PACKING: 'Show the book, then pack it in one continuous shot until the parcel is sealed. Show the sealed parcel and the address label.',
+  PACKING: 'Show the book, then pack it in one continuous shot until the parcel is sealed. Show the sealed parcel (and the address label, if posting).',
+  HANDOVER: 'Record the moment the book changes hands — giving it to the other reader at the meeting point, or handing the parcel to the courier with the receipt.',
   RECEIVING: 'Start recording BEFORE you open the parcel. Show it sealed, open it on camera, then show the book from every side.',
 };
 
@@ -213,7 +219,7 @@ export function VideoRecorder({
       <div className="w-full max-w-lg rounded-3xl bg-[var(--bg-surface)] p-4 space-y-3 max-h-[95vh] overflow-y-auto">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">{kind === 'QUALITY' ? 'Book quality' : kind === 'PACKING' ? 'Packing' : 'Receiving / unboxing'} video</p>
+            <p className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">{VMS_TITLES[kind]} video</p>
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed mt-1">{HOW_TO[kind]}</p>
           </div>
           <button type="button" onClick={() => { recRef.current?.state === 'recording' && recRef.current.stop(); stopAll(); onCancel(); }}

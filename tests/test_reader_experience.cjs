@@ -263,7 +263,8 @@ check('75. ...and it keeps the full eligibility chain',
 // Oct 2026: 20 free, then ₹20 once or a coupon — asked of the server.
 check('76. ...including the real listing allowance',
   /const allowance = await fetchListingAllowance\(\);/.test(listingFn)
-  && /if \(allowance && !allowance\.canList\) \{ setShowListingUnlock\(true\); return; \}/.test(listingFn));
+  // 8 Oct 2026: the unlock popup shows once; after that the profile button is the way in.
+  && /if \(allowance && !allowance\.canList\) \{ offerListingUnlock\(\); return; \}/.test(listingFn));
 check('77. The profile "Add Book" affordance still routes there',
   /onClick=\{openListingForm\}/.test(app));
 // One place decides whether a reader may list (openListingForm). The only

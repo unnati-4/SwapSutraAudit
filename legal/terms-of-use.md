@@ -90,7 +90,7 @@ Creating a SwapSutra account is **free**, and membership does not expire. You ne
 
 **Platform fee.** When an exchange — a swap, loan, rental or sale — is accepted, **each reader pays SwapSutra a platform fee, currently ₹10**, by UPI, before the exchange chat opens. It is separate from any security deposit (clause 8) and from any money readers pay each other.
 
-**Listing limit.** Each reader may list up to **20 books** free. A one-time payment, currently **₹20**, or a valid SwapSutra coupon, removes the limit for that account.
+**Listing limit.** Each reader may list up to **20 books** free. To list more, a payment of **₹20** covers **3 months** of further listings (books already listed stay listed when it ends); a valid SwapSutra coupon removes the limit for that account.
 
 - Fees are **payable to SwapSutra** and are separate from any money you exchange with another reader.
 - Refunds are governed by our [Refund & Security Deposit Policy](/refund-policy).
@@ -111,7 +111,7 @@ You may list a book only if **all** of the following are true:
 
 **Swaps are like for like.** Two books can be swapped only when they are in the same condition, of the same type (paperback, hardcover or budget copy), and their printed MRPs are within 10% of each other.
 
-**Returns are strict.** A rented, lent or temporarily swapped book must be on its way back within 21 days of reaching the borrower (+7 or +14 days if both readers agree, 14 at most), or the borrower's 65% MRP security deposit is forfeited and paid to the owner. See the [Refund & Security Deposit Policy](/refund-policy).
+**Returns are strict.** A rented, lent or temporarily swapped book must be on its way back within 21 days of reaching the borrower (one extension of +7 days, asked for by the borrower in the 3 days after the 7-days-left reminder and agreed by the owner), or the borrower's 65% MRP security deposit is forfeited and paid to the owner. See the [Refund & Security Deposit Policy](/refund-policy).
 
 **Video evidence.** For every exchange, the sender records the book's condition (and its packing, if sent by courier) and the receiver records opening it, in the app. SwapSutra decides deposit disputes from these videos. See the [Refund & Security Deposit Policy](/refund-policy).
 

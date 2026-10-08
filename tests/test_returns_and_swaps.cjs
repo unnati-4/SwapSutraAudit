@@ -6,7 +6,7 @@
  *   • owner-set selling price and monthly rent
  *   • a swap only between books of the same condition, type and MRP (±10%)
  *   • the route comes first; addresses only on courier; location pins
- *   • 21-day returns, +7/+14 extensions (14 max, both agree), strict forfeit
+ *   • 21-day returns, one +7 extension (borrower asks in a 3-day window, owner agrees), strict forfeit
  */
 const fs = require('fs');
 const path = require('path');
@@ -181,10 +181,14 @@ console.log('--- 21-day returns ---');
   check('37. Borrower confirming the return in the Stages panel counts',
     R(rent, [], [], [], T0 + 25 * DAY, { receiptAt: T0, returnByRole: { requester: T0 + 10 * DAY } }).legs[0].state === 'RETURNED_ON_TIME');
   const ext = R(rent, [ev('outbound', 'received', T0)], [{ status: 'APPROVED', days: 7 }], [], T0);
-  check('38. An agreed +7 moves the deadline to day 28', ext.dueAt === iso(T0 + 28 * DAY) && ext.extensionDaysLeft === 7);
-  check('39. ...after which only +7 is still on offer', JSON.stringify(ext.extensionChoices) === '[7]');
+  // 8 Oct 2026 (Exchange Room): one extension, +7 only.
+  check('38. An agreed +7 moves the deadline to day 28', ext.dueAt === iso(T0 + 28 * DAY) && ext.extensionDaysLeft === 0);
+  check('39. ...after which nothing more is on offer', JSON.stringify(ext.extensionChoices) === '[]');
+  const win = R(rent, [ev('outbound', 'received', T0)], [], [], T0 + 15 * DAY);
+  check('39a. The +7 window opens with 7 days left and lasts 3 days', win.extensionWindow.opensAt === iso(T0 + 14 * DAY) && win.extensionWindow.closesAt === iso(T0 + 17 * DAY) && win.extensionWindow.open === true);
+  check('39b. ...and is shut before and after', R(rent, [ev('outbound', 'received', T0)], [], [], T0 + 13 * DAY).extensionWindow.open === false && R(rent, [ev('outbound', 'received', T0)], [], [], T0 + 18 * DAY).extensionWindow.open === false);
   check('40. A pending (not agreed) extension changes nothing', R(rent, [ev('outbound', 'received', T0)], [{ status: 'PENDING', days: 14 }], [], T0).dueAt === iso(T0 + 21 * DAY));
-  check('41. Never more than 14 days in total', R(rent, [ev('outbound', 'received', T0)], [{ status: 'APPROVED', days: 14 }, { status: 'APPROVED', days: 7 }], [], T0).dueAt === iso(T0 + 35 * DAY));
+  check('41. Never more than 7 days in total', R(rent, [ev('outbound', 'received', T0)], [{ status: 'APPROVED', days: 14 }, { status: 'APPROVED', days: 7 }], [], T0).dueAt === iso(T0 + 28 * DAY));
   const ts = R(tswap, [ev('outbound', 'received', T0), ev('counter', 'received', T0 + DAY)], [], [], T0 + 2 * DAY);
   check('42. A temporary swap has two returns — one per book', ts.legs.length === 2 && ts.legs[1].leg === 'counter_return' && ts.legs[1].borrower === 'owner');
   check('43. ...on one clock, from the first book to arrive', ts.dueAt === iso(T0 + 21 * DAY));
@@ -196,19 +200,21 @@ console.log('--- extensions need both readers ---');
   const swap = { obj: { id: 'S9', serviceType: 'RENT', requestedBookTitle: 'Dune', securityDeposit: 260 }, ownerEmail: 'own@x.com', requesterEmail: 'req@x.com' };
   env.swapsById.S9 = swap;
   env.ctx.getOrCreateSheet('SwapJourney', ['id', 'swapId', 'leg', 'event', 'actorEmail', 'method', 'courierName', 'awb', 'note', 'mediaUrl', 'expectedBy', 'createdAt', 'lat', 'lng'])
-    .appendRow(['j1', 'S9', 'outbound', 'received', 'req@x.com', '', '', '', '', '', '', new Date(Date.now() - 3 * DAY), '', '']);
+    .appendRow(['j1', 'S9', 'outbound', 'received', 'req@x.com', '', '', '', '', '', '', new Date(Date.now() - 15 * DAY), '', '']);   // 6 days left: inside the +7 window
+  env.as('own@x.com');
+  check('44a. The owner cannot ask for more time on a rental', env.api.requestReturnExtension({ swapId: 'S9', days: 7 }).error === 'WRONG_PARTY');
   env.as('req@x.com');
-  check('44. +10 days is refused (only +7 or +14)', env.api.requestReturnExtension({ swapId: 'S9', days: 10 }).success === false);
+  check('44. +10 days is refused (only +7)', env.api.requestReturnExtension({ swapId: 'S9', days: 10 }).success === false);
   check('45. The borrower asks for +7', env.api.requestReturnExtension({ swapId: 'S9', days: 7 }).success === true);
-  check('46. Only one request at a time', env.api.requestReturnExtension({ swapId: 'S9', days: 7 }).success === false);
+  check('46. Only one request per exchange', env.api.requestReturnExtension({ swapId: 'S9', days: 7 }).success === false);
   const extId = env.sheets.ReturnExtensions._data[1][0];
   check('47. The one who asked cannot approve it', env.api.respondReturnExtension({ swapId: 'S9', extensionId: extId, accept: true }).error === 'WRONG_PARTY');
   env.as('own@x.com');
   check('48. The other reader agrees', env.api.respondReturnExtension({ swapId: 'S9', extensionId: extId, accept: true }).success === true);
   env.as('req@x.com');
   const st = env.api.getReturnStatus({ swapId: 'S9' });
-  check('49. The deadline moved by 7 days', st.extensionDays === 7 && st.daysLeft === 25, JSON.stringify({ d: st.daysLeft, e: st.extensionDays }));
-  check('50. +14 now refused (would pass 14 in total)', env.api.requestReturnExtension({ swapId: 'S9', days: 14 }).error === 'EXTENSION_LIMIT');
+  check('49. The deadline moved by 7 days', st.extensionDays === 7 && st.daysLeft === 13, JSON.stringify({ d: st.daysLeft, e: st.extensionDays }));
+  check('50. A second +7 is refused (once per exchange)', env.api.requestReturnExtension({ swapId: 'S9', days: 7 }).success === false);
   check('51. Both readers were told, in the app and by email',
     env.notifications.filter(n => n[1] === 'return_extension_approved').length === 2 && env.emails.some(m => /Return date extended/.test(m.subject)));
 }

@@ -3,10 +3,11 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { apiUrl } from '../config/runtime';
 
 /**
- * Shown when a reader reaches their free listing limit (20 books).
- * Two ways past it, both permanent:
- *   • pay ₹20 once by UPI QR — SwapSutra verifies the UTR, then it's unlimited
- *   • enter a coupon code (BOOKSTORE2627) — unlimited immediately
+ * Shown ONCE as a popup when a reader reaches their free listing limit
+ * (20 books); after that it opens only from the profile's "list more
+ * books" button (Oct 2026, owner's rule). Two ways past the limit:
+ *   • pay ₹20 by UPI QR — SwapSutra verifies the UTR; it covers 3 months
+ *   • enter a coupon code (BOOKSTORE2627) — no expiry
  *
  * The server decides everything: the limit, the fee, whether a code is
  * valid. This component only shows what getListingAllowance returns.
@@ -24,6 +25,31 @@ export interface ListingAllowance {
   unlockFee: number;
   pendingUnlock: { id: string; submittedAt: string; utr: string } | null;
   lastRejection: { reason: string; at: string } | null;
+  /** A paid unlock covers 3 months (Oct 2026): until when, and whether one ran out. */
+  unlockedUntil?: string;
+  unlockExpired?: boolean;
+  unlockDays?: number;
+}
+
+/** "12 Jan 2027" — for the end of a 3-month unlock. */
+export function unlockUntilLabel(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** The reader has used their free listings (or their 3 months ran out). */
+export function needsListingUnlock(a: ListingAllowance | null): boolean {
+  return !!a && !a.unlimited && (a.unlockExpired === true || (a.limit !== null && a.used >= a.limit));
+}
+
+const POPUP_KEY = 'ss_listing_unlock_popup_shown_v1_';
+/** The popup is shown once per reader; afterwards the profile button is the way in. */
+export function listingPopupAlreadyShown(email: string): boolean {
+  try { return localStorage.getItem(POPUP_KEY + email) === '1'; } catch { return false; }
+}
+export function markListingPopupShown(email: string): void {
+  try { localStorage.setItem(POPUP_KEY + email, '1'); } catch { /* private mode: it may show again */ }
 }
 
 export async function fetchListingAllowance(): Promise<ListingAllowance | null> {
@@ -159,14 +185,14 @@ export default function ListingUnlockPanel({ open, onClose, onChange }: Props) {
         <button onClick={onClose} aria-label="Close" className="absolute top-5 right-5 text-[var(--text-secondary)] hover:text-brand-gold-text text-xl leading-none">×</button>
 
         <h3 id="unlock-title" className="font-serif text-3xl text-[var(--text-primary)] tracking-tight mb-2">
-          {allowance?.unlimited ? 'Your shelf has no limit' : 'Room for more books'}
+          {allowance?.unlimited ? 'You can list more books' : 'Want to list more books?'}
         </h3>
 
         {!allowance && !error && <p className="text-sm text-[var(--text-secondary)]">Checking your shelf…</p>}
 
         {allowance && allowance.unlimited && (
           <div className="space-y-6">
-            <p className="text-sm text-[var(--text-secondary)] leading-relaxed">{done || 'You can list as many books as you like.'}</p>
+            <p className="text-sm text-[var(--text-secondary)] leading-relaxed">{done || (allowance.unlockedUntil ? `You can list as many books as you like until ${unlockUntilLabel(allowance.unlockedUntil)}.` : 'You can list as many books as you like.')}</p>
             <button onClick={onClose} className="btn-primary w-full !py-4">Add a book</button>
           </div>
         )}
@@ -174,7 +200,7 @@ export default function ListingUnlockPanel({ open, onClose, onChange }: Props) {
         {allowance && !allowance.unlimited && pending && (
           <div className="space-y-6">
             <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-              {done || `Your ₹${fee} payment (UTR ${pending.utr}) is being verified. Once it's approved you can list as many books as you like — we'll notify you.`}
+              {done || `Your ₹${fee} payment (UTR ${pending.utr}) is being verified. Once it's approved you can list as many books as you like for 3 months — we'll notify you.`}
             </p>
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
               Have a coupon code? You can use it now instead of waiting.
@@ -187,7 +213,9 @@ export default function ListingUnlockPanel({ open, onClose, onChange }: Props) {
         {allowance && !allowance.unlimited && !pending && (
           <>
             <p className="text-sm text-[var(--text-secondary)] leading-relaxed mb-6">
-              You've listed {allowance.used} of {allowance.limit} free books. Pay ₹{fee} once to list as many as you like — it never expires.
+              {allowance.unlockExpired
+                ? <>Your 3 months of extra listings have ended. If you'd like to list more books, it's ₹{fee} for another 3 months. Your books already listed stay in the Library.</>
+                : <>You've listed {allowance.used} of {allowance.limit} free books. If you'd like to list more books, it's ₹{fee} for 3 months. Your books already listed stay in the Library.</>}
             </p>
 
             {allowance.lastRejection && (
@@ -219,7 +247,7 @@ export default function ListingUnlockPanel({ open, onClose, onChange }: Props) {
                     <a href={upiString} title="Open in your UPI app" className="block bg-white rounded-xl p-2">
                       <QRCodeCanvas value={upiString} size={176} level="H" />
                     </a>
-                    <p className="font-serif text-3xl text-[var(--text-primary)] tabular-nums">₹{fee}</p>
+                    <p className="font-serif text-3xl text-[var(--text-primary)] tabular-nums">₹{fee} <span className="text-sm font-sans text-[var(--text-secondary)]">for 3 months</span></p>
                     <p className="text-xs text-[var(--text-secondary)] text-center leading-relaxed">
                       Scan with any UPI app, or tap the code on your phone. Don't change the amount.
                     </p>

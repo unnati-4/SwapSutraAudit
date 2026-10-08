@@ -149,7 +149,7 @@ export const TermsOfUsePage = ({ navigateTo }: { navigateTo: Nav }) => (
       <p>Joining SwapSutra is <strong>free</strong>, and membership does not expire.</p>
       <UL items={[
         <><strong>Platform fee.</strong> When an exchange (swap, lend, rent or sale) is accepted, <strong>each reader pays SwapSutra ₹10</strong> by UPI before the exchange chat opens. It is separate from any security deposit and from any money readers pay each other.</>,
-        <><strong>Listing limit.</strong> Each reader may list up to <strong>20 books</strong> free. A one-time payment of <strong>₹20</strong>, or a valid SwapSutra coupon, removes the limit for that account.</>,
+        <><strong>Listing limit.</strong> Each reader may list up to <strong>20 books</strong> free. To list more, <strong>₹20</strong> covers <strong>3 months</strong> of further listings (books already listed stay); a valid SwapSutra coupon removes the limit for that account.</>,
       ]} />
       <p>We give 30 days' notice before any change to these amounts. A change never affects a fee you have already paid.</p>
     </S>
@@ -263,7 +263,7 @@ export const RefundPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
 
     <S title="Security deposits">
       <p><strong>Video evidence.</strong> For every book that travels — in a swap, a rental, a loan or a sale, on the way out and on the way back — the sender records a video of the book&rsquo;s condition and, if it goes by courier, of packing it; the receiver records opening the parcel or checking the book. These are recorded in the app and kept with the exchange. A book cannot be marked as posted, handed over or received without them. If a dispute is raised, SwapSutra reviews these videos and decides the security deposit: it is refunded, or forfeited in full or in part to the reader who is owed it.</p>
-      <p>For a swap, a rental or a loan, the reader receiving a book pays a refundable deposit of 65% of its printed MRP. A purchase has no deposit. A borrowed book must be on its way back within <strong>21 days</strong> of reaching the borrower (handed over, or posted with the courier name and tracking ID). Both readers may agree to extend by +7 or +14 days, 14 at most. If it isn't on its way back by the deadline, the deposit is forfeited and paid to the book's owner.</p>
+      <p>For a swap, a rental or a loan, the reader receiving a book pays a refundable deposit of 65% of its printed MRP. A purchase has no deposit. A borrowed book must be on its way back within <strong>21 days</strong> of reaching the borrower (handed over, or posted with the courier name and tracking ID). With 7 days left the borrower can ask, once, for +7 days; it applies if the owner agrees. If it isn't on its way back by the deadline, the deposit is forfeited and paid to the book's owner.</p>
       <UL items={[
         <><strong>Returned in full within 48 hours</strong> after both readers confirm the book is back in good condition, or if the exchange is cancelled before handover.</>,
         <><strong>Partly or fully kept</strong> only if the book is not returned, is damaged beyond normal reading wear, or is returned very late. The reason must be given in the exchange chat.</>,
@@ -351,7 +351,7 @@ const AboutPage = ({ navigateTo }: { navigateTo: Nav }) => (
     </S>
 
     <S title="What it costs">
-      <p>Joining is free and stays free. When an exchange is accepted, each reader pays a <strong>₹10 platform fee</strong> — that is what keeps the site running. You can list up to 20 books free; listing more costs <strong>₹20, once</strong>.</p>
+      <p>Joining is free and stays free. When an exchange is accepted, each reader pays a <strong>₹10 platform fee</strong> — that is what keeps the site running. You can list up to 20 books free; listing more costs <strong>₹20 for 3 months</strong>. Every exchange runs in one exchange room: the condition video comes within 48 hours of acceptance and the payment within 48 hours after that, or the request closes and anything paid is refunded.</p>
       <p>Money for a rented or sold book passes directly between the two readers. The one exception is a refundable security deposit on a temporary exchange — see our <Link to="refund-policy" navigateTo={navigateTo}>Refunds &amp; Deposits</Link> page for exactly how that is handled.</p>
     </S>
 

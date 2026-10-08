@@ -11,7 +11,7 @@ export default function ReturnRuleNotice({ compact = false }: { compact?: boolea
       <p className="text-xs text-red-900 leading-relaxed">
         The book must be on its way back within <strong>21 days</strong> of reaching you — handed over in person,
         or posted with the <strong>courier name and tracking ID</strong> added by day 21.
-        {!compact && <> Both of you can agree to extend once or twice by <strong>+7 or +14 days</strong> (14 days at most).</>}
+        {!compact && <> With 7 days left you can ask, once, for <strong>+7 days</strong> — it applies if the owner agrees.</>}
         {' '}If it isn&rsquo;t on its way back by the deadline, your <strong>security deposit is forfeited and paid to the book&rsquo;s owner</strong>.
       </p>
       {!compact && (

@@ -22,7 +22,7 @@ This policy covers two completely separate kinds of money. Please do not confuse
 | | **Part A — SwapSutra's fees** | **Part B — Security deposits** |
 |---|---|---|
 | Paid to | SwapSutra | SwapSutra, held against the book |
-| Amount | ₹10 per reader per exchange; ₹20 once for more than 20 listings | 65% of the book's MRP (swap, rent, lend); none on a sale |
+| Amount | ₹10 per reader per exchange; ₹20 for 3 months of listings beyond the free 20 | 65% of the book's MRP (swap, rent, lend); none on a sale |
 | Purpose | Running the platform | Protection against a book not coming back |
 | Refunded by | SwapSutra | SwapSutra, once the return is confirmed |
 
@@ -90,10 +90,19 @@ A deposit is **security, not a fee**.
 
 The deposit is **65% of the book's printed MRP**, for a swap, a rental or a loan, whatever the book's condition. In a swap, both readers pay one, each on the book they receive. A purchase has no deposit. SwapSutra works the amount out; readers cannot change it.
 
+## B1a. The exchange room — and the 48-hour rule (Oct 2026)
+
+Every exchange (sale, rental, loan or swap) runs in one **exchange room**: both readers chat there, and every step is recorded there — the book's condition video, payment, packaging video, meeting point or courier and tracking ID, handover video, both readers marking it delivered and received (with an unboxing video), and, where the book comes back, the same again on the return. The room then asks both readers to rate each other and SwapSutra, and closes; SwapSutra keeps the full record.
+
+- The reader sending a book records its **condition video within 48 hours** of the request being accepted, so the paying reader sees the book first.
+- The payment is due **within 48 hours** of that video. If it is not made (or the condition video is not recorded) in time, the request **closes automatically**. Either reader may also close it before the payment is verified.
+- If a request closes before the exchange happens, anything already paid — deposit **and** platform fee — is refunded in full.
+- When the exchange is complete, each verified security deposit is refunded to the reader who paid it (to the UPI ID saved in their settings), unless it was forfeited under the return rule or decided otherwise in a dispute.
+
 ## B2a. The 21-day return rule (strict)
 
 - A borrowed book — rented, lent, or received in a temporary swap — must be **on its way back within 21 days** of reaching the borrower: handed over in person, or posted with the **courier name and tracking ID** entered in the app by the end of day 21.
-- Both readers may agree, in the app, to extend by **+7 or +14 days**. Extensions can be combined but never exceed **14 days in total**, and must be agreed before the deadline.
+- **One extension of +7 days.** With 7 days left, a reminder is posted in the exchange room. In the **3 days after it**, the reader who has the book may ask for +7 days, once; it applies only if the book's owner agrees in the app. Otherwise the return goes ahead (courier or in person).
 - Once the book has been posted in time, a slow courier is not held against the borrower.
 - If the book is **not on its way back by the deadline**, the borrower's **deposit is forfeited and paid to the book's owner**. The borrower must still return the book.
 - SwapSutra sends reminders in the app and by email (and WhatsApp where available) with 7, 3 and 1 days left and on the last day.

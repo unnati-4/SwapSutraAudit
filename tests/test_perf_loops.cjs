@@ -21,9 +21,11 @@ check('5. Background polling is every 30s, not 15s', /\}, 30000\); \/\/ Poll eve
 check('6. Idle animation re-renders every 20s, not 9s', /\}, 20000\); \/\/ was 9s/.test(app));
 
 check('7. Book-request chats do not show swap-only tools ("That exchange could not be found")',
-  /const hasRealSwap = !!currentChat\.swapId && !isBookRequestChat;/.test(app) && /\{chatTab === 'stages' && hasRealSwap && \(/.test(app) && !/currentChat\.swapId && \(/.test(app));
+  // 8 Oct 2026: the steps panel (Exchange Room) is the only swap tool, and it is shown for real swaps only.
+  /const hasRealSwap = !!currentChat\.swapId && !isBookRequestChat;/.test(app) && /\{hasRealSwap && roomOpen && \(/.test(app) && !/currentChat\.swapId && \(/.test(app));
 check('8. One failing section can no longer blank the whole app', /class SectionBoundary extends React\.Component/.test(app) && /<SectionBoundary>/.test(app));
-check('9. Chat tabs fit a phone (one row, "Stages" short label)', /<span className="sm:hidden">Stages<\/span>/.test(app));
+// 8 Oct 2026: no tabs any more — one room; the header has a single "Steps" toggle.
+check('9. The chat header fits a phone (no tab row, one steps toggle)', /data-testid="room-toggle"/.test(app) && !/setChatTab\(/.test(app));
 
 const fdStart = app.indexOf('PERF (22 Sep): only what the Library needs');
 const fd = app.slice(fdStart, app.indexOf('const results = await Promise.all(fetchActions)', fdStart));
