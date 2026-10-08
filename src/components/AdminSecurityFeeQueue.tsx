@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import {apiUrl} from '../config/runtime';
 
 /**
- * Admin backlog queue for the master state machine's security-fee gate.
+ * Exchange payments to verify (Admin → Payments).
  *
- * Every already-accepted swap without every required payer
- * ADMIN_APPROVED shows up here — including every pre-existing chat that
- * the retroactive "no grandfathering" migration just locked. This is
- * deliberately a review QUEUE, not a bulk "approve everything" button:
- * each payment is still approved individually, inside SwapStateMachine,
- * by calling adminApproveSecurityFeePayment. This view exists purely so
- * the admin is never stuck looking up swap IDs one at a time.
+ * Every accepted exchange whose payments are not all verified. "Review"
+ * opens the payment right here — amount and what it is made of, the UTR,
+ * the screenshot — with Approve / Reject (9 Oct 2026: the button used to
+ * call a callback nobody passed, so it did nothing). Each payment is still
+ * approved one at a time; there is no bulk approve.
  */
 
 const API_URL = apiUrl('/api/swapsutra');
@@ -22,6 +20,13 @@ interface BacklogPayer {
   estimated?: boolean;
   paymentStatus: string;
   adminStatus: string;
+  depositAmount?: number;
+  platformFee?: number;
+  saleAmount?: number;
+  utr?: string;
+  screenshotUrl?: string;
+  submittedAt?: string;
+  rejectedReason?: string;
 }
 
 interface BacklogRow {
@@ -50,7 +55,11 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
   const [error, setError] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('updatedAt');
   const [filterService, setFilterService] = useState('ALL');
-  const [filterAdminPending, setFilterAdminPending] = useState(false);
+  const [filterAdminPending, setFilterAdminPending] = useState(true);
+  const [open, setOpen] = useState<string | null>(null);
+  const [busy, setBusy] = useState('');
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,6 +85,33 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
 
   useEffect(() => { load(); }, [load]);
 
+  const decide = async (swapId: string, payerRole: string, decision: 'APPROVE' | 'REJECT') => {
+    const key = swapId + ':' + payerRole;
+    const reason = (reasons[key] || '').trim();
+    if (decision === 'REJECT' && !reason) { setNotice('Write why the payment is not accepted — the reader sees it.'); return; }
+    setBusy(key); setNotice('');
+    try {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'adminApproveSecurityFeePayment', swapId, payerRole, decision, reason }),
+      });
+      const data = await res.json();
+      setNotice(data.success ? (decision === 'APPROVE' ? 'Approved — the reader is told and the exchange moves on.' : 'Rejected — the reader is asked to pay again.') : (data.message || 'That did not go through.'));
+      if (data.success) await load();
+    } catch {
+      setNotice('Network error. Please try again.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const breakdown = (p: BacklogPayer) => {
+    if ((p.saleAmount ?? 0) > 0) return `₹${p.saleAmount} book price + ₹${p.platformFee ?? 0} fee`;
+    if ((p.depositAmount ?? 0) > 0) return `₹${p.depositAmount} deposit + ₹${p.platformFee ?? 0} fee`;
+    return `₹${p.platformFee ?? p.requiredAmount} platform fee`;
+  };
+
   const visible = rows
     .filter(r => filterService === 'ALL' || r.serviceType === filterService)
     .filter(r => !filterAdminPending || r.payers.some(p => p.adminStatus === 'ADMIN_PENDING'))
@@ -90,10 +126,10 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
-        <p className="text-xs font-bold text-amber-800 uppercase tracking-widest">Security-fee approval backlog</p>
+        <p className="text-xs font-bold text-amber-800 uppercase tracking-widest">Exchange payments to verify</p>
         <p className="text-2xs text-amber-700 mt-1">
-          {rows.length} exchange{rows.length === 1 ? '' : 's'} have a chat locked pending security-fee approval —
-          including exchanges accepted before this feature existed (retroactive lock, no grandfathering).
+          {rows.filter(r => r.payers.some(p => p.adminStatus === 'ADMIN_PENDING')).length} waiting for you to check ·
+          {' '}{rows.length} exchange{rows.length === 1 ? '' : 's'} not fully paid yet. Check the UTR in your UPI app, then approve.
         </p>
       </div>
 
@@ -112,13 +148,14 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
         </select>
         <label className="flex items-center gap-2 text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">
           <input type="checkbox" checked={filterAdminPending} onChange={(e) => setFilterAdminPending(e.target.checked)} />
-          Awaiting my review only
+          Paid — waiting for my check
         </label>
         <button onClick={load} className="ml-auto px-3 py-2 rounded-lg border border-brand-border text-2xs font-bold uppercase tracking-widest">Refresh</button>
       </div>
 
       {loading && <p className="text-2xs text-[var(--text-secondary)] italic">Loading…</p>}
       {error && <p className="text-2xs text-red-500">{error}</p>}
+      {notice && <p className="text-xs text-[var(--text-primary)]" role="status">{notice}</p>}
 
       <div className="overflow-x-auto rounded-2xl border border-brand-border">
         <table className="w-full text-2xs">
@@ -134,7 +171,7 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
             </tr>
           </thead>
           <tbody>
-            {visible.map(r => (
+            {visible.map(r => (<Fragment key={r.swapId}>
               <tr key={r.swapId} className="border-t border-brand-border/40">
                 <td className="p-3 font-mono">{r.swapId}</td>
                 <td className="p-3">{r.serviceType}</td>
@@ -150,14 +187,61 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
                 <td className="p-3">{fmtDate(r.updatedAt || r.createdAt)}</td>
                 <td className="p-3">
                   <button
-                    onClick={() => onOpenSwap && onOpenSwap(r.swapId)}
+                    type="button"
+                    onClick={() => { setOpen(open === r.swapId ? null : r.swapId); onOpenSwap?.(r.swapId); }}
+                    aria-expanded={open === r.swapId}
                     className="px-3 py-1.5 rounded-lg bg-brand-brown text-white text-2xs font-bold uppercase tracking-widest"
+                    data-testid="fee-review"
                   >
-                    Review
+                    {open === r.swapId ? 'Close' : 'Review'}
                   </button>
                 </td>
               </tr>
-            ))}
+              {open === r.swapId && (
+                <tr key={r.swapId + '-review'} className="bg-[var(--bg-page)]">
+                  <td colSpan={7} className="p-4">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {r.payers.map(p => {
+                        const key = r.swapId + ':' + p.payerRole;
+                        return (
+                          <div key={key} className="rounded-xl border border-brand-border bg-[var(--bg-surface)] p-4 space-y-2 text-xs">
+                            <p className="font-bold text-[var(--text-primary)]">{p.payerRole === 'owner' ? 'Owner' : 'Requester'} · {p.payerEmail}</p>
+                            <p>₹{p.requiredAmount} <span className="text-[var(--text-secondary)]">({breakdown(p)})</span></p>
+                            <p className={p.adminStatus === 'ADMIN_APPROVED' ? 'text-green-700 font-semibold' : p.adminStatus === 'ADMIN_PENDING' ? 'text-amber-700 font-semibold' : 'text-[var(--text-secondary)]'}>
+                              {p.adminStatus === 'ADMIN_APPROVED' ? 'Verified ✓' : p.adminStatus === 'ADMIN_PENDING' ? 'Paid — check it' : p.adminStatus === 'ADMIN_REJECTED' ? `Rejected${p.rejectedReason ? ': ' + p.rejectedReason : ''}` : 'Not paid yet'}
+                            </p>
+                            {p.utr && <p>UTR: <span className="font-mono font-bold select-all">{p.utr}</span>{p.submittedAt ? ` · ${fmtDate(p.submittedAt)}` : ''}</p>}
+                            {p.screenshotUrl && (
+                              <a href={p.screenshotUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-brand-gold-text underline font-semibold">Open payment screenshot</a>
+                            )}
+                            {p.adminStatus === 'ADMIN_PENDING' && (
+                              <div className="space-y-2 pt-2 border-t border-brand-border/40">
+                                <input
+                                  value={reasons[key] || ''}
+                                  onChange={(e) => setReasons(x => ({ ...x, [key]: e.target.value }))}
+                                  placeholder="Reason, only if rejecting (the reader sees it)"
+                                  className="input-classic !py-2 text-xs w-full bg-[var(--input-bg)]"
+                                />
+                                <div className="flex gap-2">
+                                  <button type="button" disabled={busy === key} onClick={() => decide(r.swapId, p.payerRole, 'APPROVE')}
+                                    className="flex-1 px-3 py-2 rounded-lg bg-green-600 text-white text-2xs font-bold uppercase tracking-widest disabled:opacity-50">
+                                    {busy === key ? '…' : 'Approve'}
+                                  </button>
+                                  <button type="button" disabled={busy === key} onClick={() => decide(r.swapId, p.payerRole, 'REJECT')}
+                                    className="flex-1 px-3 py-2 rounded-lg bg-red-500 text-white text-2xs font-bold uppercase tracking-widest disabled:opacity-50">
+                                    Reject
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </Fragment>))}
             {!loading && visible.length === 0 && (
               <tr><td colSpan={7} className="p-6 text-center text-[var(--text-secondary)] italic">Nothing waiting.</td></tr>
             )}

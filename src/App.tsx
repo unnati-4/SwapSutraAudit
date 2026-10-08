@@ -4398,7 +4398,9 @@ const ManagementConsole = memo(() => {
   const [tab, setTab] = useState(() => {
     try {
       const want = new URLSearchParams(window.location.search).get('tab');
-      return want === 'badges' ? 'readerBadges' : (want || 'dashboard');
+      const REMOVED = ['quillInsights', 'approvals', 'coupons', 'pricing', 'newsletterSubscribers', 'bookRequestResponses'];
+      if (want === 'badges') return 'readerBadges';
+      return want && REMOVED.indexOf(want) === -1 ? want : 'dashboard';
     } catch { return 'dashboard'; }
   });
   const [data, setData] = useState<any>(null);
@@ -4587,30 +4589,26 @@ const ManagementConsole = memo(() => {
     return d;
   };
 
+  // 9 Oct 2026 (owner's request): only what the site still uses, most-used
+  // first. Removed: Quill Insights, Approvals (joining is instant and free),
+  // Coupons and Membership Fee (there is no membership fee; the listing
+  // coupon is a Script Property), Newsletter Subs (every member is
+  // subscribed) and Request Responses (the same data as Book Requests).
   const tabs = [
     { id: 'dashboard', label: 'Analytics', icon: TrendingUp },
-    { id: 'quillInsights', label: 'Quill Insights', icon: Sparkles },
-    { id: 'approvals', label: 'Approvals', icon: CheckSquare },
-    { id: 'events', label: 'Events', icon: Calendar },
-    { id: 'coupons', label: 'Coupons', icon: Ticket },
-    { id: 'pricing', label: 'Membership Fee', icon: Settings },
-    // The book catalogue, kept apart from the membership fee above. They
-    // are both "pricing" and they have nothing to do with each other: one
-    // is what SwapSutra charges, the other is what a book is worth.
-    { id: 'bookPricing', label: 'Book Pricing', icon: BookOpen },
+    { id: 'securityFeeQueue', label: 'Payments', icon: Shield },
+    { id: 'disputes', label: 'Disputes', icon: AlertTriangle },
+    { id: 'members', label: 'Members', icon: Users },
+    { id: 'books', label: 'Books', icon: BookOpen },
+    { id: 'bookRequests', label: 'Book Requests', icon: Bookmark },
     { id: 'support', label: 'Support', icon: MessageCircle },
-    { id: 'newsletter', label: 'Newsletter', icon: Mail },
-    { id: 'newsletterSubscribers', label: 'Newsletter Subs', icon: Mail },
+    { id: 'events', label: 'Events', icon: Calendar },
     { id: 'eventSubscribers', label: 'Event Subs', icon: Calendar },
     { id: 'hostEnquiries', label: 'Host Enquiries', icon: Home },
+    { id: 'newsletter', label: 'Newsletter', icon: Mail },
     { id: 'testimonials', label: 'Testimonials', icon: Star },
-    { id: 'bookRequests', label: 'Book Requests', icon: Bookmark },
-    { id: 'bookRequestResponses', label: 'Request Responses', icon: MessageSquare },
-    { id: 'books', label: 'Books', icon: BookOpen },
-    { id: 'members', label: 'Members', icon: Users },
+    { id: 'bookPricing', label: 'Book Pricing', icon: BookOpen },
     { id: 'readerBadges', label: 'Badges', icon: Star },
-    { id: 'disputes', label: 'Disputes', icon: AlertTriangle },
-    { id: 'securityFeeQueue', label: 'Payments to verify', icon: Shield },
     { id: 'customMugs', label: 'Mugs', icon: Gift },
   ];
 
@@ -5026,22 +5024,16 @@ const ManagementConsole = memo(() => {
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 {[
                     { label: 'Total Members', value: data.users?.total || 0 },
-                    { label: 'Pending Approvals', value: data.users?.pending || 0 },
-                    { label: 'Approved Members', value: data.users?.approved || 0 },
-                    { label: 'Estimated Revenue', value: '₹' + (data.insights?.revenueEstimate || 0) },
                     { label: 'Total Books', value: data.books?.total || 0 },
                     { label: 'Live Books', value: data.books?.live || 0 },
                     { label: 'Pending Books', value: data.books?.pending || 0 },
                     { label: 'Removed/Inactive Books', value: data.books?.removed || 0 },
-                    { label: 'Accepted Swaps', value: data.swaps?.accepted || 0 },
-                    { label: 'Completed Swaps', value: data.swaps?.completed || 0 },
-                    { label: 'Swap Requests', value: data.swaps?.total || 0, sub: `${data.swaps?.accepted || 0} accepted • ${data.swaps?.completed || 0} completed` },
-                    { label: 'Newsletter Subscribers', value: data.newsletter?.subscribers || data.engagement?.newsletter || 0 },
+                    { label: 'Exchange Requests', value: data.swaps?.total || 0, sub: `${data.swaps?.accepted || 0} accepted • ${data.swaps?.completed || 0} completed` },
                     { label: 'Event Registrations', value: data.events?.registrations || data.engagement?.eventReg || 0 },
                     { label: 'Support Tickets', value: data.support?.total || data.engagement?.support || 0, sub: `${data.support?.open || 0} open • ${data.support?.resolved || 0} resolved` },
                     { label: 'Testimonials', value: data.testimonials || 0 },
                 ].map((m, i) => {
-                    const MetricIcon = [Users, CheckSquare, Shield, TrendingUp, BookOpen, Eye, Clock, RefreshCw, Mail, Calendar, MessageCircle][i] || TrendingUp;
+                    const MetricIcon = [Users, BookOpen, Eye, Clock, RefreshCw, TrendingUp, Calendar, MessageCircle, Star][i] || TrendingUp;
                     return (
                     <div key={i} className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
                         <div className="mb-5 flex items-center justify-between gap-4">
@@ -5092,11 +5084,9 @@ const ManagementConsole = memo(() => {
         {tab === 'dashboard' && data && (
           <div className="mt-8 grid grid-cols-1 xl:grid-cols-2 gap-5">
             <ChartCard title="Books by Status"><BarChart points={data.charts?.booksByStatus || []} /></ChartCard>
-            <ChartCard title="Members by Status"><BarChart points={data.charts?.membersByStatus || []} /></ChartCard>
-            <ChartCard title="New Memberships Over Time"><LineChart points={data.charts?.membershipsOverTime || []} /></ChartCard>
+            <ChartCard title="New Members Over Time"><LineChart points={data.charts?.membershipsOverTime || []} /></ChartCard>
             <ChartCard title="Books Listed Over Time"><LineChart points={data.charts?.booksOverTime || []} /></ChartCard>
             <ChartCard title="Support Open vs Resolved"><DonutChart points={data.charts?.supportByStatus || []} /></ChartCard>
-            <ChartCard title="Coupons Usage"><BarChart points={data.charts?.couponsUsage || []} /></ChartCard>
           </div>
         )}
         {tab === 'newsletter' && (

@@ -21141,7 +21141,8 @@ function adminListSecurityFeeBacklog(data) {
     const out = [];
     for (let r = 1; r < values.length; r++) {
       const status = String(values[r][statusIdx] || '').trim();
-      if (!status || status === 'Pending' || status === 'Declined' || status === 'Cancelled') continue;
+      // Closed requests (Exchange Room: Expired = not paid in 48 hours) are not waiting for anyone.
+      if (!roomSwapAccepted_(status)) continue;
       const obj = rowToObject(headers, values[r]);
       const swap = loadSwapForCirculation(String(values[r][idIdx]));
       if (!swap) continue;
@@ -21158,7 +21159,10 @@ function adminListSecurityFeeBacklog(data) {
         updatedAt: obj.updatedAt,
         payers: fee.payers.map(p => ({
           payerRole: p.payerRole, payerEmail: p.payerEmail, requiredAmount: p.requiredAmount,
-          paymentStatus: p.paymentStatus, adminStatus: p.adminStatus, estimated: p.estimated
+          paymentStatus: p.paymentStatus, adminStatus: p.adminStatus, estimated: p.estimated,
+          // 9 Oct 2026: what the admin needs to check a payment right here.
+          depositAmount: p.depositAmount, platformFee: p.platformFee, saleAmount: p.saleAmount,
+          utr: p.utr, screenshotUrl: p.screenshotUrl, submittedAt: p.submittedAt, rejectedReason: p.rejectedReason
         }))
       });
     }
