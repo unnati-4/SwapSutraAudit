@@ -6416,6 +6416,11 @@ function doPostHandler_(e) {
     if (action === 'vmsUploadChunk') return respondJson(vmsUploadChunk(data));
     if (action === 'vmsFinishUpload') return respondJson(vmsFinishUpload(data));
     if (action === 'adminDecideDeposits') return respondJson(adminDecideDeposits(data));
+    // Oct 2026 — sales through SwapSutra, payout accounts.
+    if (action === 'getPayoutAccount') return respondJson(getPayoutAccount(data));
+    if (action === 'savePayoutAccount') return respondJson(savePayoutAccount(data));
+    if (action === 'getSaleStatus') return respondJson(getSaleStatus(data));
+    if (action === 'confirmSaleComplete') return respondJson(confirmSaleComplete(data));
     // Oct 2026 — 21-day return deadlines.
     if (action === 'getReturnStatus') return respondJson(getReturnStatus(data));
     if (action === 'requestReturnExtension') return respondJson(requestReturnExtension(data));
@@ -20473,7 +20478,10 @@ const SECURITY_FEE_HEADERS = [
   'createdAt', 'updatedAt',
   // Oct 2026: the QR amount is deposit + platform fee; the two are kept
   // apart so a refund only ever returns the deposit.
-  'depositAmount', 'platformFee'
+  'depositAmount', 'platformFee',
+  // Oct 2026: on a sale, the book's price the buyer pays SwapSutra (held
+  // until they confirm receipt, then paid to the seller).
+  'saleAmount'
 ];
 
 const STAGE_EVENTS_SHEET = 'SwapStageEvents';
@@ -20584,6 +20592,7 @@ function ensureSecurityFeeRecords(swap) {
       else if (h === 'requiredAmount') row[i] = req.requiredAmount;
       else if (h === 'depositAmount') row[i] = req.depositAmount === undefined ? req.requiredAmount : req.depositAmount;
       else if (h === 'platformFee') row[i] = req.platformFee || 0;
+      else if (h === 'saleAmount') row[i] = req.saleAmount || 0;
       else if (h === 'paymentStatus') row[i] = 'PENDING';
       else if (h === 'adminStatus') row[i] = 'NOT_SUBMITTED';
       else if (h === 'createdAt') row[i] = now;
@@ -20615,6 +20624,7 @@ function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
       requiredAmount: Number(rec.requiredAmount || 0),
       depositAmount: feeRecordBreakdown_(rec).depositAmount,
       platformFee: feeRecordBreakdown_(rec).platformFee,
+      saleAmount: feeRecordBreakdown_(rec).saleAmount,
       estimated: estimatedByRole[rec.payerRole],
       paymentStatus: rec.paymentStatus || 'PENDING',
       adminStatus: rec.adminStatus || 'NOT_SUBMITTED',
@@ -23183,27 +23193,50 @@ function computeExchangePayments_(swap) {
     : 0;
 
   const reqs = [];
+  // A sale through SwapSutra (Oct 2026): the buyer pays the owner's price
+  // plus the platform fee to SwapSutra; SwapSutra holds the price until the
+  // buyer confirms they have the book, then pays the seller. The seller
+  // pays nothing up front — their own fee comes out of the payout.
+  if (serviceType === 'SELL' && saleEscrowAppliesToSwap_(obj)) {
+    const saleAmount = Math.max(0, Math.round(Number(obj.amount || 0)));
+    const fee = isAdminEmail(swap.requesterEmail) ? 0 : baseFee;
+    if (swap.requesterEmail && saleAmount + fee > 0) {
+      reqs.push({ payerRole: 'requester', payerEmail: swap.requesterEmail, requiredAmount: saleAmount + fee,
+        depositAmount: 0, platformFee: fee, saleAmount: saleAmount });
+    }
+    return reqs;
+  }
   const add = (payerRole, payerEmail, depositAmount) => {
     if (!payerEmail) return;
     const platformFee = isAdminEmail(payerEmail) ? 0 : baseFee;
     const requiredAmount = depositAmount + platformFee;
     if (requiredAmount <= 0) return;
-    reqs.push({ payerRole, payerEmail, requiredAmount, depositAmount, platformFee });
+    reqs.push({ payerRole, payerEmail, requiredAmount, depositAmount, platformFee, saleAmount: 0 });
   };
   add('requester', swap.requesterEmail, requesterDeposit);
   add('owner', swap.ownerEmail, ownerDeposit);
   return reqs;
 }
 
+// Sales made from this moment on go through SwapSutra (escrow). Earlier
+// sales keep their old arrangement (paid directly between readers).
+const SALE_ESCROW_START_ISO = '2026-10-08T00:00:00+05:30';
+function saleEscrowAppliesToSwap_(obj) {
+  const created = new Date(obj && obj.createdAt);
+  if (isNaN(created.getTime())) return true;
+  return created.getTime() >= new Date(SALE_ESCROW_START_ISO).getTime();
+}
+
 /** Splits a SecurityFeePayments row into deposit and fee (old rows: all deposit). */
 function feeRecordBreakdown_(rec) {
   const total = Number(rec.requiredAmount || 0);
   const fee = Number(rec.platformFee || 0);
+  const sale = Number(rec.saleAmount || 0);
   const depositRaw = rec.depositAmount;
   const deposit = depositRaw === '' || depositRaw === undefined || depositRaw === null
-    ? Math.max(0, total - fee)
+    ? Math.max(0, total - fee - sale)
     : Number(depositRaw);
-  return { depositAmount: deposit, platformFee: fee };
+  return { depositAmount: deposit, platformFee: fee, saleAmount: sale };
 }
 
 /** Public quote for the request modal, so readers see the fee before asking. */
@@ -23949,6 +23982,8 @@ function runReturnDeadlines() {
   const forfeits = readSheetObjects_(forfeitSheet).rows.map(r => r.obj);
   let stageInfo = {};
   try { stageInfo = stageReturnInfoBySwap_(); } catch (e) { stageInfo = {}; }
+  // Sales whose buyer never closed them (Oct 2026).
+  try { summary.sales = runSaleAutoRelease_(); } catch (e) { Logger.log('runSaleAutoRelease_ failed: ' + e); }
 
   swaps.rows.forEach(r => {
     if (Date.now() - started > 4.5 * 60 * 1000) return;
@@ -24017,7 +24052,7 @@ function runReturnDeadlines() {
             bookLabel + ' was not on its way back by ' + due + ', so your ₹' + amount + ' security deposit has been forfeited and will be paid to the owner. You must still return the book.',
             id, 'ret_forfeit_' + id + '_' + leg.leg);
           returnNotify_(ownerEmail, 'return_forfeited_owner', 'The deposit is coming to you',
-            'Your book was not returned by ' + due + '. The borrower\'s ₹' + amount + ' security deposit has been forfeited and SwapSutra will pay it to you. SwapSutra will also help you get the book back.',
+            'Your book was not returned by ' + due + '. The borrower\'s ₹' + amount + ' security deposit has been forfeited and SwapSutra will pay it to you' + (readPayoutAccount_(ownerEmail) ? '' : ' — add your UPI ID in Profile → Settings so we can') + '. SwapSutra will also help you get the book back.',
             id, 'ret_forfeit_owner_' + id + '_' + leg.leg);
           returnNotify_('swapsutra@gmail.com', 'return_forfeit_admin', 'Pay out a forfeited deposit',
             'Exchange ' + id + ': ₹' + amount + ' forfeited by ' + borrowerEmail + ' — pay it to ' + ownerEmail + ' and mark it paid in Admin → Returns.',
@@ -24046,6 +24081,8 @@ function adminListReturnForfeits() {
   if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
   const items = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
     .sort((a, b) => new Date(b.forfeitedAt) - new Date(a.forfeitedAt));
+  // Where each payout goes: the recipient's saved UPI ID / QR (Oct 2026).
+  items.forEach(it => { it.payTo = it.payoutStatus === 'TO_PAY_OWNER' ? readPayoutAccount_(it.ownerEmail) : null; });
   return { success: true, items: items };
 }
 
@@ -24062,8 +24099,12 @@ function adminMarkForfeitPaid(data) {
   set('paidAt', new Date());
   set('paidBy', normalizeEmail(getAuthenticatedEmail()));
   set('note', String((data && data.note) || '').slice(0, 300));
-  returnNotify_(row.obj.ownerEmail, 'return_forfeit_paid', 'Forfeited deposit paid to you',
-    'SwapSutra has paid you ₹' + row.obj.amount + ' — the deposit forfeited when your book was not returned on time.',
+  const kindOfPayout = String(row.obj.leg) === 'sale' ? 'the payment for your sale of "' + row.obj.bookTitle + '" (price minus the platform fee)'
+    : String(row.obj.leg).indexOf('dispute:') === 0 ? 'the deposit awarded to you after SwapSutra reviewed the exchange videos'
+    : 'the deposit forfeited when your book was not returned on time';
+  const account = readPayoutAccount_(row.obj.ownerEmail);
+  returnNotify_(row.obj.ownerEmail, 'return_forfeit_paid', 'SwapSutra has paid you ₹' + row.obj.amount,
+    'SwapSutra has sent you ₹' + row.obj.amount + (account ? ' to ' + account.upiId : '') + ' — ' + kindOfPayout + '.',
     row.obj.swapId, 'ret_paid_' + row.obj.id);
   return { success: true };
 }
@@ -24425,7 +24466,7 @@ function adminDecideDeposits(data) {
       ? '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
       : 'The ₹' + held + ' deposit is refunded in full. Reason: ' + reason;
     [payer, other].forEach(email => returnNotify_(email, 'deposit_decided', 'Decision on the security deposit',
-      'After reviewing the exchange videos for "' + title + '": ' + message, swap.obj.id, 'dep_dec_' + leg));
+      'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + leg));
     results.push({ payerRole: payerRole, held: held, forfeit: forfeit, refund: refund });
   }
   try {
@@ -24434,4 +24475,217 @@ function adminDecideDeposits(data) {
       note: results.map(r => r.payerRole + ': forfeit ₹' + r.forfeit + ', refund ₹' + r.refund).join('; ') });
   } catch (e) { /* the payout records are the source of truth */ }
   return { success: true, results: results, message: 'Decision recorded. Forfeits are in Deposits to pay out.' };
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   SALES THROUGH SWAPSUTRA + PAYOUT ACCOUNTS (Oct 2026, owner's rules)
+   ────────────────────────────────────────────────────────────────────────
+   1. The buyer pays SwapSutra the owner's price + the ₹10 platform fee
+      (one QR, verified like every other payment; the chat then opens).
+   2. The book travels with its videos (VMS). The buyer records the
+      receiving video and confirms receipt.
+   3. The buyer closes the purchase — "I have the book and I'm happy" —
+      which creates the seller's payout: the price minus the seller's own
+      ₹10 platform fee, to the UPI ID / QR the seller gave. SwapSutra pays
+      it and marks it paid (Admin → Payments → Payouts to make).
+   4. Not happy? The buyer reports a problem instead; the payout waits for
+      SwapSutra's decision from the videos.
+   5. After closing, the buyer is invited (optionally) to leave a Google
+      review.
+
+   Payout accounts serve every payout, not only sales: a forfeited deposit
+   is paid to the beneficiary's UPI the same way.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const PAYOUT_ACCOUNT_SHEET = 'PayoutAccounts';
+const PAYOUT_ACCOUNT_HEADERS = ['email', 'upiId', 'payeeName', 'qrUrl', 'updatedAt'];
+const UPI_ID_PATTERN = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,63}$/;
+const GOOGLE_REVIEW_URL = 'https://g.page/r/CTKbe5CpoGNPEAI/review';
+
+function getPayoutAccountSheet_() { const s = getOrCreateSheet(PAYOUT_ACCOUNT_SHEET, PAYOUT_ACCOUNT_HEADERS); ensureSheetHeaders(s, PAYOUT_ACCOUNT_HEADERS); return s; }
+
+function readPayoutAccount_(email) {
+  const norm = normalizeEmail(email);
+  const row = readSheetObjects_(getPayoutAccountSheet_()).rows.find(r => normalizeEmail(r.obj.email) === norm);
+  return row ? { upiId: row.obj.upiId || '', payeeName: row.obj.payeeName || '', qrUrl: row.obj.qrUrl || '', updatedAt: row.obj.updatedAt || '' } : null;
+}
+
+/** Action: getPayoutAccount — your own. */
+function getPayoutAccount() {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in first.' };
+  return { success: true, account: readPayoutAccount_(caller) };
+}
+
+/** Action: savePayoutAccount { upiId, payeeName, fileData? (QR image) } */
+function savePayoutAccount(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in first.' };
+  const upiId = String((data && data.upiId) || '').trim();
+  const payeeName = String((data && data.payeeName) || '').trim().slice(0, 80);
+  if (!UPI_ID_PATTERN.test(upiId)) return { success: false, message: 'Enter a UPI ID like name@okbank or 98xxxxxxxx@upi.' };
+  if (!payeeName) return { success: false, message: 'Enter the name on the account, so SwapSutra can check it before paying.' };
+  let qrUrl = '';
+  if (data && data.fileData) {
+    qrUrl = saveFileToDrive(data.fileData, 'payout_qr_' + caller.split('@')[0] + '.jpg') || '';
+    if (!qrUrl) return { success: false, message: 'That QR image could not be saved. Use a JPG or PNG under 10 MB.' };
+  }
+  const sheet = getPayoutAccountSheet_();
+  const t = readSheetObjects_(sheet);
+  const existing = t.rows.find(r => normalizeEmail(r.obj.email) === caller);
+  const now = new Date();
+  if (existing) {
+    const set = (k, v) => { const i = t.headers.indexOf(k); if (i !== -1) sheet.getRange(existing.rowIndex + 1, i + 1).setValue(v); };
+    set('upiId', upiId); set('payeeName', payeeName); if (qrUrl) set('qrUrl', qrUrl); set('updatedAt', now);
+  } else {
+    const headers = ensureSheetHeaders(sheet, PAYOUT_ACCOUNT_HEADERS);
+    const rec = { email: caller, upiId: upiId, payeeName: payeeName, qrUrl: qrUrl, updatedAt: now };
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  }
+  return { success: true, account: readPayoutAccount_(caller), message: 'Saved. Payouts will go to ' + upiId + '.' };
+}
+
+/** The sale's state for the buyer and seller: what was paid, whether it can be closed, the payout. */
+function saleStatusFor_(swap) {
+  const id = String(swap.obj.id);
+  const fee = platformFeePerParty_();
+  const price = Math.max(0, Math.round(Number(swap.obj.amount || 0)));
+  const sellerFee = isAdminEmail(swap.ownerEmail) ? 0 : fee;
+  const payout = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
+    .find(f => String(f.swapId) === id && String(f.leg) === 'sale') || null;
+  const events = journeyEventsBySwap_()[id] || [];
+  const received = events.some(e => e.leg === 'outbound' && e.event === 'received');
+  return {
+    escrow: saleEscrowAppliesToSwap_(swap.obj),
+    price: price,
+    buyerPays: price + (isAdminEmail(swap.requesterEmail) ? 0 : fee),
+    sellerReceives: Math.max(0, price - sellerFee),
+    sellerFee: sellerFee,
+    received: received,
+    closed: !!payout,
+    payoutStatus: payout ? payout.payoutStatus : '',
+    paidAt: payout ? payout.paidAt || '' : '',
+    disputeOpen: swapHasOpenDispute(id),
+    reviewUrl: GOOGLE_REVIEW_URL
+  };
+}
+
+/** Action: getSaleStatus { swapId } — buyer, seller or admin. */
+function getSaleStatus(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  if (!isAuthenticatedAdmin() && !callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+  if (String(swap.obj.serviceType || '').toUpperCase() !== 'SELL') return { success: true, applies: false };
+  const st = saleStatusFor_(swap);
+  const you = caller === swap.ownerEmail ? 'seller' : caller === swap.requesterEmail ? 'buyer' : 'admin';
+  const out = Object.assign({ success: true, applies: true, you: you }, st);
+  if (you === 'seller') out.payoutAccount = readPayoutAccount_(caller);
+  return out;
+}
+
+/**
+ * Action: confirmSaleComplete { swapId, happy: true, note? } — the buyer only.
+ * Needs: the book confirmed received (which itself needs the receiving
+ * video), no open dispute, and the purchase not already closed.
+ * Creates the seller's payout (price − seller's platform fee).
+ */
+function confirmSaleComplete(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  if (String(swap.obj.serviceType || '').toUpperCase() !== 'SELL') return { success: false, message: 'Only a purchase is closed this way.' };
+  if (caller !== swap.requesterEmail) return { success: false, error: 'WRONG_PARTY', message: 'Only the buyer can close the purchase.' };
+  if (!(data && (data.happy === true || data.happy === 'true'))) {
+    return { success: false, message: 'If something is wrong with the book, report a problem instead — SwapSutra will review the videos.' };
+  }
+  const st = saleStatusFor_(swap);
+  if (!st.escrow) return { success: false, message: 'This sale was paid directly between readers, so there is nothing for SwapSutra to release.' };
+  if (st.closed) return { success: false, message: 'This purchase is already closed.' };
+  if (st.disputeOpen) return { success: false, error: 'DISPUTE_OPEN', message: 'A problem is being reviewed on this purchase. SwapSutra will decide from the videos.' };
+  if (!st.received) return { success: false, error: 'NOT_RECEIVED', message: 'Confirm you received the book first (with your receiving video) in the Delivery panel.' };
+  if (vmsMissing_(swap, 'outbound', 'receiver', (latestSwapRoute_(swap.obj.id) || {}).method || 'courier').length) {
+    return { success: false, error: 'VIDEO_REQUIRED', message: 'Record the receiving video of the book first.' };
+  }
+
+  const sheet = getReturnForfeitSheet_();
+  const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
+  const note = String((data && data.note) || '').trim().slice(0, 300);
+  const rec = {
+    id: generateId('SS_PAYOUT_'), swapId: swap.obj.id, leg: 'sale', bookTitle: String(swap.obj.requestedBookTitle || 'the book'),
+    defaulterEmail: swap.requesterEmail, ownerEmail: swap.ownerEmail, amount: st.sellerReceives, dueAt: '', forfeitedAt: new Date(),
+    payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
+    note: 'Sale closed by the buyer: price ₹' + st.price + ' − ₹' + st.sellerFee + ' platform fee.' + (note ? ' Buyer: ' + note : '')
+  };
+  sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  try {
+    appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'requester', actionType: 'sale_closed', actorEmail: caller, note: 'Buyer is happy; payout ₹' + st.sellerReceives + ' created.' });
+  } catch (e) { /* the payout record is the source of truth */ }
+
+  const account = readPayoutAccount_(swap.ownerEmail);
+  returnNotify_(swap.ownerEmail, 'sale_payout_due', 'Your sale is complete',
+    'The buyer has the book and closed the purchase. SwapSutra will send you ₹' + st.sellerReceives + ' (₹' + st.price + ' minus the ₹' + st.sellerFee + ' platform fee)' +
+    (account ? ' to ' + account.upiId + '.' : '. Add your UPI ID in the exchange\'s Delivery panel so we can pay you.'),
+    swap.obj.id, 'sale_closed_seller_' + swap.obj.id);
+  returnNotify_(caller, 'sale_closed_buyer', 'Thank you — purchase closed',
+    'Enjoy the book! If you liked using SwapSutra, a Google review helps other readers find us (optional): ' + GOOGLE_REVIEW_URL,
+    swap.obj.id, 'sale_closed_buyer_' + swap.obj.id, { whatsapp: false });
+  returnNotify_('swapsutra@gmail.com', 'sale_payout_admin', 'Pay a seller',
+    'Sale ' + swap.obj.id + ' closed by the buyer. Pay ₹' + st.sellerReceives + ' to ' + swap.ownerEmail + (account ? ' (' + account.upiId + ')' : ' (no UPI yet)') + ' and mark it paid.',
+    swap.obj.id, 'sale_closed_admin_' + swap.obj.id, { whatsapp: false });
+  return { success: true, payout: st.sellerReceives, reviewUrl: GOOGLE_REVIEW_URL, message: 'Purchase closed. The seller will be paid.' };
+}
+
+/**
+ * Hourly (from runReturnDeadlines): a buyer who confirmed receipt but has
+ * neither closed the purchase nor reported a problem for 7 days — the
+ * seller is paid anyway, so their money is never stuck. The buyer is
+ * reminded at 5 days first.
+ */
+const SALE_AUTO_RELEASE_DAYS = 7;
+function runSaleAutoRelease_() {
+  const summary = { released: 0, reminded: 0 };
+  const swaps = readSheetObjects_(getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests)).rows.map(r => r.obj)
+    .filter(o => String(o.serviceType || '').toUpperCase() === 'SELL' && saleEscrowAppliesToSwap_(o));
+  if (!swaps.length) return summary;
+  const eventsBySwap = journeyEventsBySwap_();
+  const payouts = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj);
+  const sheet = getReturnForfeitSheet_();
+  const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
+  swaps.forEach(o => {
+    const id = String(o.id);
+    if (payouts.some(p => String(p.swapId) === id && String(p.leg) === 'sale')) return;
+    const got = (eventsBySwap[id] || []).filter(e => e.leg === 'outbound' && e.event === 'received')
+      .map(e => new Date(e.createdAt).getTime()).filter(t => isFinite(t));
+    if (!got.length) return;
+    const ageDays = (Date.now() - Math.min.apply(null, got)) / (24 * 60 * 60 * 1000);
+    if (swapHasOpenDispute(id)) return;
+    const swap = loadSwapForCirculation(id);
+    if (!swap) return;
+    if (ageDays >= 5 && ageDays < SALE_AUTO_RELEASE_DAYS) {
+      returnNotify_(swap.requesterEmail, 'sale_close_reminder', 'Please close your purchase',
+        'You confirmed receiving "' + (o.requestedBookTitle || 'the book') + '". Close the purchase if you are happy, or report a problem — otherwise the payment is released to the seller in ' + Math.ceil(SALE_AUTO_RELEASE_DAYS - ageDays) + ' days.',
+        id, 'sale_close_remind_' + id, { whatsapp: true });
+      summary.reminded++;
+      return;
+    }
+    if (ageDays < SALE_AUTO_RELEASE_DAYS) return;
+    const st = saleStatusFor_(swap);
+    const rec = {
+      id: generateId('SS_PAYOUT_'), swapId: id, leg: 'sale', bookTitle: String(o.requestedBookTitle || 'the book'),
+      defaulterEmail: swap.requesterEmail, ownerEmail: swap.ownerEmail, amount: st.sellerReceives, dueAt: '', forfeitedAt: new Date(),
+      payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
+      note: 'Released automatically: received ' + SALE_AUTO_RELEASE_DAYS + '+ days ago, no problem reported. Price ₹' + st.price + ' − ₹' + st.sellerFee + '.'
+    };
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    payouts.push(rec);
+    summary.released++;
+    returnNotify_(swap.ownerEmail, 'sale_payout_due', 'Your sale payment is released',
+      'The buyer received "' + (o.requestedBookTitle || 'the book') + '" over ' + SALE_AUTO_RELEASE_DAYS + ' days ago with no problem reported, so SwapSutra is paying you ₹' + st.sellerReceives + '.',
+      id, 'sale_auto_seller_' + id);
+    returnNotify_('swapsutra@gmail.com', 'sale_payout_admin', 'Pay a seller (auto-released)',
+      'Sale ' + id + ': pay ₹' + st.sellerReceives + ' to ' + swap.ownerEmail + '.', id, 'sale_auto_admin_' + id, { whatsapp: false });
+  });
+  return summary;
 }

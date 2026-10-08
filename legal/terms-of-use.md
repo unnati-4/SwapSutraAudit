@@ -259,7 +259,7 @@ To the fullest extent permitted by law:
 
 This limit does not apply to liability that cannot be limited under Indian law.
 
-> 💡 *Why the cap is low:* SwapSutra charges a ₹10 platform fee per reader per exchange and never touches the money you exchange with another reader. The cap reflects that. If a reader keeps your book, your claim is against that reader — and we will help you with the record you need to pursue it.
+> 💡 *Why the cap is low:* SwapSutra charges a ₹10 platform fee per reader per exchange. Rent is paid directly between readers; a purchase is paid to SwapSutra, which holds it until the buyer has the book and then pays the seller. The cap reflects that. If a reader keeps your book, your claim is against that reader — and we will help you with the record you need to pursue it.
 
 ---
 

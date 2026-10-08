@@ -12,7 +12,8 @@ const API_URL = apiUrl('/api/swapsutra');
 interface Forfeit {
   id: string; swapId: string; leg: string; bookTitle: string;
   defaulterEmail: string; ownerEmail: string; amount: number;
-  dueAt: string; forfeitedAt: string; payoutStatus: string; paidAt?: string;
+  dueAt: string; forfeitedAt: string; payoutStatus: string; paidAt?: string; note?: string;
+  payTo?: { upiId: string; payeeName: string; qrUrl: string } | null;
 }
 
 const when = (v: string) => {
@@ -52,23 +53,34 @@ export default function AdminReturnForfeits() {
   return (
     <section className="space-y-4">
       <div className="flex items-baseline justify-between gap-4">
-        <h3 className="font-serif text-2xl text-[var(--text-primary)]">Deposits to pay out</h3>
+        <h3 className="font-serif text-2xl text-[var(--text-primary)]">Payouts to make</h3>
         <button onClick={load} className="text-xs text-brand-gold-text underline">Refresh</button>
       </div>
       <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-        Deposits forfeited for a late return, or by a dispute decision after reviewing the exchange videos. Pay the reader shown by UPI, then mark it paid — they&rsquo;re notified.
+        Sale payments to sellers (after the buyer closes the purchase), and deposits forfeited for a late return or by a dispute decision. Pay the UPI shown, then mark it paid — the reader is notified.
       </p>
       {loading && <p className="text-sm text-[var(--text-secondary)]">Loading…</p>}
       {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">{error}</p>}
       {!loading && !toPay.length && !error && <p className="text-sm text-[var(--text-secondary)]">Nothing to pay out.</p>}
       {toPay.map(f => (
         <div key={f.id} className="rounded-2xl border border-red-200 bg-[var(--bg-surface)] p-4 space-y-2">
-          <p className="text-sm font-semibold text-[var(--text-primary)]">Pay ₹{f.amount} to <span className="break-all">{f.ownerEmail}</span></p>
+          <p className="text-sm font-semibold text-[var(--text-primary)]">
+            {String(f.leg) === 'sale' ? 'Sale payout · ' : ''}Pay ₹{f.amount} to <span className="break-all">{f.ownerEmail}</span>
+          </p>
+          {f.payTo ? (
+            <p className="text-xs text-[var(--text-primary)]">
+              UPI <strong className="font-mono">{f.payTo.upiId}</strong> · {f.payTo.payeeName}
+              {f.payTo.qrUrl && <> · <a href={f.payTo.qrUrl} target="_blank" rel="noopener noreferrer" className="underline text-brand-gold-text">QR</a></>}
+            </p>
+          ) : (
+            <p className="text-xs text-amber-700">No UPI ID saved yet — the reader has been asked to add one.</p>
+          )}
+          {f.note && <p className="text-2xs text-[var(--text-secondary)]">{f.note}</p>}
           <p className="text-xs text-[var(--text-secondary)]">
-            &ldquo;{f.bookTitle}&rdquo; · {String(f.leg).startsWith('dispute:') ? 'dispute decision' : `not returned by ${when(f.dueAt)}`} · from <span className="break-all">{f.defaulterEmail}</span> · exchange {f.swapId}
+            &ldquo;{f.bookTitle}&rdquo; · {String(f.leg) === 'sale' ? 'buyer closed the purchase' : String(f.leg).startsWith('dispute:') ? 'dispute decision' : `not returned by ${when(f.dueAt)}`} · from <span className="break-all">{f.defaulterEmail}</span> · exchange {f.swapId}
           </p>
           <button onClick={() => markPaid(f.id)} disabled={busy === f.id} className="px-3 py-2 rounded-lg bg-green-600 text-white text-xs font-semibold disabled:opacity-50">
-            {busy === f.id ? 'Saving…' : 'I have paid the owner'}
+            {busy === f.id ? 'Saving…' : 'I have paid this'}
           </button>
         </div>
       ))}

@@ -135,12 +135,20 @@ console.log('--- platform fee ---');
     s2.requester.requiredAmount === 160 && s2.requester.depositAmount === 150 && s2.requester.platformFee === 10 &&
     s2.owner.requiredAmount === 100 && s2.owner.depositAmount === 90);
 
-  for (const t of ['RENT', 'LEND', 'SELL']) {
+  for (const t of ['RENT', 'LEND']) {
     const r = byRole(env.api.computeExchangePayments_(swap(t, NEW, { securityDeposit: 120, ownerDeposit: 999 })));
     check(`12. ${t}: requester pays deposit + fee, owner pays only the fee (ownerDeposit ignored)`,
       r.requester.requiredAmount === 130 && r.owner.requiredAmount === 10 && r.owner.depositAmount === 0);
   }
 
+  // Oct 2026: a sale goes through SwapSutra — the buyer pays price + fee,
+  // the seller pays nothing up front (their fee comes out of the payout).
+  const sale = env.api.computeExchangePayments_(swap('SELL', NEW, { amount: 300 }));
+  check('12b. SELL: the buyer pays the price + ₹10 to SwapSutra', sale.length === 1 && sale[0].payerRole === 'requester'
+    && sale[0].requiredAmount === 310 && sale[0].saleAmount === 300 && sale[0].platformFee === 10 && sale[0].depositAmount === 0);
+  check('12c. SELL: the seller pays nothing up front', !sale.some(r => r.payerRole === 'owner'));
+  const oldSale = byRole(env.api.computeExchangePayments_(swap('SELL', '2026-10-07T10:00:00+05:30', { amount: 300 })));
+  check('12d. A sale made before the change keeps the old rule (fee only, each side)', oldSale.requester.requiredAmount === 10 && oldSale.owner.requiredAmount === 10);
   const old = env.api.computeExchangePayments_(swap('SWAP', OLD));
   check('13. Exchange created before launch: unchanged (no rows, chat stays open)', old.length === 0);
   const oldDep = byRole(env.api.computeExchangePayments_(swap('RENT', OLD, { securityDeposit: 120 })));
@@ -153,7 +161,7 @@ console.log('--- platform fee ---');
   check('15. The admin account never pays a platform fee', !a.owner && a.requester.requiredAmount === 10);
 
   env.props.PLATFORM_FEE_PER_PARTY = '12';
-  const p = byRole(env.api.computeExchangePayments_(swap('SELL', NEW)));
+  const p = byRole(env.api.computeExchangePayments_(swap('LEND', NEW)));
   check('16. Fee can be changed from Script Properties', p.requester.requiredAmount === 12 && p.owner.requiredAmount === 12);
 
   const legacy = env.api.feeRecordBreakdown_({ requiredAmount: 150, depositAmount: '', platformFee: '' });

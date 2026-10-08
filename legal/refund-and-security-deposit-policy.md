@@ -143,7 +143,16 @@ Videos are recorded in the SwapSutra app, which stamps each frame with the excha
 
 ## B6. Rent and purchase payments
 
-Rent and purchase money is paid **directly between readers**. The **owner sets their own selling price and monthly rent** on the listing. SwapSutra does not collect, hold or refund it.
+**Rent** is paid directly between readers. The owner sets their own monthly rent on the listing; SwapSutra does not collect, hold or refund it.
+
+**Purchases go through SwapSutra.** The owner sets their selling price. The buyer pays SwapSutra the price plus the ₹10 platform fee by UPI. SwapSutra holds the price until the buyer has the book and closes the purchase in the app (after recording the receiving video), then pays the seller the price minus their own ₹10 platform fee, to the UPI ID or QR the seller provided.
+
+| Situation | Buyer | Seller |
+|---|---|---|
+| The buyer closes the purchase | — | Paid the price − ₹10 |
+| The seller cancels, or never sends the book | **Full refund** of what they paid | Nothing |
+| The buyer reports a problem | Held while SwapSutra reviews the videos; then refunded in full or in part, or released to the seller | As decided |
+| The book arrives and the buyer neither closes nor reports a problem within 7 days of confirming receipt | — | SwapSutra may release the payment |
 
 ## B7. Delivery and courier costs
 

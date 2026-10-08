@@ -39,6 +39,8 @@ interface FeePayer {
   depositAmount?: number;
   /** SwapSutra's non-refundable platform fee (₹10 per reader per exchange). */
   platformFee?: number;
+  /** On a sale: the book's price, held by SwapSutra until the buyer closes the purchase. */
+  saleAmount?: number;
   /** Worked out from an unverified price — shown as an estimate. */
   estimated?: boolean;
   paymentStatus: string;
@@ -340,7 +342,12 @@ export default function SwapStateMachine({ swapId, isAdmin }: { swapId: string; 
                 </div>
                 {/* What the amount is made of. The fee is SwapSutra's; only the
                     deposit is ever refunded. */}
-                {(() => {
+                {(p.saleAmount ?? 0) > 0 && (
+                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                    ₹{p.saleAmount} book price + ₹{p.platformFee ?? 0} platform fee. SwapSutra holds the price and pays the seller only after you have the book and close the purchase.
+                  </p>
+                )}
+                {!((p.saleAmount ?? 0) > 0) && (() => {
                   const fee = p.platformFee ?? 0;
                   const deposit = p.depositAmount ?? (p.requiredAmount - fee);
                   if (fee <= 0) {

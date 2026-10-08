@@ -160,7 +160,7 @@ export const TermsOfUsePage = ({ navigateTo }: { navigateTo: Nav }) => (
         'Describe the condition honestly and use real photos of your copy.',
         'Agree the terms (duration, money, delivery, meeting place) in the app before a book changes hands.',
         'Return borrowed books on time and in the condition you received them. Normal reading wear is fine.',
-        'Rent and sale money is paid directly between readers. Courier costs and courier losses are between the sender and the courier.',
+        'Rent is paid directly between readers. A purchase is paid to SwapSutra, held until the buyer has the book and closes the purchase, then paid to the seller (price minus the ₹10 platform fee). Courier costs and courier losses are between the sender and the courier.',
       ]} />
     </S>
 
@@ -275,7 +275,7 @@ export const RefundPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
     </S>
 
     <S title="Money between readers">
-      <p>Rent, sale money and courier charges are paid directly between readers, and SwapSutra cannot refund them. Nothing here limits your rights under the Consumer Protection Act, 2019.</p>
+      <p><strong>Purchases</strong> are paid to SwapSutra and held until the buyer has the book: a buyer whose seller cancels or never sends the book is refunded in full; if the buyer reports a problem, SwapSutra decides from the exchange videos. Rent and courier charges are paid directly between readers, and SwapSutra cannot refund them. Nothing here limits your rights under the Consumer Protection Act, 2019.</p>
     </S>
   </Shell>
 );

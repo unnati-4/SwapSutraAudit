@@ -4,6 +4,7 @@ import { depositTitle, DEPOSIT_ESTIMATE_EXPLAINER } from '../utils/deposit';
 import { LocationCard } from './LocationPin';
 import ReturnRuleNotice from './ReturnRuleNotice';
 import { ExchangeVideosPanel, fetchExchangeVideos, missingForMe, type VmsState } from './ExchangeVideos';
+import SalePanel from './SalePanel';
 
 // The map picker pulls in Leaflet, so it loads only when someone opens it.
 const LocationPinPicker = lazy(() => import('./LocationPin').then(m => ({ default: m.LocationPinPicker })));
@@ -391,6 +392,9 @@ export default function CirculationTracker({
           </div>
         )}
       </section>
+
+      {/* A sale: SwapSutra holds the price until the buyer closes the purchase. */}
+      {data.serviceType === 'SELL' && <SalePanel swapId={swapId} archived={archived} />}
 
       {/* Courier: both addresses and phone numbers. */}
       {isCourier && (

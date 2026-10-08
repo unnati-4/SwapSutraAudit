@@ -188,6 +188,7 @@ import { depositLine, DEPOSIT_ESTIMATE_EXPLAINER } from './utils/deposit';
 import { buildShelfImage } from './utils/shelfImage';
 import { swapMatch } from './utils/swapMatch';
 import ReturnRuleNotice from './components/ReturnRuleNotice';
+import { PayoutAccountForm } from './components/SalePanel';
 import { LocationCard, parseGeoUrl } from './components/LocationPin';
 // The map picker carries Leaflet; it loads only when someone opens it.
 const LocationPinPicker = lazy(() => import('./components/LocationPin').then(m => ({ default: m.LocationPinPicker })));
@@ -3638,6 +3639,10 @@ const BookDetailModal = memo(({
     const [viewerIndex, setViewerIndex] = useState<number | null>(null);
     useEffect(() => { setViewerIndex(null); }, [book]);
     const [bookShareOpen, setBookShareOpen] = useState(false);
+    // 8 Oct (owner's request): one "Add to cart" button; the ways this owner
+    // offers the book open beneath it.
+    const [cartOpen, setCartOpen] = useState(false);
+    useEffect(() => { setCartOpen(false); }, [book?.id]);
     
     useEffect(() => {
       if (book) {
@@ -3940,119 +3945,99 @@ const BookDetailModal = memo(({
 
                 {!isOwner && (
                   <div className="pt-8 flex flex-col gap-4">
-                    {book.status?.toLowerCase() === 'approved' && canRequestExchange && (
-                      <button 
-                        onClick={() => {
-                          if (!activeUserEmail) {
-                            // Carry which book they wanted into the sign-in
-                            // prompt. A visitor asked to "sign in" for no
-                            // stated reason leaves; one asked to sign in to
-                            // reach a specific book, from a specific
-                            // neighbour, mostly does.
-                            signalBookInterest(book);
-                            setShowBookDetail(null);
-                            onShowLoginModal(true);
-                            return;
-                          }
-                          if (userTier === 'pending') {
-                            setShowBookDetail(null);
-                            if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Join SwapSutra to request swaps.");
-                            } else {
-                              onMembershipRequired();
-                            }
-                            return;
-                          }
-                          if (userTier === 'expired') {
-                            setShowBookDetail(null);
-                            onMembershipRequired();
-                            return;
-                          }
+                    {(() => {
+                      if (book.status?.toLowerCase() !== 'approved') return null;
+                      // The ways THIS owner offers the book — nothing else is shown.
+                      const options: { key: 'SWAP' | 'RENT' | 'SELL'; title: string; detail: string; gate: string }[] = [];
+                      if (canRequestExchange) {
+                        options.push({
+                          key: 'SWAP',
+                          title: 'Swap',
+                          detail: availability.permanentExchange && availability.temporaryExchange
+                            ? 'Exchange one of your books — keep it, or return it within 21 days'
+                            : availability.temporaryExchange ? 'Exchange one of your books, both returned within 21 days'
+                            : 'Exchange one of your books, and keep it',
+                          gate: 'Join SwapSutra to request swaps.',
+                        });
+                      }
+                      if (availability.rent) {
+                        options.push({
+                          key: 'RENT', title: 'Rent',
+                          detail: (Number(book.monthlyRent) > 0 ? `₹${book.monthlyRent} a month` : 'A monthly charge') + ' · 65% MRP refundable deposit · return in 21 days',
+                          gate: 'Join SwapSutra to request a rental.',
+                        });
+                      }
+                      if (availability.sell) {
+                        options.push({
+                          key: 'SELL', title: 'Buy',
+                          detail: (Number(book.sellPrice) > 0 ? `₹${book.sellPrice}` : "The owner's price") + ' + ₹10 · paid to SwapSutra, released to the owner once you have it',
+                          gate: 'Join SwapSutra to buy books.',
+                        });
+                      }
+                      if (!options.length) {
+                        return (
+                          <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)]/70 p-4 text-center text-xs leading-relaxed text-[var(--text-secondary)]">
+                            This book is here for discovery, not exchange.
+                          </div>
+                        );
+                      }
+                      const choose = (o: typeof options[number]) => {
+                        if (!activeUserEmail) {
+                          // Carry which book they wanted into the sign-in prompt.
+                          signalBookInterest(book);
                           setShowBookDetail(null);
-                          setShowSwapModal(book);
-                        }}
-                        className="btn-primary w-full !py-5 uppercase text-xs tracking-eyebrow shadow-xl hover:shadow-2xl transition-all"
-                      >
-                        Request to Swap
-                      </button>
-                    )}
-                    {book.status?.toLowerCase() === 'approved' && availability.rent && (
-                      <button
-                        onClick={() => {
-                          if (!activeUserEmail) {
-                            // Carry which book they wanted into the sign-in
-                            // prompt. A visitor asked to "sign in" for no
-                            // stated reason leaves; one asked to sign in to
-                            // reach a specific book, from a specific
-                            // neighbour, mostly does.
-                            signalBookInterest(book);
-                            setShowBookDetail(null);
-                            onShowLoginModal(true);
-                            return;
-                          }
-                          if (userTier === 'pending') {
-                            setShowBookDetail(null);
-                            if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Join SwapSutra to request a rental.");
-                            } else {
-                              onMembershipRequired();
-                            }
-                            return;
-                          }
-                          if (userTier === 'expired') {
-                            setShowBookDetail(null);
-                            onMembershipRequired();
-                            return;
-                          }
+                          onShowLoginModal(true);
+                          return;
+                        }
+                        if (userTier === 'pending') {
                           setShowBookDetail(null);
-                          setShowServiceModal({ book, serviceType: 'RENT' });
-                        }}
-                        className="btn-outline w-full !py-4 uppercase text-2xs tracking-widest"
-                      >
-                        Express Rent Interest
-                      </button>
-                    )}
-                    {book.status?.toLowerCase() === 'approved' && availability.sell && (
-                      <button
-                        onClick={() => {
-                          if (!activeUserEmail) {
-                            // Carry which book they wanted into the sign-in
-                            // prompt. A visitor asked to "sign in" for no
-                            // stated reason leaves; one asked to sign in to
-                            // reach a specific book, from a specific
-                            // neighbour, mostly does.
-                            signalBookInterest(book);
-                            setShowBookDetail(null);
-                            onShowLoginModal(true);
-                            return;
-                          }
-                          if (userTier === 'pending') {
-                            setShowBookDetail(null);
-                            if (onPromptMembershipGate) {
-                              onPromptMembershipGate("Join SwapSutra to express buy interest.");
-                            } else {
-                              onMembershipRequired();
-                            }
-                            return;
-                          }
-                          if (userTier === 'expired') {
-                            setShowBookDetail(null);
-                            onMembershipRequired();
-                            return;
-                          }
+                          if (onPromptMembershipGate) onPromptMembershipGate(o.gate);
+                          else onMembershipRequired();
+                          return;
+                        }
+                        if (userTier === 'expired') {
                           setShowBookDetail(null);
-                          setShowServiceModal({ book, serviceType: 'SELL' });
-                        }}
-                        className="btn-outline w-full !py-4 uppercase text-2xs tracking-widest"
-                      >
-                        Express Buy Interest
-                      </button>
-                    )}
-                    {book.status?.toLowerCase() === 'approved' && !canRequestExchange && !availability.rent && !availability.sell && (
-                      <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)]/70 p-4 text-center text-xs leading-relaxed text-[var(--text-secondary)]">
-                        This book is here for discovery, not exchange.
-                      </div>
-                    )}
+                          onMembershipRequired();
+                          return;
+                        }
+                        setShowBookDetail(null);
+                        if (o.key === 'SWAP') setShowSwapModal(book);
+                        else setShowServiceModal({ book, serviceType: o.key });
+                      };
+                      return (
+                        <div className="space-y-3" data-testid="add-to-cart">
+                          <button
+                            type="button"
+                            onClick={() => setCartOpen(v => !v)}
+                            aria-expanded={cartOpen}
+                            aria-controls="add-to-cart-options"
+                            className="btn-primary w-full !py-5 uppercase text-xs tracking-eyebrow shadow-xl hover:shadow-2xl transition-all flex items-center justify-center gap-2"
+                          >
+                            <Icons.ShoppingCart size={16} /> Add to cart
+                            <span aria-hidden="true" className={`transition-transform ${cartOpen ? 'rotate-180' : ''}`}>▾</span>
+                          </button>
+                          {cartOpen && (
+                            <div id="add-to-cart-options" role="group" aria-label="How do you want this book?" className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-2 space-y-1">
+                              <p className="px-3 pt-2 pb-1 text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">How do you want this book?</p>
+                              {options.map(o => (
+                                <button
+                                  key={o.key}
+                                  type="button"
+                                  onClick={() => choose(o)}
+                                  className="w-full flex items-center justify-between gap-3 rounded-xl px-3 py-3 text-left hover:bg-brand-gold/10 focus-visible:bg-brand-gold/10 transition-colors"
+                                >
+                                  <span className="min-w-0">
+                                    <span className="block font-serif text-lg text-[var(--text-primary)]">{o.title}</span>
+                                    <span className="block text-xs text-[var(--text-secondary)] leading-snug">{o.detail}</span>
+                                  </span>
+                                  <span aria-hidden="true" className="text-brand-gold-text text-lg shrink-0">→</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     
                     <button 
                       onClick={() => onRatingBookId(book.id)}
@@ -12252,7 +12237,7 @@ export default function App() {
         setSuccessMessage(
           serviceType === 'RENT'
             ? 'Rent request sent. If the owner accepts, you each pay a ₹10 platform fee (plus your refundable deposit) from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
-            : 'Buy interest sent. If the owner accepts, you each pay a ₹10 platform fee from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
+            : 'Buy request sent. If the owner accepts, you pay SwapSutra the price + ₹10 from the Stages tab; SwapSutra pays the seller after you have the book. Track it in My Profile → Swap Requests.'
         );
 
         if (book.ownerEmail) {
@@ -16277,7 +16262,7 @@ export default function App() {
                     </p>
                     <p className="flex gap-4">
                       <span className="text-brand-gold-text font-bold">IV.</span>
-                      <span>SwapSutra connects readers. Rent and sale money passes directly between readers; SwapSutra only collects its platform fee and holds refundable deposits.</span>
+                      <span>SwapSutra connects readers. Rent is paid directly between readers. A purchase is paid to SwapSutra and held until the buyer has the book, then paid to the seller. SwapSutra also collects its platform fee and holds refundable deposits.</span>
                     </p>
                     <div className="bg-[var(--bg-surface)] p-6 rounded-2xl border border-brand-border shadow-sm space-y-6">
                       <div>
@@ -16610,6 +16595,8 @@ export default function App() {
                       {profileActiveSubTab === 'settings' && (
                         <>
                           <EditProfile profileData={profileData!} onCancel={() => setProfileActiveSubTab('overview')} onSave={handleSaveProfile} />
+                          {/* Oct 2026: where SwapSutra sends sale payments and awarded deposits. */}
+                          {!isAdmin && <div className="mt-10"><PayoutAccountForm /></div>}
                           {/* 30 Sep (owner's request): the Newsletter lives in Community, not the profile. */}
                           {!isAdmin && <DeleteAccount apiUrl={API_URL} onDeleted={handleAccountDeleted} />}
                         </>
@@ -18396,7 +18383,7 @@ export default function App() {
                         <p className="text-xs text-amber-700">That's more than the printed MRP (₹{listingMrpNumber}). You can still list it, but buyers may pass.</p>
                       )}
                       <p className="text-2xs text-[var(--text-secondary)] opacity-80 leading-relaxed">
-                        You decide the price. The buyer pays it to you directly; there is no security deposit on a sale.
+                        You decide the price. The buyer pays SwapSutra, and you receive the price minus the ₹10 platform fee on your UPI once the buyer has the book and closes the purchase. No security deposit on a sale.
                       </p>
                     </div>
                   )}
@@ -19035,7 +19022,7 @@ export default function App() {
                     <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
                       {showServiceModal.serviceType === 'RENT'
                         ? `This sends the owner a rental request. ${Number(showServiceModal.book.monthlyRent) > 0 ? `Rent is ₹${showServiceModal.book.monthlyRent} a month (the owner's price).` : ''} If they accept, you pay a security deposit of 65% of the MRP plus the ₹10 platform fee, and your chat opens once SwapSutra verifies it.`
-                        : `This sends the owner a buy request. ${Number(showServiceModal.book.sellPrice) > 0 ? `The price is ₹${showServiceModal.book.sellPrice} (the owner's price).` : ''} There is no security deposit on a purchase — only the ₹10 platform fee once the owner accepts.`}
+                        : `This sends the owner a buy request. ${Number(showServiceModal.book.sellPrice) > 0 ? `The price is ₹${showServiceModal.book.sellPrice} (the owner's price).` : ''} If they accept, you pay SwapSutra the price + ₹10 platform fee by UPI. SwapSutra holds the money and pays the seller only after you have the book and close the purchase. No security deposit.`}
                     </p>
                   </div>
                 </div>
