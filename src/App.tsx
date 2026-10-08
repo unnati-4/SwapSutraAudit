@@ -5540,7 +5540,7 @@ const ChatModal = memo(({
 
     return (
       <AnimatePresence>
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4">
+        <div className="fixed inset-0 z-[100] flex items-stretch justify-stretch">
           <motion.div 
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="absolute inset-0 bg-brand-brown/40 backdrop-blur-md"
@@ -5548,7 +5548,7 @@ const ChatModal = memo(({
           />
           <motion.div 
             initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="bg-[var(--bg-page)] w-full max-w-2xl h-[88dvh] sm:h-[80vh] rounded-3xl shadow-2xl relative z-10 border border-brand-border flex flex-col overflow-hidden night-panel"
+            className="bg-[var(--bg-page)] w-full h-[100dvh] relative z-10 flex flex-col overflow-hidden night-panel" data-testid="exchange-room-screen"
           >
             {/* Archived Banner */}
             {isArchived && (
@@ -5583,9 +5583,11 @@ const ChatModal = memo(({
               </div>
             </div>
 
-            {/* The steps of the exchange, above the chat. */}
+            {/* Full screen (Oct 2026): the steps on the left, the chat on the
+                right. On a phone the steps sit above the chat and can be hidden. */}
+            <div className="flex-1 min-h-0 flex flex-col md:flex-row">
             {hasRealSwap && roomOpen && (
-              <div className="shrink-0 max-h-[52%] overflow-y-auto border-b border-brand-border bg-[var(--bg-page)] p-3 sm:p-4 space-y-3" data-testid="room-panel">
+              <div className="shrink-0 max-h-[45%] md:max-h-none md:h-full md:w-[400px] lg:w-[460px] overflow-y-auto border-b md:border-b-0 md:border-r border-brand-border bg-[var(--bg-page)] p-3 sm:p-4 space-y-3" data-testid="room-panel">
                 <ExchangeRoom swapId={String(currentChat.swapId)} isAdmin={isAdminUser} onChanged={onActionTaken} />
                 {isAdminUser && (
                   <details className="bg-gray-100 p-4 rounded-2xl border border-gray-200">
@@ -5609,13 +5611,12 @@ const ChatModal = memo(({
               </div>
             )}
 
-            {/* Main Content Area */}
+            {/* The chat */}
             {chatTab === 'messages' && (
-              <>
-                <div className="bg-brand-gold/10 px-6 py-3 border-b border-brand-gold/20 text-center">
-                  <p className="text-2xs sm:text-2xs text-brand-gold-text font-bold uppercase tracking-widest leading-relaxed">
-                    SwapSutra admin is part of this conversation for safety. <br />
-                    {isBookRequestChat ? 'Please share only content you legally own or have permission to distribute.' : 'Readers are responsible for exchange logistics & courier costs. Do not share OTPs or UPI PINs.'}
+              <div className="flex-1 min-h-0 flex flex-col relative" data-testid="room-chat">
+                <div className="shrink-0 bg-brand-gold/10 px-4 py-1.5 border-b border-brand-gold/20 text-center">
+                  <p className="text-2xs text-brand-gold-text font-semibold leading-snug">
+                    🛡️ SwapSutra admin is in this chat for safety · {isBookRequestChat ? 'Share only content you own or may share.' : 'Never share OTPs or UPI PINs.'}
                   </p>
                 </div>
 
@@ -5695,7 +5696,7 @@ const ChatModal = memo(({
                 {!isAtBottom && messages.length > 3 && (
                   <button 
                     onClick={() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })}
-                    className="absolute bottom-32 right-8 bg-[var(--bg-surface)] border border-brand-border shadow-lg p-2 rounded-full text-brand-gold-text hover:text-[var(--text-primary)] transition-all z-20"
+                    className="absolute bottom-28 right-6 bg-[var(--bg-surface)] border border-brand-border shadow-lg p-2 rounded-full text-brand-gold-text hover:text-[var(--text-primary)] transition-all z-20"
                   >
                     <Icons.ChevronDown size={20} />
                   </button>
@@ -5751,8 +5752,9 @@ const ChatModal = memo(({
                     </>
                   )}
                 </div>
-              </>
+              </div>
             )}
+            </div>
 
           </motion.div>
         </div>

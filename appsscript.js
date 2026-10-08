@@ -5714,7 +5714,7 @@ function endCurrentReadCircle(data) {
     circleMembers.forEach(m => {
       const memberEmail = normalizeEmail(m.user_id);
       if (memberEmail && memberEmail !== userId) {
-        addInAppNotification(
+        createNotification(
           memberEmail,
           "readers_circle_ended",
           "Current Read Ended 📚",
@@ -6410,6 +6410,10 @@ function doPostHandler_(e) {
     if (action === 'getDeliveryAddress') return respondJson(getDeliveryAddress(data));
     if (action === 'setSwapRoute') return respondJson(setSwapRoute(data));
     if (action === 'shareChatLocation') return respondJson(shareChatLocation(data));
+    // Oct 2026 — Google location for meeting points.
+    if (action === 'geocodePlace') return respondJson(geocodePlace(data));
+    if (action === 'reversePlace') return respondJson(reversePlace(data));
+    if (action === 'resolveMapsLink') return respondJson(resolveMapsLink(data));
     // Oct 2026 — VMS video evidence.
     if (action === 'getExchangeVideos') return respondJson(getExchangeVideos(data));
     // Oct 2026 — the Exchange Room (one place: chat + every step).
@@ -25702,4 +25706,169 @@ function runExchangeRoomTicks_(nowMs) {
     }
   });
   return summary;
+}
+
+
+/**
+ * A Drive folder by name, created if missing — kept under one parent
+ * ("SwapSutra_Exchanges") so exchange videos and proofs don't clutter the
+ * Drive root. (8 Oct 2026: vmsStartUpload and uploadSwapProof called this,
+ * but it had never been defined — every video upload failed with
+ * "getOrCreateFolder is not defined".)
+ */
+const EXCHANGE_FOLDERS_ROOT = 'SwapSutra_Exchanges';
+let __SS_EXCHANGE_ROOT__ = null;
+function getOrCreateFolder(name) {
+  if (!__SS_EXCHANGE_ROOT__) {
+    const roots = DriveApp.getFoldersByName(EXCHANGE_FOLDERS_ROOT);
+    __SS_EXCHANGE_ROOT__ = roots.hasNext() ? roots.next() : DriveApp.createFolder(EXCHANGE_FOLDERS_ROOT);
+  }
+  const found = __SS_EXCHANGE_ROOT__.getFoldersByName(String(name));
+  return found.hasNext() ? found.next() : __SS_EXCHANGE_ROOT__.createFolder(String(name));
+}
+
+
+/**
+ * 8 Oct 2026: approving a host enquiry called sendApprovalEmail, which had
+ * never been defined (the approval crashed). A short branded note; returns
+ * true when sent.
+ */
+function sendApprovalEmail(email, name, kind) {
+  try {
+    const to = normalizeEmail(email);
+    if (!to) return false;
+    const content = '<p>Hi ' + String(name || 'there').replace(/</g, '&lt;') + ',</p>' +
+      '<p>Good news — your ' + String(kind || 'request').replace(/</g, '&lt;') + ' with SwapSutra has been approved. We will be in touch with the next steps.</p>';
+    const htmlBody = getBrandedEmailTemplate('Approved', content, 'https://swapsutra.in', 'Open SwapSutra');
+    const res = sendSwapSutraEmail({ to: to, subject: 'Your SwapSutra ' + (kind || 'request') + ' is approved', htmlBody: htmlBody });
+    return res !== false;
+  } catch (err) {
+    Logger.log('sendApprovalEmail failed: ' + err);
+    return false;
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   GOOGLE LOCATION for meeting points (Oct 2026, owner's request)
+   ────────────────────────────────────────────────────────────────────────
+   The meeting-point picker finds places with Google, through Apps Script's
+   built-in Maps service (no API key, no billing):
+     geocodePlace     { query }        → up to 5 places, India first
+     reversePlace     { lat, lng }     → the address at a point
+     resolveMapsLink  { url }          → a pasted Google Maps link (also the
+                                          short maps.app.goo.gl kind) → a point
+   Signed-in readers only, and answers are cached for a day, which keeps
+   well inside the Maps service's daily quota.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const PLACE_CACHE_SECONDS = 24 * 60 * 60;
+const MAPS_LINK_HOSTS = /^(?:maps\.app\.goo\.gl|goo\.gl|g\.co|maps\.google\.[a-z.]+|(?:www\.)?google\.[a-z.]+)$/i;
+
+function placeCacheGet_(key) {
+  try { const v = CacheService.getScriptCache().get(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+}
+function placeCachePut_(key, value) {
+  try { CacheService.getScriptCache().put(key, JSON.stringify(value), PLACE_CACHE_SECONDS); } catch (e) { /* cache is advisory */ }
+}
+
+/** Google geocoder results → [{ label, address, lat, lng }]. */
+function placesFromGeocode_(res) {
+  return ((res && res.results) || []).slice(0, 5).map(r => {
+    const loc = r.geometry && r.geometry.location;
+    const pin = loc ? cleanLatLng_(loc.lat, loc.lng) : null;
+    if (!pin) return null;
+    const address = String(r.formatted_address || '');
+    return { label: cleanPlaceLabel_(address.split(',')[0]), address: address.slice(0, 160), lat: pin.lat, lng: pin.lng };
+  }).filter(Boolean);
+}
+
+/** Action: geocodePlace { query } */
+function geocodePlace(data) {
+  if (!normalizeEmail(getAuthenticatedEmail())) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to search for a place.' };
+  const query = String((data && data.query) || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (query.length < 3) return { success: false, message: 'Type at least 3 letters of the place.' };
+  const key = 'geo:' + query.toLowerCase();
+  const cached = placeCacheGet_(key);
+  if (cached) return { success: true, places: cached };
+  try {
+    const places = placesFromGeocode_(Maps.newGeocoder().setRegion('in').setLanguage('en').geocode(query));
+    placeCachePut_(key, places);
+    return { success: true, places: places, message: places.length ? '' : 'Google found no place by that name. Try adding the area or city.' };
+  } catch (err) {
+    Logger.log('geocodePlace failed: ' + err);
+    return { success: false, message: 'Place search is busy right now. Use your current location or paste a Google Maps link.' };
+  }
+}
+
+/** Action: reversePlace { lat, lng } — the address at a point (for naming a pin). */
+function reversePlace(data) {
+  if (!normalizeEmail(getAuthenticatedEmail())) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in first.' };
+  const pin = cleanLatLng_(data && data.lat, data && data.lng);
+  if (!pin) return { success: false, message: 'That location could not be read.' };
+  const key = 'rev:' + pin.lat.toFixed(4) + ',' + pin.lng.toFixed(4);
+  const cached = placeCacheGet_(key);
+  if (cached) return { success: true, place: cached };
+  try {
+    const place = placesFromGeocode_(Maps.newGeocoder().setLanguage('en').reverseGeocode(pin.lat, pin.lng))[0] || null;
+    const out = place ? Object.assign({}, place, { lat: pin.lat, lng: pin.lng }) : { label: '', address: '', lat: pin.lat, lng: pin.lng };
+    placeCachePut_(key, out);
+    return { success: true, place: out };
+  } catch (err) {
+    return { success: true, place: { label: '', address: '', lat: pin.lat, lng: pin.lng } };
+  }
+}
+
+/** Coordinates (and a place name, if any) written in a Google Maps URL. Pure. */
+function pointFromMapsUrl_(url) {
+  const u = String(url || '');
+  let dec = u;
+  try { dec = decodeURIComponent(u); } catch (e) { dec = u; }
+  const pick = (re) => { const m = re.exec(dec); return m ? cleanLatLng_(m[1], m[2]) : null; };
+  // !3d…!4d… is the place itself; @lat,lng is only where the map was centred.
+  const pin = pick(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/)
+    || pick(/[?&](?:q|query|ll|destination|daddr|center|sll)=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
+    || pick(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
+  const placeMatch = /\/place\/([^/@?]+)/.exec(dec) || /[?&](?:q|query)=([^&]+)/.exec(dec);
+  let name = placeMatch ? placeMatch[1].replace(/\+/g, ' ') : '';
+  if (/^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(name)) name = '';
+  return { pin: pin, name: cleanPlaceLabel_(name) };
+}
+
+/** Action: resolveMapsLink { url } — a Google Maps link a reader pasted. */
+function resolveMapsLink(data) {
+  if (!normalizeEmail(getAuthenticatedEmail())) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in first.' };
+  let url = String((data && data.url) || '').trim();
+  const found = /https?:\/\/[^\s]+/.exec(url);   // a "Share" text often has words around the link
+  url = found ? found[0] : url;
+  let host = '';
+  try { host = /^https?:\/\/([^/?#]+)/i.exec(url)[1]; } catch (e) { host = ''; }
+  if (!host || !MAPS_LINK_HOSTS.test(host)) return { success: false, message: 'Paste a Google Maps link (from Share → Copy link in Google Maps).' };
+  const cached = placeCacheGet_('lnk:' + url);
+  if (cached) return { success: true, place: cached };
+  try {
+    // Short links redirect to the full one; follow a few hops by hand.
+    let current = url;
+    for (let hop = 0; hop < 4; hop++) {
+      if (pointFromMapsUrl_(current).pin) break;
+      const res = UrlFetchApp.fetch(current, { followRedirects: false, muteHttpExceptions: true });
+      const h = res.getHeaders() || {};
+      const next = h.Location || h.location;
+      if (!next) break;
+      current = next;
+    }
+    const got = pointFromMapsUrl_(current);
+    let place = null;
+    if (got.pin) place = { label: got.name, address: '', lat: got.pin.lat, lng: got.pin.lng };
+    else if (got.name) {
+      const g = placesFromGeocode_(Maps.newGeocoder().setRegion('in').setLanguage('en').geocode(got.name))[0];
+      if (g) place = g;
+    }
+    if (!place) return { success: false, message: 'That link has no location in it. In Google Maps, open the place, tap Share → Copy link, and paste it here.' };
+    placeCachePut_('lnk:' + url, place);
+    return { success: true, place: place };
+  } catch (err) {
+    Logger.log('resolveMapsLink failed: ' + err);
+    return { success: false, message: 'That link could not be opened. Try searching the place by name instead.' };
+  }
 }
