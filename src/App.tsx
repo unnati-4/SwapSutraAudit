@@ -3317,7 +3317,7 @@ export const MembershipGateContent = memo(({
                 'Swap, lend, rent or sell physical books with readers near you',
                 'List up to 20 books free — ₹20 once if you want more',
                 'Reading Space, reading circles and the Café',
-                'When an exchange is accepted, each reader pays a ₹10 platform fee'
+                '₹10 platform fee per exchange — in a swap it comes out of your refundable deposit'
               ].map((item, idx) => (
             <li key={idx} className="flex items-start gap-2.5 text-sm text-[var(--text-secondary)] leading-snug">
               <span className="text-brand-gold-text font-bold mt-0.5">✓</span>
@@ -4143,7 +4143,7 @@ const MembershipGate = memo(({
                 'Swap, lend, rent or sell physical books with readers near you',
                 'List up to 20 books free — ₹20 once if you want more',
                 'Reading Space, reading circles and the Café',
-                'When an exchange is accepted, each reader pays a ₹10 platform fee'
+                '₹10 platform fee per exchange — in a swap it comes out of your refundable deposit'
               ].map((item, idx) => (
               <li key={idx} className="flex items-start gap-2.5 text-sm text-[var(--text-secondary)] leading-snug">
                 <span className="text-brand-gold-text font-bold mt-0.5">✓</span>
@@ -11789,7 +11789,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         trackOnce('first_request_sent', { serviceType: 'SWAP' });
-        setSuccessMessage('Swap request sent. If the owner accepts, you each pay a ₹10 platform fee from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.');
+        setSuccessMessage('Swap request sent. If the owner accepts, you each pay only your refundable deposit from the Stages tab — SwapSutra’s ₹10 platform fee is taken from it when it is refunded — and your chat opens once both are verified. Track it in My Profile → Swap Requests.');
         
         // Dispatch Notification to Book Owner
         if (showSwapModal.ownerEmail) {
@@ -11858,7 +11858,7 @@ export default function App() {
         trackOnce('first_request_sent', { serviceType });
         setSuccessMessage(
           serviceType === 'RENT'
-            ? 'Rent request sent. If the owner accepts, you each pay a ₹10 platform fee (plus your refundable deposit) from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
+            ? 'Rent request sent. If the owner accepts, you each pay a ₹10 platform fee and you also pay a refundable deposit (the rent is paid to the owner from it) from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
             : 'Buy request sent. If the owner accepts, you pay SwapSutra the price + ₹10 from the Stages tab; SwapSutra pays the seller after you have the book. Track it in My Profile → Swap Requests.'
         );
 
@@ -15870,7 +15870,7 @@ export default function App() {
                   {[
                     {step: '01', title: 'Curate', desc: 'Join and list up to 20 books from your shelf. ₹20 once lifts the limit.' },
                     {step: '02', title: 'Discover', desc: 'Browse the collective library. Temporary swaps are fixed for 1 month.' },
-                    {step: '03', title: 'Connect', desc: 'Once the owner accepts, you each pay a ₹10 platform fee and your chat opens. Swaps, rentals and loans also need a 65% MRP refundable deposit.' },
+                    {step: '03', title: 'Connect', desc: 'Once the owner accepts, the ₹10 platform fee is settled and your chat opens. Swaps, rentals and loans also need a 65% MRP refundable deposit — in a swap the ₹10 comes out of it.' },
                   ].map(s => (
                     <div key={s.step} className="text-center group">
                       <div className="text-6xl font-serif text-brand-beige group-hover:text-brand-gold-text/20 transition-colors duration-500 mb-6">{s.step}</div>
@@ -15898,7 +15898,7 @@ export default function App() {
                       <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Financial Transparency</p>
                       <ul className="text-xs space-y-2 font-medium">
                         <li>• Joining: free</li>
-                        <li>• Platform fee: ₹10 from each reader when an exchange is accepted (swap, lend, rent or sell)</li>
+                        <li>• Platform fee: ₹10 per reader per exchange. Swap — taken from each reader's deposit when it is refunded (nothing extra to pay). Lend — only the borrower pays it. Rent and sell — each reader pays it.</li>
                         <li>• More than 20 listings: ₹20, once</li>
                         <li>• Security deposit: 65% of MRP for a swap, a rental or a loan — refundable, forfeited to the owner if the book isn't on its way back within 21 days. A purchase has none.</li>
                       </ul>
@@ -15911,13 +15911,13 @@ export default function App() {
                     </p>
                     <p className="flex gap-4">
                       <span className="text-brand-gold-text font-bold">IV.</span>
-                      <span>SwapSutra connects readers. Rent is paid directly between readers. A purchase is paid to SwapSutra and held until the buyer has the book, then paid to the seller. SwapSutra also collects its platform fee and holds refundable deposits.</span>
+                      <span>SwapSutra connects readers. Rent comes out of the renter's deposit and is paid to the owner. A purchase is paid to SwapSutra and held until the buyer has the book, then paid to the seller. SwapSutra also collects its platform fee and holds refundable deposits.</span>
                     </p>
                     <div className="bg-[var(--bg-surface)] p-6 rounded-2xl border border-brand-border shadow-sm space-y-6">
                       <div>
                         <p className="text-xs font-bold uppercase tracking-widest text-brand-gold-text mb-3">FAQ corner</p>
                         <p className="text-xs font-bold text-[var(--text-primary)]">Q: Is there a fee for requesting a swap?</p>
-                        <p className="text-xs opacity-70 mt-1">A: Requesting is free. If the owner accepts, each of you pays a ₹10 platform fee by UPI, and your chat opens once SwapSutra verifies both payments. Temporary swaps also need a refundable deposit.</p>
+                        <p className="text-xs opacity-70 mt-1">A: Requesting is free. If the owner accepts, you pay by UPI and your chat opens once SwapSutra verifies the payments. In a swap you each pay only a refundable deposit — the ₹10 platform fee is taken from it at the refund. In a loan only the borrower pays the ₹10 fee (plus the deposit).</p>
                       </div>
                       <div>
                         <p className="text-xs font-bold text-[var(--text-primary)]">Q: Is there a fee for temporary swaps?</p>
@@ -16768,7 +16768,7 @@ export default function App() {
                                 <p className="max-w-xl text-sm leading-relaxed text-[var(--text-secondary)]">
                                   {userTier === 'expired'
                                     ? 'This account is paused. Message SwapSutra on WhatsApp or at swapsutra@gmail.com to restore access.'
-                                    : 'Membership is free and never expires. Swap, lend, rent and sell with readers near you. When an exchange is accepted, each reader pays a ₹10 platform fee before the chat opens.'}
+                                    : 'Membership is free and never expires. Swap, lend, rent and sell with readers near you. A ₹10 platform fee applies per exchange — in a swap it comes out of your refundable deposit, and in a loan only the borrower pays it.'}
                                 </p>
                               </div>
                               <div className="flex shrink-0 flex-col items-center justify-center rounded-3xl border border-brand-border bg-[var(--bg-surface)]/80 p-6 text-center shadow-sm backdrop-blur-md">
@@ -18597,7 +18597,7 @@ export default function App() {
                       <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] px-4 py-4 text-center space-y-1">
                         <p className="text-2xs font-bold text-[var(--text-primary)] uppercase tracking-widest">No payment yet</p>
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed italic">
-                          If the owner accepts, you each pay a ₹10 platform fee — plus your refundable deposit, if this swap has one — by UPI from the exchange's Stages tab. Your chat opens once SwapSutra verifies both payments.
+                          If the owner accepts, you each pay your refundable deposit by UPI from the exchange's Stages tab — no separate fee. When the exchange is complete the deposit comes back minus SwapSutra's ₹10 platform fee. Your chat opens once SwapSutra verifies both payments.
                         </p>
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book needs three short videos in the app: its condition and its packing (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides the deposit from these videos.</p>
                       </div>

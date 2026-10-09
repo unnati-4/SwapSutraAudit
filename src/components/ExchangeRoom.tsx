@@ -54,6 +54,8 @@ export interface RoomData {
   sale: { price: number; sellerReceives: number; payoutStatus: string } | null;
   /** A rental: the rent, taken from the deposit at the end and paid to the owner. */
   rentCharge?: number;
+  /** A swap: SwapSutra's fee is taken from this reader's deposit when it is refunded. */
+  feeFromDeposit?: number;
   /** This reader has rated SwapSutra before — asked once only (9 Oct 2026). */
   platformRated?: boolean;
   /** This reader has reflected & rated: the exchange has moved to their My orders. */
@@ -230,6 +232,8 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
           ? `₹${p.saleAmount} book price + ₹${p.platformFee ?? 0} platform fee. SwapSutra holds the price and pays the seller only after you have the book and say you're happy.`
           : (p.depositAmount ?? 0) > 0 && (room.rentCharge ?? 0) > 0 && room.role === 'requester'
             ? `₹${p.depositAmount} security deposit + ₹${p.platformFee ?? 0} platform fee. When the book is back, the rent (₹${Math.min(room.rentCharge ?? 0, p.depositAmount ?? 0)}) goes to the owner from the deposit and ₹${Math.max(0, (p.depositAmount ?? 0) - (room.rentCharge ?? 0))} comes back to you.`
+          : (p.depositAmount ?? 0) > 0 && (room.feeFromDeposit ?? 0) > 0 && !(p.platformFee ?? 0)
+            ? `₹${p.depositAmount} security deposit — nothing else to pay now. When the exchange is complete it comes back to you minus SwapSutra's ₹${room.feeFromDeposit} platform fee (₹${(p.depositAmount ?? 0) - (room.feeFromDeposit ?? 0)}).`
           : (p.depositAmount ?? 0) > 0 ? `₹${p.depositAmount} refundable security deposit + ₹${p.platformFee ?? 0} platform fee. The deposit comes back when the exchange is complete.`
           : `₹${p.platformFee ?? p.requiredAmount} platform fee.`;
         return card('pay', `Pay ₹${p.requiredAmount}`, (

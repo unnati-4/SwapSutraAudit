@@ -23268,16 +23268,46 @@ function computeExchangePayments_(swap) {
     }
     return reqs;
   }
+  // 9 Oct 2026 (owner's rule): in a swap the ₹10 fee is not paid up front —
+  // it is taken out of the deposit when the deposit is refunded.
+  const feeFromDeposit = serviceType === 'SWAP' && swapFeeFromDeposit_(obj);
   const add = (payerRole, payerEmail, depositAmount) => {
     if (!payerEmail) return;
-    const platformFee = isAdminEmail(payerEmail) ? 0 : baseFee;
+    const platformFee = isAdminEmail(payerEmail) || (feeFromDeposit && depositAmount > 0) ? 0 : baseFee;
     const requiredAmount = depositAmount + platformFee;
     if (requiredAmount <= 0) return;
     reqs.push({ payerRole, payerEmail, requiredAmount, depositAmount, platformFee, saleAmount: 0 });
   };
   add('requester', swap.requesterEmail, requesterDeposit);
-  add('owner', swap.ownerEmail, ownerDeposit);
+  // 9 Oct 2026 (owner's rule): on a lend only the borrower pays the fee.
+  if (serviceType !== 'LEND') add('owner', swap.ownerEmail, ownerDeposit);
   return reqs;
+}
+
+// Swaps requested from this moment take the ₹10 fee from the deposit refund;
+// earlier swaps keep the fee they were quoted (paid with the deposit).
+const SWAP_FEE_FROM_DEPOSIT_START_ISO = '2026-10-09T22:30:00+05:30';
+function swapFeeFromDeposit_(obj) {
+  if (String((obj && obj.serviceType) || 'SWAP').toUpperCase() !== 'SWAP') return false;
+  if (!platformFeeAppliesToSwap_(obj)) return false;
+  const created = new Date(obj && obj.createdAt);
+  if (isNaN(created.getTime())) return true;
+  return created.getTime() >= new Date(SWAP_FEE_FROM_DEPOSIT_START_ISO).getTime();
+}
+
+/** The fee SwapSutra keeps from this reader's swap deposit (0 when it was paid up front). */
+function feeTakenFromDeposit_(swapObj, payerEmail, feeRec) {
+  if (!swapFeeFromDeposit_(swapObj) || isAdminEmail(payerEmail)) return 0;
+  // Never charge twice: a reader who already paid the fee up front (e.g. a
+  // payment made before this rule went live) has nothing taken.
+  if (feeRec && feeRecordBreakdown_(feeRec).platformFee > 0) return 0;
+  return platformFeePerParty_();
+}
+function myFeeRecord_(swapId, role) {
+  try {
+    const rows = loadSecurityFeeRows(String(swapId)).rows.map(r => r.obj).filter(o => o.payerRole === role && o.adminStatus !== 'NOT_REQUIRED');
+    return rows.find(o => o.adminStatus === 'ADMIN_APPROVED') || rows[0] || null;
+  } catch (e) { return null; }
 }
 
 // Sales made from this moment on go through SwapSutra (escrow). Earlier
@@ -23569,6 +23599,11 @@ function adminPlatformRevenueSummary() {
       if (fee > 0) { exchangeFees += fee; exchangePayments++; }
     });
   }
+  // Swap fees taken from deposit refunds (9 Oct 2026).
+  readSheetObjects_(getReturnForfeitSheet_()).rows.forEach(r => {
+    if (String(r.obj.payoutStatus) !== 'KEPT_AS_FEE') return;
+    exchangeFees += Number(r.obj.amount || 0); exchangePayments++;
+  });
   let unlockFees = 0;
   let unlocksPaid = 0;
   let unlocksByCoupon = 0;
@@ -24171,7 +24206,10 @@ function runReturnDeadlines() {
           return;
         }
         if (leg.state === 'OVERDUE' || leg.state === 'RETURNED_LATE') {
-          const amount = Number(o[leg.deposit] || 0);
+          // A swap (9 Oct 2026): SwapSutra's fee comes out of a forfeited deposit too.
+          const fullDeposit = Number(o[leg.deposit] || 0);
+          const feeKept = Math.min(fullDeposit, feeTakenFromDeposit_(o, borrowerEmail, myFeeRecord_(id, leg.borrower)));
+          const amount = fullDeposit - feeKept;
           const headers = ensureSheetHeaders(forfeitSheet, RETURN_FORFEIT_HEADERS);
           const rec = {
             id: generateId('SS_FORFEIT_'), swapId: id, leg: leg.leg, bookTitle: title,
@@ -24180,13 +24218,20 @@ function runReturnDeadlines() {
           };
           forfeitSheet.appendRow(headers.map(h => rec[h] !== undefined ? rec[h] : ''));
           forfeits.push(rec);
+          if (feeKept > 0) {
+            const feeRec = { id: generateId('SS_FEE_KEPT_'), swapId: id, leg: 'fee:' + leg.borrower, bookTitle: title, defaulterEmail: borrowerEmail,
+              ownerEmail: 'swapsutra@gmail.com', amount: feeKept, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'KEPT_AS_FEE',
+              note: 'Platform fee taken from the forfeited ₹' + fullDeposit + ' deposit.' };
+            forfeitSheet.appendRow(headers.map(h => feeRec[h] !== undefined ? feeRec[h] : ''));
+            forfeits.push(feeRec);
+          }
           summary.forfeited++;
           try {
             appendStageEvent({ swapId: id, stage: 'RETURN', party: 'system', actionType: 'deposit_forfeited',
               actorEmail: 'swapsutra@gmail.com', note: 'Not returned by ' + due + '. ₹' + amount + ' forfeited to the owner.' });
           } catch (e) { /* the forfeit record above is the source of truth */ }
           returnNotify_(borrowerEmail, 'return_forfeited', 'Security deposit forfeited',
-            bookLabel + ' was not on its way back by ' + due + ', so your ₹' + amount + ' security deposit has been forfeited and will be paid to the owner. You must still return the book.',
+            bookLabel + ' was not on its way back by ' + due + ', so your ₹' + fullDeposit + ' security deposit has been forfeited' + (feeKept > 0 ? ' (₹' + amount + ' to the owner, ₹' + feeKept + ' platform fee)' : ' and will be paid to the owner') + '. You must still return the book.',
             id, 'ret_forfeit_' + id + '_' + leg.leg);
           returnNotify_(ownerEmail, 'return_forfeited_owner', 'The deposit is coming to you',
             'Your book was not returned by ' + due + '. The borrower\'s ₹' + amount + ' security deposit has been forfeited and SwapSutra will pay it to you' + (readPayoutAccount_(ownerEmail) ? '' : ' — add your UPI ID in Profile → Settings so we can') + '. SwapSutra will also help you get the book back.',
@@ -25364,6 +25409,9 @@ function getExchangeRoom(data) {
       sale: String(swap.obj.serviceType || '').toUpperCase() === 'SELL' ? saleStatusFor_(swap) : null,
       // A rental: the rent comes out of the deposit at the end (9 Oct 2026).
       rentCharge: rentChargeFor_(swap.obj),
+      // A swap: the ₹10 fee is taken from the deposit refund (9 Oct 2026).
+      feeFromDeposit: input.viewerRole === 'owner' || input.viewerRole === 'requester'
+        ? feeTakenFromDeposit_(swap.obj, input.viewerRole === 'owner' ? swap.ownerEmail : swap.requesterEmail, myFeeRecord_(swap.obj.id, input.viewerRole)) : 0,
       // SwapSutra is rated once per reader; and the room closes for a reader
       // as soon as they have reflected & rated.
       platformRated: hasRatedPlatform_(caller),
@@ -25540,7 +25588,8 @@ function roomFinishExchange_(swap, room) {
   const rentRec = created.find(r => String(r.leg) === 'rent');
   roomPost_(id, '🎉 ' + (room && room.needsReturn ? 'Step 14 done — the book is back with its owner.' : 'Step 9 done — the exchange is complete.') +
     (rentRec ? ' The rent, ₹' + rentRec.amount + ', comes out of the deposit and goes to the owner.' : '') +
-    (refunds.length ? ' SwapSutra will refund ₹' + refunds.map(r => r.amount).join(' and ₹') + ' of security deposit to the UPI ID in your settings.' : '') +
+    (refunds.length ? ' SwapSutra will refund ₹' + refunds.map(r => r.amount).join(' and ₹') + ' of security deposit to the UPI ID in your settings' +
+      (created.some(r => /^fee:/.test(String(r.leg))) ? ' (the ₹10 platform fee is taken from each deposit).' : '.') : '') +
     '\n\nStep 15 · Reflect & rate: rate each other and SwapSutra at the top of this room. The room then closes (it stays saved with SwapSutra).');
   [swap.ownerEmail, swap.requesterEmail].forEach(email => {
     try {
@@ -25598,20 +25647,34 @@ function roomCreateRefunds_(swap) {
         } catch (e) { /* the payout record is the source of truth */ }
       }
     }
-    const refundAmount = deposit - rent;
+    // A swap (9 Oct 2026): SwapSutra's ₹10 fee comes out of the refund.
+    const feeCut = Math.max(0, Math.min(deposit - rent, feeTakenFromDeposit_(swap.obj, rec.payerEmail, rec)));
+    if (feeCut > 0 && !existing.some(f => String(f.leg) === 'fee:' + role)) {
+      const feeRec = {
+        id: generateId('SS_FEE_KEPT_'), swapId: id, leg: 'fee:' + role, bookTitle: title,
+        defaulterEmail: normalizeEmail(rec.payerEmail), ownerEmail: 'swapsutra@gmail.com', amount: feeCut, dueAt: '', forfeitedAt: new Date(),
+        payoutStatus: 'KEPT_AS_FEE', note: 'Platform fee taken from the ₹' + deposit + ' deposit.'
+      };
+      sheet.appendRow(headers.map(k => feeRec[k] !== undefined ? feeRec[k] : ''));
+      existing.push(feeRec);
+      created.push(feeRec);
+    }
+    const refundAmount = deposit - rent - feeCut;
     if (!(refundAmount > 0)) return;
     const rec2 = {
       id: generateId('SS_REFUND_'), swapId: id, leg: 'refund:' + role, bookTitle: title,
       defaulterEmail: '', ownerEmail: normalizeEmail(rec.payerEmail), amount: refundAmount, dueAt: '', forfeitedAt: new Date(),
       payoutStatus: 'TO_PAY_OWNER',
-      note: rent > 0 ? 'Deposit refund: ₹' + deposit + ' deposit − ₹' + rent + ' rent paid to the owner.' : 'Security deposit refund — exchange completed.'
+      note: rent > 0 ? 'Deposit refund: ₹' + deposit + ' deposit − ₹' + rent + ' rent paid to the owner.'
+        : feeCut > 0 ? 'Deposit refund: ₹' + deposit + ' deposit − ₹' + feeCut + ' platform fee.'
+        : 'Security deposit refund — exchange completed.'
     };
     sheet.appendRow(headers.map(k => rec2[k] !== undefined ? rec2[k] : ''));
     existing.push(rec2);
     created.push(rec2);
     try {
       returnNotify_('swapsutra@gmail.com', 'room_refund_admin', 'Refund a security deposit',
-        'Exchange ' + id + ' is complete. Refund ₹' + refundAmount + ' to ' + rec.payerEmail + (rent > 0 ? ' (₹' + deposit + ' deposit − ₹' + rent + ' rent)' : '') + ' and mark it paid in Admin → Payouts.', id, 'room_refund_admin_' + id + '_' + role, { whatsapp: false });
+        'Exchange ' + id + ' is complete. Refund ₹' + refundAmount + ' to ' + rec.payerEmail + (rent > 0 ? ' (₹' + deposit + ' deposit − ₹' + rent + ' rent)' : feeCut > 0 ? ' (₹' + deposit + ' deposit − ₹' + feeCut + ' platform fee)' : '') + ' and mark it paid in Admin → Payouts.', id, 'room_refund_admin_' + id + '_' + role, { whatsapp: false });
     } catch (e) { /* the payout record is the source of truth */ }
   });
   return created;
@@ -26112,10 +26175,12 @@ function getMyOrders() {
         const forfeit = p.find(x => String(x.leg) === forfeitLeg || (/^dispute:/.test(String(x.leg)) && String(x.leg).split(':').pop() === role && Number(x.amount) > 0));
         const rentRow = p.find(x => String(x.leg) === 'rent');
         const rentCut = rentRow ? Number(rentRow.amount || 0) : 0;
+        const feeRow = p.find(x => String(x.leg) === 'fee:' + role);
+        const feeCut = feeRow ? Number(feeRow.amount || 0) : (role === 'requester' || role === 'owner' ? feeTakenFromDeposit_(swap.obj, caller, myFee) : 0);
         deposit = forfeit ? { amount: paid.deposit, status: 'forfeited', note: 'Forfeited' + (forfeit.amount ? ' (₹' + forfeit.amount + ')' : '') }
-          : refund ? { amount: Number(refund.amount || paid.deposit), status: refund.payoutStatus === 'PAID_TO_OWNER' ? 'refunded' : 'refund_due', paidAt: refund.paidAt || '', rent: rentCut, of: paid.deposit }
+          : refund ? { amount: Number(refund.amount || paid.deposit), status: refund.payoutStatus === 'PAID_TO_OWNER' ? 'refunded' : 'refund_due', paidAt: refund.paidAt || '', rent: rentCut, fee: feeCut, of: paid.deposit }
           : rentCut >= paid.deposit ? { amount: 0, status: 'rent_used', rent: rentCut, of: paid.deposit }
-          : { amount: paid.deposit, status: 'held', rent: role === 'requester' ? rentChargeFor_(swap.obj) : 0, of: paid.deposit };
+          : { amount: paid.deposit, status: 'held', rent: role === 'requester' ? rentChargeFor_(swap.obj) : 0, fee: feeCut, of: paid.deposit };
       }
       // A seller's payout, or an owner's rent.
       let payout = null;

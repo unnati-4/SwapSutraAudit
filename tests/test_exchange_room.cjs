@@ -318,7 +318,6 @@ const step = (r, n) => r.steps.find(s => s.n === n);
   env.video('S4', 'outbound', 'QUALITY', 'own@x.com', T0 + 1 * H);
   room(env, "req@x.com");
   env.setFee('S4', 'requester', 'ADMIN_PENDING');
-  env.setFee('S4', 'owner', 'ADMIN_APPROVED');   // the owner's ₹10 platform fee
   env.api.runExchangeRoomTicks_(T0 + 60 * H);
   check('80. A payment that was made and is being verified is never closed', env.swapStatus('S4') === 'Accepted');
   const rp = room(env, 'req@x.com');
@@ -326,7 +325,7 @@ const step = (r, n) => r.steps.find(s => s.n === n);
   const c = act(env, 'req@x.com', { swapId: 'S4', act: 'close', reason: 'Found it elsewhere' });
   check('82. A reader can still close before the payment is verified', c.success === true && env.swapStatus('S4') === 'Cancelled');
   const pay = env.payouts('S4');
-  check('83. ...and what each reader paid is queued for a full refund', pay.map(p => p.leg + ':' + p.amount).sort().join() === 'refund:owner:10,refund:requester:310', JSON.stringify(pay));
+  check('83. ...and what the borrower paid is queued for a full refund (a lending owner pays nothing)', pay.map(p => p.leg + ':' + p.amount).sort().join() === 'refund:requester:310', JSON.stringify(pay));
   check('84. The closed room shows step 16 done and the rest closed', (() => { const r = room(env, 'req@x.com'); return r.closed && step(r, 16).state === 'done' && step(r, 5).state === 'closed'; })());
   check('85. The chat of a closed request is not open', env.ctx.roomChatOpen_('S4') === false);
 }
@@ -384,7 +383,7 @@ const step = (r, n) => r.steps.find(s => s.n === n);
   const r = room(env, 'own@x.com');
   check('100. An exchange done before the room (no videos) counts its earlier steps done', [3, 5, 8, 9].every(n => step(r, n).state === 'done') && r.exchangeDone, r.steps.map(s => s.n + s.state[0]).join(' '));
   env.api.runExchangeRoomTicks_(T0 + H);
-  check('101. The hourly job records completion and refunds both deposits', env.payouts('S7').map(p => p.leg + ':' + p.amount).sort().join() === 'refund:owner:220,refund:requester:200', JSON.stringify(env.payouts('S7')));
+  check('101. The hourly job records completion and refunds both deposits, minus ₹10 each', env.payouts('S7').map(p => p.leg + ':' + p.amount).sort().join() === 'fee:owner:10,fee:requester:10,refund:owner:210,refund:requester:190', JSON.stringify(env.payouts('S7')));
   env.api.runExchangeRoomTicks_(T0 + 8 * D + H);
   check('102. A room nobody rates closes by itself after 7 days', env.chatStatus('S7') === 'Archived');
 }

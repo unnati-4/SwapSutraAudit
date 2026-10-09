@@ -22,7 +22,7 @@ This policy covers two completely separate kinds of money. Please do not confuse
 | | **Part A — SwapSutra's fees** | **Part B — Security deposits** |
 |---|---|---|
 | Paid to | SwapSutra | SwapSutra, held against the book |
-| Amount | ₹10 per reader per exchange; ₹20 for 3 months of listings beyond the free 20 | 65% of the book's MRP (swap, rent, lend); none on a sale |
+| Amount | ₹10 per reader per exchange (swap: kept from the deposit; lend: borrower only); ₹20 for 3 months of listings beyond the free 20 | 65% of the book's MRP (swap, rent, lend); none on a sale |
 | Purpose | Running the platform | Protection against a book not coming back |
 | Refunded by | SwapSutra | SwapSutra, once the return is confirmed |
 
@@ -34,7 +34,13 @@ Joining SwapSutra is free and membership does not expire. SwapSutra charges two 
 
 ## A1. Platform fee — ₹10 per reader, per exchange
 
-Charged to each reader when an exchange is accepted, before the exchange chat opens. Where the exchange also needs a security deposit, the QR code shows the two together; they are recorded separately, and only the deposit is ever refundable under Part B.
+How it is charged depends on the exchange:
+
+- **Swap** — not paid up front. Each reader pays only their security deposit; when the exchange is complete, **₹10 is kept from each deposit and the rest is refunded** (deposit − ₹10). If a deposit is forfeited under the 21-day rule, ₹10 is kept and the rest is paid to the book's owner. A swap that closes before the exchange happens is refunded in full, with nothing kept.
+- **Loan (lend)** — **only the borrower pays ₹10**, together with the deposit, before the exchange chat opens. The lending owner pays nothing.
+- **Rental and sale** — each reader pays ₹10 when the exchange is accepted, before the exchange chat opens.
+
+Where a payment also includes a security deposit, the QR code shows the two together; they are recorded separately.
 
 | Situation | Refund |
 |---|---|
@@ -97,14 +103,14 @@ Every exchange (sale, rental, loan or swap) runs in one **exchange room**: both 
 - The reader sending a book records its **condition video within 48 hours** of the request being accepted, so the paying reader sees the book first.
 - The payment is due **within 48 hours** of that video. If it is not made (or the condition video is not recorded) in time, the request **closes automatically**. Either reader may also close it before the payment is verified.
 - If a request closes before the exchange happens, anything already paid — deposit **and** platform fee — is refunded in full.
-- When the exchange is complete, each verified security deposit is refunded to the reader who paid it (to the UPI ID saved in their settings), unless it was forfeited under the return rule or decided otherwise in a dispute.
+- When the exchange is complete, each verified security deposit is refunded to the reader who paid it (to the UPI ID saved in their settings) — in a swap minus the ₹10 platform fee, in a rental minus the rent (paid to the owner) — unless it was forfeited under the return rule or decided otherwise in a dispute.
 
 ## B2a. The 21-day return rule (strict)
 
 - A borrowed book — rented, lent, or received in a temporary swap — must be **on its way back within 21 days** of reaching the borrower: handed over in person, or posted with the **courier name and tracking ID** entered in the app by the end of day 21.
 - **One extension of +7 days.** With 7 days left, a reminder is posted in the exchange room. In the **3 days after it**, the reader who has the book may ask for +7 days, once; it applies only if the book's owner agrees in the app. Otherwise the return goes ahead (courier or in person).
 - Once the book has been posted in time, a slow courier is not held against the borrower.
-- If the book is **not on its way back by the deadline**, the borrower's **deposit is forfeited and paid to the book's owner**. The borrower must still return the book.
+- If the book is **not on its way back by the deadline**, the borrower's **deposit is forfeited and paid to the book's owner** (in a swap, minus the ₹10 platform fee). The borrower must still return the book.
 - SwapSutra sends reminders in the app and by email (and WhatsApp where available) with 7, 3 and 1 days left and on the last day.
 
 For a book with no printed MRP, readers should agree a reasonable figure based on current retail value. If you cannot agree, do not proceed with the exchange.
