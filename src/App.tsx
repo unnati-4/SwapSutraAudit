@@ -8028,7 +8028,7 @@ export default function App() {
     if (!requireCurrentReadLogin()) return;
     const circleObj = currentReadCircles.find(c => c.id === circleId);
     if ((circleObj as any)?.isExclusive || (circleObj as any)?.is_exclusive) {
-      if (userTier !== 'premium' && !isAdmin) {
+      if (!isRegisteredMember && !isAdmin) {
         showMembershipRequired();
         return;
       }
@@ -11545,7 +11545,10 @@ export default function App() {
 
   const handleSendMessage = async (text: string) => {
     if (!activeChat || !activeUserEmail || !text.trim()) return;
-    if (userTier !== 'premium' && !isAdmin) {
+    // 9 Oct 2026: membership is free, so every registered reader is 'trial'
+    // — this used to require 'premium', which silently stopped EVERY normal
+    // reader's message from being sent. Only a paused account is stopped.
+    if (!isAdmin && (!isRegisteredMember || userTier === 'expired')) {
       showMembershipRequired();
       return;
     }
@@ -11579,13 +11582,11 @@ export default function App() {
         dropPending();
         if (data.error === 'PREMIUM_REQUIRED') {
           showMembershipRequired();
-        } else if (data.error === 'SECURITY_FEE_PENDING') {
-          // Master state machine chat gate: make the lock a visible
-          // consequence to the sender, not a silently-dropped message —
-          // the backend already computed the precise reason.
-          window.alert(data.message || 'Chat unlocks once SwapSutra has approved every required security-fee payment on this exchange.');
         } else {
+          // Never drop a message silently: say why (a phone number or
+          // address in the text, a closed room, a paused account…).
           console.error("Failed to send message:", data.message);
+          notify.error(data.message || 'Your message could not be sent. Please try again.');
         }
       } else {
         // Swap the pending bubble for the saved message right away.
