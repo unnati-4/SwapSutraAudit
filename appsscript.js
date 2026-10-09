@@ -26624,7 +26624,11 @@ const PARTNER_DOCS = {
 };
 const PARTNER_OPTIONAL_DOCS = { businessProof: 'Business proof (optional)', other: 'Any other document (optional)' };
 
-function partnerCommissionRate_() { const n = Number(readScriptProperty_('PARTNER_COMMISSION_PERCENT')); return (isFinite(n) && n >= 0 && n <= 50 ? n : 2) / 100; }
+function partnerCommissionRate_() {
+  const raw = readScriptProperty_('PARTNER_COMMISSION_PERCENT');
+  const n = raw === null || raw === undefined || String(raw).trim() === '' ? NaN : Number(raw);
+  return (isFinite(n) && n >= 0 && n <= 50 ? n : 2) / 100;
+}
 function partnerAdFee_() { const n = Number(readScriptProperty_('PARTNER_AD_FEE')); return isFinite(n) && n > 0 ? Math.round(n) : 100; }
 const PARTNER_AD_PERIOD_MONTHS = 2;
 const PARTNER_FREE_PROMO_MONTHS = 6;
