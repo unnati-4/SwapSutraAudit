@@ -18,7 +18,7 @@ import {
   Film, Settings, ChevronLeft, LogOut, ExternalLink, Archive,
   Bell, ArrowDownLeft, ArrowUpRight, MessageCircle, Send, Paperclip,
   Instagram, Youtube, Linkedin, Facebook, Loader, ChevronDown, Eye, FileText, CheckCircle, CheckSquare, AlertTriangle, Image as ImageIcon,
-  Feather, Award, Zap, Sparkles, Smile, Trophy, Heart, Compass, Gift,
+  Feather, Award, Zap, Sparkles, Smile, Trophy, Heart, Compass, Gift, Megaphone,
   Share2, UserRound, ShoppingBag, ShoppingCart,
 } from 'lucide-react';
 import { } from 'qrcode.react';
@@ -122,6 +122,8 @@ import ReaderProfile, { type ReaderProfileData } from './components/ReaderProfil
 import { track, trackOnce, captureReferralFromUrl, storedReferralCode, clearStoredReferralCode, recordVisit, recordListingFormOpen } from './services/analytics';
 import InviteReaders from './components/InviteReaders';
 import LibraryHero from './components/LibraryHero';
+import { ShelfAdCard, ShelfMugCard } from './components/SponsoredAds';
+import { adShowsOn, loadShelfMugs, loadSponsoredAds, mixShelf, newShelfSeed, type ShelfMug, type SponsoredAd } from './utils/ads';
 import { downscaleImageFile, loadImageElement } from './utils/imageCompress';
 
 // PERF: the admin consoles and the circulation/swap machinery are roughly
@@ -169,6 +171,11 @@ const MugsPage = lazyScreen<any>(
 const AdminCustomMugs = lazyScreen<any>(
   () => import('./components/mugs/AdminCustomMugs'),
   'Opening custom mug enquiries'
+);
+// Sponsored ads (9 Oct): the admin's Ads tab loads on demand.
+const AdminSponsoredAds = lazyScreen<any>(
+  () => import('./components/AdminSponsoredAds'),
+  'Opening the ads'
 );
 const AdminMugProducts = lazyScreen<any>(
   () => import('./components/mugs/AdminMugProducts'),
@@ -4501,7 +4508,7 @@ const ManagementConsole = memo(() => {
       return;
     }
     // Screens that load their own data (no generic fetch, no error banner).
-    if (currentTab === 'customMugs') { setLoading(false); return; }
+    if (currentTab === 'customMugs' || currentTab === 'sponsoredAds') { setLoading(false); return; }
     let apiActions: string[] = [];
     if (currentTab === 'dashboard') apiActions = ['getAdminDashboardMetrics'];
     else if (currentTab === 'approvals') apiActions = ['getPendingMembershipApprovals'];
@@ -4620,6 +4627,7 @@ const ManagementConsole = memo(() => {
     { id: 'bookPricing', label: 'Book Pricing', icon: BookOpen },
     { id: 'readerBadges', label: 'Badges', icon: Star },
     { id: 'customMugs', label: 'Mugs', icon: Gift },
+    { id: 'sponsoredAds', label: 'Ads', icon: Megaphone },
   ];
 
   const normalizeStatus = (status: any) => String(status || '').trim().toLowerCase();
@@ -5022,6 +5030,7 @@ const ManagementConsole = memo(() => {
           <AdminReaderBadges />
         )}
 
+        {tab === 'sponsoredAds' && <AdminSponsoredAds />}
         {tab === 'customMugs' && (
           <AdminCustomMugs />
         )}
@@ -10386,6 +10395,34 @@ export default function App() {
     return result;
   }, [books, search, pincodeFilter, conditionFilter, genreFilter, libraryCategoryFilter, libraryShelf, userCoords, nearbyRadiusKm]);
 
+  // 9 Oct 2026 (owner's request): the admin's sponsored ads show on the
+  // Library banner and between the books, and every time the Library is
+  // opened the books are shuffled with mugs and ads in between.
+  const [sponsoredAds, setSponsoredAds] = useState<SponsoredAd[]>([]);
+  const [shelfMugs, setShelfMugs] = useState<ShelfMug[]>([]);
+  const [shelfSeed, setShelfSeed] = useState(newShelfSeed);
+  useEffect(() => {
+    if (activeTab !== 'browse') return;
+    setShelfSeed(newShelfSeed());
+    let alive = true;
+    loadSponsoredAds().then((a) => { if (alive) setSponsoredAds(a); });
+    loadShelfMugs().then((m) => { if (alive) setShelfMugs(m); });
+    return () => { alive = false; };
+  }, [activeTab]);
+  const bannerAds = useMemo(() => sponsoredAds.filter((a) => adShowsOn(a, 'banner')), [sponsoredAds]);
+  const shelfItems = useMemo(() => {
+    // While a reader is searching, the shelf shows only the matching books.
+    const quiet = search.trim().length > 0;
+    return mixShelf(filteredBooks, quiet ? [] : shelfMugs, quiet ? [] : sponsoredAds.filter((a) => adShowsOn(a, 'shelf')), shelfSeed,
+      { keepBookOrder: !!userCoords });
+  }, [filteredBooks, shelfMugs, sponsoredAds, shelfSeed, search, userCoords]);
+  const openAdBook = useCallback((bookId: string) => {
+    const b = books.find((x) => String(x.id) === String(bookId));
+    if (!b) return false;
+    setShowBookDetail(b);
+    return true;
+  }, [books]);
+
   // Open a shared listing once the Library has arrived.
   //
   // Waits for `books` rather than firing on mount, because the id in the
@@ -15479,6 +15516,9 @@ export default function App() {
                     onBrowse={() => document.getElementById('library-search')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
                     onJoin={handleBecomeMemberClick}
                     showJoin={!activeUserEmail}
+                    ads={bannerAds}
+                    onOpenAdBook={openAdBook}
+                    adStart={shelfSeed}
                   />
                   {/* 30 Sep: "Books wanted" moved to Community → Book requests. */}
 
@@ -15803,15 +15843,20 @@ export default function App() {
                                             {!loading && (
                                               <div>
                                                 <div className="ss-shelf">
-                                                  {filteredBooks.map((book) => (
+                                                  {/* 9 Oct: books shuffled each visit, with mugs and sponsored ads between them. */}
+                                                  {shelfItems.map((item) => item.type === 'book' ? (
                                                     <ShelfBook
-                                                      key={book.id}
-                                                      book={book}
+                                                      key={item.key}
+                                                      book={item.book}
                                                       onShowBookDetail={(bk: any) => setShowBookDetail(bk)}
                                                     />
+                                                  ) : item.type === 'ad' ? (
+                                                    <ShelfAdCard key={item.key} ad={item.ad} onOpenBook={openAdBook} />
+                                                  ) : (
+                                                    <ShelfMugCard key={item.key} mug={item.mug} onOpen={() => navigateTo('mugs')} />
                                                   ))}
                                                   {/* Fill out the last shelf so its plank runs the full width. */}
-                                                  {shelfFillers(filteredBooks.length, 'shelf-gap')}
+                                                  {shelfFillers(shelfItems.length, 'shelf-gap')}
                                                 </div>
 
                                               </div>

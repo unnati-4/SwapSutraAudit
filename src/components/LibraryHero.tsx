@@ -1,5 +1,7 @@
 import React, { useMemo, useRef } from 'react';
 import { shelfCoverUrl } from '../utils/bookCover';
+import type { SponsoredAd } from '../utils/ads';
+import { SponsoredBanner } from './SponsoredAds';
 
 /**
  * The Library's front (30 Sep 2026): a bookshop window.
@@ -23,8 +25,12 @@ export interface HeroBook {
 
 const coverOf = (b: HeroBook) => shelfCoverUrl(b.isbn);
 
-export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onBrowse, onJoin, showJoin }: {
+export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onBrowse, onJoin, showJoin, ads = [], onOpenAdBook, adStart = 0 }: {
   books: B[];
+  /** Sponsored ads for the banner (9 Oct 2026); shown under the window. */
+  ads?: SponsoredAd[];
+  onOpenAdBook?: (bookId: string) => boolean;
+  adStart?: number;
   onOpenBook: (b: B) => void;
   onBrowse: () => void;
   onJoin?: () => void;
@@ -78,6 +84,9 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
           )}
         </div>
       </div>
+
+      {/* 9 Oct 2026: the admin's sponsored ads — a bookstore, an author or a book. */}
+      <SponsoredBanner ads={ads} onOpenBook={onOpenAdBook} startAt={adStart} />
 
       {row.length >= 4 && (
         <div className="lib-row">

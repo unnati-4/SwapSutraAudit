@@ -493,7 +493,10 @@ const SESSION_EXEMPT_ACTIONS = {
   // Coffee mugs (30 Sep): the shelf is public, and anyone may send a
   // custom mug idea (validated, rate-limited, honeypot) without an account.
   getMugProducts: true,
-  submitCustomMugEnquiry: true
+  submitCustomMugEnquiry: true,
+  // Sponsored ads (9 Oct): shown to everyone; a click is only counted.
+  getSponsoredAds: true,
+  recordAdClick: true
 };
 
 /**
@@ -2513,6 +2516,8 @@ function doGetHandler_(e) {
     if (action === 'getMugProducts') return respondJson(getMugProducts());
     if (action === 'getAdminCustomMugEnquiries') return respondJson(getAdminCustomMugEnquiries(e.parameter || {}));
     if (action === 'getAdminMugProducts') return respondJson(getAdminMugProducts());
+    // Sponsored ads (9 Oct).
+    if (action === 'getSponsoredAds') return respondJson(getSponsoredAds());
 
     if (action === 'getCafeStoryViewers') {
       return respondJson(getCafeStoryViewers(e.parameter || {}));
@@ -6378,6 +6383,12 @@ function doPostHandler_(e) {
     if (action === 'updateCustomMugEnquiry') return respondJson(updateCustomMugEnquiry(data));
     if (action === 'getAdminMugProducts') return respondJson(getAdminMugProducts());
     if (action === 'saveMugProduct') return respondJson(saveMugProduct(data));
+    // Sponsored ads (9 Oct) — see the block after getMugProducts.
+    if (action === 'getSponsoredAds') return respondJson(getSponsoredAds());
+    if (action === 'recordAdClick') return respondJson(recordAdClick(data));
+    if (action === 'getAdminSponsoredAds') return respondJson(getAdminSponsoredAds());
+    if (action === 'saveSponsoredAd') return respondJson(saveSponsoredAd(data));
+    if (action === 'uploadSponsoredAdImage') return respondJson(uploadSponsoredAdImage(data));
     if (action === 'getDailyPushAdmin' || action === 'setDailyPushSettings' || action === 'sendDailyPushTest') {
       if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: 'Unauthorized' });
       if (action === 'getDailyPushAdmin') return respondJson(getDailyPushAdmin(data));
@@ -23064,6 +23075,201 @@ function getMugProducts() {
   } catch (err) {
     Logger.log('getMugProducts failed: ' + err);
     return { success: false, items: [], message: 'The mug shelf could not be loaded.' };
+  }
+}
+
+
+// =====================================================================
+// SPONSORED ADS — bookstores, authors and books (9 Oct 2026)
+// ---------------------------------------------------------------------
+// The admin places an ad for a bookstore, an author or a particular book.
+// It shows on the Library's banner, between the books on the shelf, or
+// both. Every ad is labelled "Sponsored" on the site and its link opens
+// with rel="sponsored". A "book" ad may point at a SwapSutra listing
+// (bookId) instead of an outside link.
+//
+//   SponsoredAds   one row per ad; status live / paused / removed.
+//                  startDate / endDate (optional, yyyy-mm-dd, IST) limit
+//                  when a live ad shows. clicks is a simple counter.
+// =====================================================================
+
+const AD_HEADERS = [
+  'id', 'kind', 'sponsor', 'headline', 'tagline', 'imageUrl', 'linkUrl', 'bookId',
+  'ctaLabel', 'placement', 'status', 'startDate', 'endDate', 'clicks',
+  'createdAt', 'updatedAt', 'createdBy'
+];
+const AD_KINDS = ['bookstore', 'author', 'book'];
+const AD_PLACEMENTS = ['both', 'banner', 'shelf'];
+const AD_STATUSES = ['live', 'paused', 'removed'];
+const AD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+
+function adSheet_() {
+  const sheet = getOrCreateSheet('SponsoredAds', AD_HEADERS);
+  ensureSheetHeaders(sheet, AD_HEADERS);
+  return sheet;
+}
+
+function adRows_() {
+  const values = adSheet_().getDataRange().getValues();
+  if (!values.length) return { headers: AD_HEADERS.slice(), rows: [] };
+  const headers = values[0].map(function (h) { return String(h).trim(); });
+  const rows = [];
+  for (let i = 1; i < values.length; i++) {
+    const o = {};
+    headers.forEach(function (h, j) { o[h] = values[i][j] instanceof Date ? values[i][j].toISOString() : values[i][j]; });
+    if (String(o.id || '').trim()) rows.push({ rowIndex: i, obj: o });
+  }
+  return { headers: headers, rows: rows };
+}
+
+/** yyyy-mm-dd for "today" in India. */
+function adTodayIst_(now) {
+  const d = new Date((now ? now.getTime() : Date.now()) + 5.5 * 3600e3);
+  return d.toISOString().slice(0, 10);
+}
+function adDate_(v) {
+  if (v instanceof Date) return new Date(v.getTime() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const s = String(v || '').trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '';
+}
+
+/** Is this ad on the site right now? */
+function adIsShowing_(o, today) {
+  if (String(o.status || '').toLowerCase() !== 'live') return false;
+  const start = adDate_(o.startDate), end = adDate_(o.endDate);
+  if (start && today < start) return false;
+  if (end && today > end) return false;
+  return true;
+}
+
+/**
+ * Public: the ads to show now. Only what a visitor needs — no click
+ * counts, no admin details.
+ */
+function getSponsoredAds() {
+  try {
+    const today = adTodayIst_();
+    const https = function (u) { u = String(u || '').trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u : ''; };
+    const items = adRows_().rows.map(function (r) { return r.obj; })
+      .filter(function (o) { return adIsShowing_(o, today) && String(o.headline || '').trim() && (https(o.linkUrl) || String(o.bookId || '').trim()); })
+      .map(function (o) {
+        const placement = AD_PLACEMENTS.indexOf(String(o.placement)) === -1 ? 'both' : String(o.placement);
+        return {
+          id: String(o.id), kind: AD_KINDS.indexOf(String(o.kind)) === -1 ? 'book' : String(o.kind),
+          sponsor: mugText_(o.sponsor, 80), headline: mugText_(o.headline, 90), tagline: mugText_(o.tagline, 160),
+          imageUrl: https(o.imageUrl), linkUrl: https(o.linkUrl), bookId: mugText_(o.bookId, 60),
+          ctaLabel: mugText_(o.ctaLabel, 30), placement: placement
+        };
+      });
+    return { success: true, items: items };
+  } catch (err) {
+    Logger.log('getSponsoredAds failed: ' + err);
+    return { success: true, items: [] };
+  }
+}
+
+/** Public: count a click (no reader details are stored). */
+function recordAdClick(data) {
+  const id = String((data || {}).id || '').trim();
+  if (!id) return { success: false };
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(3000)) return { success: false };
+  try {
+    const sheet = adSheet_();
+    const all = adRows_();
+    const hit = all.rows.find(function (r) { return String(r.obj.id) === id; });
+    if (!hit || !adIsShowing_(hit.obj, adTodayIst_())) return { success: false };
+    const col = all.headers.indexOf('clicks');
+    sheet.getRange(hit.rowIndex + 1, col + 1).setValue((Number(hit.obj.clicks) || 0) + 1);
+    return { success: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getAdminSponsoredAds() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const today = adTodayIst_();
+  const items = adRows_().rows.map(function (r) { return r.obj; })
+    .filter(function (o) { return String(o.status || '').toLowerCase() !== 'removed'; })
+    .map(function (o) {
+      return Object.assign({}, o, { startDate: adDate_(o.startDate), endDate: adDate_(o.endDate), clicks: Number(o.clicks) || 0, showingNow: adIsShowing_(o, today) });
+    });
+  return { success: true, items: items, kinds: AD_KINDS, placements: AD_PLACEMENTS, statuses: AD_STATUSES };
+}
+
+/** Validation shared by save and the tests. Returns { errors, clean }. */
+function validateSponsoredAd_(data) {
+  const d = data || {};
+  const errors = {};
+  const https = function (u) { u = String(u || '').trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u.slice(0, 1000) : ''; };
+  const status = String(d.status || 'live').toLowerCase();
+  const clean = {
+    kind: String(d.kind || '').toLowerCase(), sponsor: mugText_(d.sponsor, 80), headline: mugText_(d.headline, 90),
+    tagline: mugText_(d.tagline, 160), imageUrl: https(d.imageUrl), linkUrl: https(d.linkUrl), bookId: mugText_(d.bookId, 60),
+    ctaLabel: mugText_(d.ctaLabel, 30), placement: String(d.placement || 'both').toLowerCase(), status: status,
+    startDate: adDate_(d.startDate), endDate: adDate_(d.endDate)
+  };
+  if (AD_STATUSES.indexOf(status) === -1) errors.status = 'Unknown status.';
+  if (status === 'removed') return { errors: errors, clean: clean };
+  if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author or book.';
+  if (AD_PLACEMENTS.indexOf(clean.placement) === -1) errors.placement = 'Choose where the ad shows.';
+  if (!clean.sponsor) errors.sponsor = 'Who is the ad for? (the bookstore, author or publisher)';
+  if (!clean.headline) errors.headline = 'Write a short headline.';
+  if (String(d.linkUrl || '').trim() && !clean.linkUrl) errors.linkUrl = 'The link must start with https://.';
+  if (!clean.linkUrl && !(clean.kind === 'book' && clean.bookId)) errors.linkUrl = clean.kind === 'book'
+    ? 'Paste a link (https://) or pick the SwapSutra listing.' : 'Paste the link the ad opens (https://).';
+  if (String(d.imageUrl || '').trim() && !clean.imageUrl) errors.imageUrl = 'The image link must start with https://.';
+  if (!clean.imageUrl) errors.imageUrl = 'Add the ad picture (upload one or paste an https:// link).';
+  if (String(d.startDate || '').trim() && !clean.startDate) errors.startDate = 'Use a date like 2026-10-15.';
+  if (String(d.endDate || '').trim() && !clean.endDate) errors.endDate = 'Use a date like 2026-10-31.';
+  if (clean.startDate && clean.endDate && clean.endDate < clean.startDate) errors.endDate = 'The end date is before the start date.';
+  return { errors: errors, clean: clean };
+}
+
+function saveSponsoredAd(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const v = validateSponsoredAd_(data);
+  if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = adSheet_();
+    const all = adRows_();
+    const headers = all.headers;
+    const id = String((data || {}).id || '').trim();
+    const hit = id ? all.rows.find(function (r) { return String(r.obj.id) === id; }) : null;
+    if (id && !hit) return { success: false, message: 'That ad no longer exists.' };
+    const now = new Date().toISOString();
+    const rec = hit ? Object.assign({}, hit.obj) : { id: 'AD-' + Utilities.getUuid().slice(0, 8).toUpperCase(), clicks: 0, createdAt: now, createdBy: getAuthenticatedEmail() || '' };
+    if (v.clean.status === 'removed') rec.status = 'removed';
+    else Object.keys(v.clean).forEach(function (k) { rec[k] = v.clean[k]; });
+    rec.updatedAt = now;
+    const row = headers.map(function (h) { return rec[h] !== undefined ? rec[h] : ''; });
+    if (hit) sheet.getRange(hit.rowIndex + 1, 1, 1, row.length).setValues([row]);
+    else sheet.appendRow(row);
+    return { success: true, id: rec.id };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Admin: upload the ad picture to Drive and get back a link for it. */
+function uploadSponsoredAdImage(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const raw = String((data || {}).dataUrl || '');
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+\/=]+)$/.exec(raw);
+  if (!m) return { success: false, message: 'Choose a JPG, PNG or WebP picture.' };
+  const bytes = Utilities.base64Decode(m[2]);
+  if (bytes.length > AD_IMAGE_MAX_BYTES) return { success: false, message: 'The picture is too large (2 MB at most).' };
+  try {
+    const folder = getOrCreateFolder('SwapSutra_Ads');
+    const file = folder.createFile(Utilities.newBlob(bytes, m[1], 'ad_' + Date.now() + '.' + m[1].split('/')[1]));
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return { success: true, url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w1600' };
+  } catch (err) {
+    Logger.log('uploadSponsoredAdImage failed: ' + err);
+    return { success: false, message: 'The picture could not be saved. Try again, or paste an image link.' };
   }
 }
 
