@@ -68,7 +68,7 @@ with sync_playwright() as p:
 
     pg.goto(BASE + '/cart'); pg.wait_for_timeout(1200)
     check('7. The Cart opens for a visitor (empty)', pg.locator('[data-testid="cart-page"]').is_visible() and pg.get_by_text('Your cart is empty').count() == 1)
-    pg.get_by_role('tab', name='Wanted').click(); pg.wait_for_timeout(300)
+    pg.get_by_role('tab', name='Wishlist').click(); pg.wait_for_timeout(300)
     pg.get_by_role('button', name='Request a book').first.click(); pg.wait_for_timeout(400)
     check('8. Requesting a book from the Cart asks to sign in', modal())
     close(); pg.wait_for_timeout(300)

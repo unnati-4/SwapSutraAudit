@@ -176,7 +176,7 @@ const AdminMugProducts = lazyScreen<any>(
 );
 import {apiUrl, SHARE_ORIGIN} from './config/runtime';
 import { shelfCoverCandidates, shelfCoverUrl } from './utils/bookCover';
-import CartPage, { type CartView } from './components/CartPage';
+import CartPage, { type CartView, type CartOrder } from './components/CartPage';
 import { depositLine, DEPOSIT_ESTIMATE_EXPLAINER } from './utils/deposit';
 import { buildShelfImage } from './utils/shelfImage';
 import { swapMatch } from './utils/swapMatch';
@@ -12189,6 +12189,22 @@ export default function App() {
   // Requests / Chats / Wanted panels (notifications, /my-requests, "open
   // chat" links) land on the matching Cart view instead.
   const [cartView, setCartView] = useState<CartView>('cart');
+  // My orders (9 Oct 2026): exchanges whose room has closed. Fetched when the
+  // cart opens and whenever a chat is closed, so a finished book moves from
+  // the cart to My orders.
+  const [myOrders, setMyOrders] = useState<CartOrder[]>([]);
+  useEffect(() => {
+    if (activeTab !== 'cart' || !activeUserEmail) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'getMyOrders' }) });
+        const d = await res.json();
+        if (!cancelled && d?.success && Array.isArray(d.orders)) setMyOrders(d.orders);
+      } catch { /* the cart still works without orders */ }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, activeUserEmail, activeChat]);
   // Requests for my books still waiting on me — the badge on the cart icon.
   const cartNeedsYou = activeUserEmail
     ? swapRequests.filter((r: any) => normalizeEmail(r.receiverEmail) === activeUserEmail && String(r.status || '').toLowerCase() === 'pending').length
@@ -15971,6 +15987,7 @@ export default function App() {
                   received={swapRequests.filter((r: any) => normalizeEmail(r.receiverEmail) === activeUserEmail) as any}
                   chats={activeChats.filter((c) => isAdmin || c.chatStatus !== 'Archived')}
                   wanted={userBookRequests}
+                  orders={myOrders}
                   busy={submitting}
                   coverFor={(bookId, title) => {
                     const b: any = books.find((x: any) => String(x.id) === String(bookId || ''))
@@ -16178,7 +16195,7 @@ export default function App() {
                           ? [
                               { sub: 'requests', label: `Swaps (${profileData.swapRequests.length})` },
                               { sub: 'chats', label: `Chats (${activeChats.length})` },
-                              { sub: 'book-requests', label: `Wanted (${userBookRequests.length})` },
+                              { sub: 'book-requests', label: `Wishlist (${userBookRequests.length})` },
                             ]
                           : [
                               { sub: 'journey', label: 'Journey' },

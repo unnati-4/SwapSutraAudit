@@ -4173,6 +4173,20 @@ body { overflow-x: clip; }
 }
 .cart-status.is-accepted, .cart-status.is-fulfilled { background: #E6F3EA; color: #2F6B45; }
 .cart-status.is-declined, .cart-status.is-cancelled { background: #FBE9E9; color: #A33A3A; }
+/* My orders (9 Oct 2026) */
+.cart-status.is-completed { background: #E6F3EA; color: #2F6B45; }
+.cart-order__parts { font-weight: var(--font-weight-regular, 400); color: var(--text-secondary); }
+.cart-order__line { margin: 0; font-family: var(--font-ui); font-size: var(--font-size-xs, 0.75rem); color: var(--text-secondary); }
+.cart-order__line.is-bad { color: #A33A3A; }
+.cart-order-filters { display: flex; gap: 0.4rem; overflow-x: auto; scrollbar-width: none; padding-bottom: 0.25rem; }
+.cart-order-filters::-webkit-scrollbar { display: none; }
+.cart-order-filter { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.35rem; min-height: 36px; padding: 0 0.85rem; border-radius: 999px; border: 1px solid rgba(34, 29, 26, 0.12); background: var(--bg-surface, #FFFFFF); color: var(--text-secondary); font-family: var(--font-ui); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); cursor: pointer; }
+.cart-order-filter span { opacity: 0.7; }
+.cart-order-filter.is-on { background: var(--text-primary); color: #FFFFFF; border-color: transparent; }
+.cart-order-section { display: grid; gap: 0.7rem; }
+.cart-order-section__title { margin: 0.6rem 0 0; font-family: var(--font-ui); font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); color: var(--text-primary); }
+.cart-order-section__title span { color: var(--text-secondary); font-weight: var(--font-weight-semibold); }
+.cart-order-section__title span.is-alert { color: var(--color-brand-gold, #8E4A59); }
 
 .cart-btn {
   display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 1rem; border-radius: 999px;

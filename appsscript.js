@@ -6418,6 +6418,7 @@ function doPostHandler_(e) {
     if (action === 'getExchangeVideos') return respondJson(getExchangeVideos(data));
     // Oct 2026 — the Exchange Room (one place: chat + every step).
     if (action === 'getExchangeRoom') return respondJson(getExchangeRoom(data));
+    if (action === 'getMyOrders') return respondJson(getMyOrders(data));
     if (action === 'exchangeRoomAction') return respondJson(exchangeRoomAction(data));
     if (action === 'vmsStartUpload') return respondJson(vmsStartUpload(data));
     if (action === 'vmsUploadChunk') return respondJson(vmsUploadChunk(data));
@@ -25925,5 +25926,141 @@ function resolveMapsLink(data) {
   } catch (err) {
     Logger.log('resolveMapsLink failed: ' + err);
     return { success: false, message: 'That link could not be opened. Try searching the place by name instead.' };
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   MY ORDERS (9 Oct 2026, owner's request)
+   ────────────────────────────────────────────────────────────────────────
+   When an exchange room closes, the book leaves the cart and appears under
+   "My orders": the book, who it was with, what kind of exchange, when, and
+   what this reader paid — book price, deposit and fee separately — with
+   the deposit refund (or the seller's payout) and where it stands.
+   An exchange is an order once it is complete AND its room has closed
+   (both readers rated, or 7 days passed), sorted into sold / received /
+   swapped / rented / lent. A rented, lent or temporarily swapped book that
+   has reached the reader but not come back yet is listed under "in return
+   process" (its room is still open). Requests that closed without an
+   exchange (cancelled / not paid in 48 h) are not orders.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const ORDER_KIND = {
+  requester: { SELL: 'Bought', RENT: 'Rented', LEND: 'Borrowed', SWAP: 'Swapped' },
+  owner: { SELL: 'Sold', RENT: 'Rented out', LEND: 'Lent', SWAP: 'Swapped' }
+};
+// The sections of My orders (owner's request, 9 Oct 2026): sold, received,
+// swapped, rented, lent — and "in return process" for a book that is out
+// with a reader (or on its way back) right now.
+function orderCategory_(role, type) {
+  if (type === 'SELL') return role === 'owner' ? 'sold' : 'received';
+  if (type === 'SWAP') return 'swapped';
+  if (type === 'RENT') return 'rented';
+  if (type === 'LEND') return 'lent';
+  return 'received';
+}
+
+/** Action: getMyOrders — the caller's finished exchanges, newest first. */
+function getMyOrders() {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to see your orders.' };
+    const swapsT = readSheetObjects_(getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests));
+    const mine = swapsT.rows.filter(r => {
+      const p = resolveSwapRequestParties(swapsT.headers, swapsT.headers.map(h => r.obj[h]));
+      return normalizeEmail(p.requesterEmail) === caller || normalizeEmail(p.ownerEmail) === caller;
+    }).map(r => String(r.obj.id));
+    if (!mine.length) return { success: true, orders: [] };
+
+    const idSet = {}; mine.forEach(id => { idSet[id] = true; });
+    const roomEvents = {};
+    readSheetObjects_(getStageEventsSheet()).rows.forEach(r => {
+      const o = r.obj;
+      if (!idSet[String(o.swapId)] || o.stage !== 'ROOM') return;
+      (roomEvents[String(o.swapId)] = roomEvents[String(o.swapId)] || []).push(o);
+    });
+    const chats = {};
+    readSheetObjects_(getOrCreateSheet('Chats', [])).rows.forEach(r => { if (idSet[String(r.obj.swapId)]) chats[String(r.obj.swapId)] = r.obj; });
+    const fees = {};
+    readSheetObjects_(getSecurityFeeSheet()).rows.forEach(r => { if (idSet[String(r.obj.swapId)]) (fees[String(r.obj.swapId)] = fees[String(r.obj.swapId)] || []).push(r.obj); });
+    const payouts = {};
+    readSheetObjects_(getReturnForfeitSheet_()).rows.forEach(r => { if (idSet[String(r.obj.swapId)]) (payouts[String(r.obj.swapId)] = payouts[String(r.obj.swapId)] || []).push(r.obj); });
+
+    const orders = [];
+    mine.forEach(id => {
+      const evs = roomEvents[id] || [];
+      const done = evs.filter(e => e.actionType === 'exchange_done').pop();
+      // Until the room closes (both rated, or 7 days after completion) it
+      // stays in the cart, where the reader rates; then it is an order.
+      const roomClosed = String((chats[id] || {}).chatStatus || '') === 'Archived' || evs.some(e => e.actionType === 'room_closed');
+      let inReturn = null;
+      if (!done) {
+        // Not finished — but a book that has reached the reader and has to
+        // come back is listed under "In return process".
+        const swapR = loadSwapForCirculation(id);
+        if (!swapR || !swapNeedsReturn(swapR) || !roomSwapAccepted_(swapR.obj.status) || roomClosed) return;
+        const roomR = computeExchangeRoom_(roomInputFor_(swapR, caller));
+        const out = roomR.steps.find(st => st.n === 9);
+        if (!out || out.state !== 'done' || roomR.exchangeDone || roomR.closed) return;
+        const cur = roomR.steps.find(st => st.n === roomR.current) || {};
+        const rs = roomInputFor_(swapR, caller).returnState || {};
+        inReturn = { step: roomR.current, stepTitle: cur.title || '', dueAt: rs.dueAt || '', daysLeft: rs.daysLeft, overdue: !!rs.overdue,
+          onItsWay: !!roomR.route.back };
+      } else if (!roomClosed) return;
+      const swap = loadSwapForCirculation(id);
+      if (!swap) return;
+      const role = caller === swap.ownerEmail ? 'owner' : 'requester';
+      const type = String(swap.obj.serviceType || 'SWAP').toUpperCase();
+      const chat = chats[id] || {};
+
+      // What this reader paid, from their verified payment.
+      const myFee = (fees[id] || []).find(f => f.payerRole === role && f.adminStatus === 'ADMIN_APPROVED');
+      const b = myFee ? feeRecordBreakdown_(myFee) : { depositAmount: 0, platformFee: 0, saleAmount: 0 };
+      const paid = myFee ? { total: Number(myFee.requiredAmount || 0), sale: b.saleAmount, deposit: b.depositAmount, fee: b.platformFee } : null;
+
+      // The deposit back to this reader, or forfeited.
+      let deposit = null;
+      if (paid && paid.deposit > 0) {
+        const p = payouts[id] || [];
+        const refund = p.find(x => String(x.leg) === 'refund:' + role);
+        const forfeitLeg = role === 'requester' ? 'return' : 'counter_return';
+        const forfeit = p.find(x => String(x.leg) === forfeitLeg || (/^dispute:/.test(String(x.leg)) && String(x.leg).split(':').pop() === role && Number(x.amount) > 0));
+        deposit = forfeit ? { amount: paid.deposit, status: 'forfeited', note: 'Forfeited' + (forfeit.amount ? ' (₹' + forfeit.amount + ')' : '') }
+          : refund ? { amount: Number(refund.amount || paid.deposit), status: refund.payoutStatus === 'PAID_TO_OWNER' ? 'refunded' : 'refund_due', paidAt: refund.paidAt || '' }
+          : { amount: paid.deposit, status: 'held' };
+      }
+      // A seller's payout.
+      let payout = null;
+      if (role === 'owner' && type === 'SELL') {
+        const p = (payouts[id] || []).find(x => String(x.leg) === 'sale');
+        if (p) payout = { amount: Number(p.amount || 0), status: p.payoutStatus === 'PAID_TO_OWNER' ? 'paid' : 'due', paidAt: p.paidAt || '' };
+      }
+      const other = role === 'owner' ? swap.requesterEmail : swap.ownerEmail;
+      orders.push({
+        swapId: id,
+        bookId: String(swap.obj.requestedBookId || chat.bookId || ''),
+        bookTitle: String(swap.obj.requestedBookTitle || 'A book'),
+        offeredBook: type === 'SWAP' ? String(swap.obj.offeredBook || '') : '',
+        serviceType: type,
+        role: role,
+        kind: (ORDER_KIND[role] || {})[type] || 'Exchanged',
+        category: inReturn ? 'in_return' : orderCategory_(role, type),
+        inReturn: inReturn,
+        chatId: inReturn ? String(chat.chatId || '') : '',
+        swapPreference: String(swap.obj.swapPreference || ''),
+        otherName: roomName_(other),
+        price: Number(swap.obj.amount || 0),
+        paid: paid,
+        deposit: deposit,
+        payout: payout,
+        completedAt: done && done.createdAt ? new Date(done.createdAt).toISOString() : '',
+        roomClosed: true
+      });
+    });
+    orders.sort((a, b) => (a.category === 'in_return' ? 0 : 1) - (b.category === 'in_return' ? 0 : 1) ||
+      new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
+    return { success: true, orders: orders };
+  } catch (err) {
+    return { success: false, message: err.toString() };
   }
 }

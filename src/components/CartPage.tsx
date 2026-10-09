@@ -7,13 +7,51 @@ import React from 'react';
  * Its own page at /cart, not a profile tab. Four views over data App
  * already has — nothing new is fetched and no business logic lives here:
  *   • My cart       — books I have asked for (sent swap/rent/buy requests)
- *   • Requests      — requests for my books, with Accept / Decline
+ *   • (Requests for my books are the first section of My orders since
+ *     9 Oct 2026, with Accept / Decline — no separate tab.)
  *   • Chats         — every swap and book-request conversation
- *   • Wanted        — books I asked the community to find
+ *   • Wishlist      — books I asked the community to find (was "Wanted")
+ *   • My orders     — finished exchanges (9 Oct 2026): once an exchange's
+ *                     room closes, the book leaves the cart and is listed
+ *                     here with what was paid (book price / deposit / fee)
+ *                     and the deposit refund or seller payout.
  * Every action is a callback into the existing App handlers.
  */
 
-export type CartView = 'cart' | 'incoming' | 'chats' | 'wanted';
+export type CartView = 'cart' | 'incoming' | 'chats' | 'wanted' | 'orders';
+
+/** One finished exchange, from getMyOrders. */
+export interface CartOrder {
+  swapId: string;
+  bookId?: string;
+  bookTitle: string;
+  offeredBook?: string;
+  serviceType: string;
+  role: 'owner' | 'requester';
+  kind: string;
+  otherName: string;
+  price?: number;
+  paid: { total: number; sale: number; deposit: number; fee: number } | null;
+  deposit: { amount: number; status: 'refunded' | 'refund_due' | 'held' | 'forfeited'; note?: string; paidAt?: string } | null;
+  payout: { amount: number; status: 'paid' | 'due'; paidAt?: string } | null;
+  completedAt: string;
+  /** sold · received · swapped · rented · lent · in_return */
+  category?: string;
+  /** A book out with a reader (or coming back) right now. */
+  inReturn?: { step: number; stepTitle: string; dueAt: string; daysLeft?: number; overdue?: boolean; onItsWay?: boolean } | null;
+  chatId?: string;
+  swapPreference?: string;
+}
+
+/** My orders, in sections (owner's request, 9 Oct 2026). */
+const ORDER_SECTIONS: { id: string; label: string }[] = [
+  { id: 'in_return', label: 'In return process' },
+  { id: 'received', label: 'Received' },
+  { id: 'sold', label: 'Sold' },
+  { id: 'swapped', label: 'Swapped' },
+  { id: 'rented', label: 'Rented' },
+  { id: 'lent', label: 'Lent' },
+];
 
 export interface CartSwap {
   id: string;
@@ -57,6 +95,8 @@ export interface CartPageProps {
   received: CartSwap[];
   chats: CartChat[];
   wanted: CartWanted[];
+  /** Finished exchanges whose room has closed. */
+  orders?: CartOrder[];
   busy?: boolean;
   coverFor: (bookId?: string, title?: string) => string;
   bookTitleFor: (bookId?: string) => string;
@@ -139,7 +179,21 @@ function Empty({ title, body, action, onAction }: { title: string; body: string;
   );
 }
 
-export default function CartPage(p: CartPageProps) {
+// A request whose room has closed — finished (it is an order now) or closed
+// before any exchange (cancelled, or not paid within 48 hours).
+const CLOSED = ['cancelled', 'expired', 'completed'];
+
+export default function CartPage(props: CartPageProps) {
+  const orders = props.orders || [];
+  // 9 Oct 2026: "Requests" is no longer its own tab — requests for my books
+  // are the first section of My orders. Old links to the Requests view land
+  // there, filtered to requests.
+  const [orderFilter, setOrderFilter] = React.useState<string>(props.view === 'incoming' ? 'requests' : 'all');
+  const view: CartView = props.view === 'incoming' ? 'orders' : props.view;
+  const ordered = new Set(orders.map((o) => String(o.swapId)));
+  const open = (r: CartSwap) => !ordered.has(String(r.id)) && !CLOSED.includes(status(r.status));
+  // The cart and the requests list only show exchanges that are still open.
+  const p = { ...props, sent: props.sent.filter(open), received: props.received.filter(open) };
   const pendingIn = p.received.filter((r) => status(r.status) === 'pending').length;
   const openChats = p.chats.filter((c) => c.chatStatus !== 'Archived');
   const openWanted = p.wanted.filter((w) => !['cancelled', 'fulfilled', 'closed'].includes(status(w.status || 'open')));
@@ -147,10 +201,11 @@ export default function CartPage(p: CartPageProps) {
 
   const tabs: { id: CartView; label: string; count: number; alert?: boolean }[] = [
     { id: 'cart', label: 'My cart', count: p.sent.length },
-    { id: 'incoming', label: 'Requests', count: p.received.length, alert: pendingIn > 0 },
     { id: 'chats', label: 'Chats', count: openChats.length },
-    { id: 'wanted', label: 'Wanted', count: openWanted.length },
+    { id: 'wanted', label: 'Wishlist', count: openWanted.length },
+    { id: 'orders', label: 'My orders', count: orders.length + p.received.length, alert: pendingIn > 0 },
   ];
+  const goRequests = () => { setOrderFilter('requests'); p.onViewChange('orders'); };
 
   return (
     <div className="cart" data-testid="cart-page">
@@ -169,7 +224,7 @@ export default function CartPage(p: CartPageProps) {
             { id: 'incoming' as const, n: pendingIn, label: 'Waiting on you', hot: pendingIn > 0 },
             { id: 'chats' as const, n: openChats.length, label: 'Open chats' },
           ].map((t) => (
-            <button key={t.id} type="button" className={`cart-stat ${t.hot ? 'is-hot' : ''}`} onClick={() => p.onViewChange(t.id)}>
+            <button key={t.id} type="button" className={`cart-stat ${t.hot ? 'is-hot' : ''}`} onClick={() => (t.id === 'incoming' ? goRequests() : p.onViewChange(t.id))}>
               <span className="cart-stat__n">{t.n}</span>
               <span className="cart-stat__label">{t.label}</span>
             </button>
@@ -180,7 +235,7 @@ export default function CartPage(p: CartPageProps) {
       {/* ── Tabs ─────────────────────────────────────────── */}
       <div className="cart-tabs" role="tablist" aria-label="Cart sections">
         {tabs.map((t) => (
-          <button key={t.id} type="button" role="tab" aria-selected={p.view === t.id} className="cart-tab" onClick={() => p.onViewChange(t.id)}>
+          <button key={t.id} type="button" role="tab" aria-selected={view === t.id} className="cart-tab" onClick={() => { if (t.id === 'orders') setOrderFilter('all'); p.onViewChange(t.id); }}>
             {t.label}
             <span className={`cart-tab__count ${t.alert ? 'is-alert' : ''} ${t.count ? '' : 'is-zero'}`}>{t.count}</span>
           </button>
@@ -188,7 +243,7 @@ export default function CartPage(p: CartPageProps) {
       </div>
 
       {/* ── My cart ──────────────────────────────────────── */}
-      {p.view === 'cart' && (
+      {view === 'cart' && (
         p.sent.length ? (
           <div className="cart-list">
             {p.sent.map((r) => {
@@ -229,47 +284,8 @@ export default function CartPage(p: CartPageProps) {
         )
       )}
 
-      {/* ── Asked of me ──────────────────────────────────── */}
-      {p.view === 'incoming' && (
-        p.received.length ? (
-          <div className="cart-list">
-            {p.received.map((r) => {
-              const s = status(r.status);
-              return (
-                <article key={r.id} className={`cart-item ${s === 'pending' ? 'is-waiting' : ''}`} data-testid="cart-incoming">
-                  <Cover src={p.coverFor(r.bookId, r.requestedBookTitle)} title={r.requestedBookTitle} />
-                  <div className="cart-item__body">
-                    <p className="cart-item__kind">
-                      <span className="cart-chip">{kindOf(r.serviceType, false)}</span>
-                      <span>{nameOf(r.senderEmail)}</span>
-                    </p>
-                    <h3 className="cart-item__title">{r.requestedBookTitle}</h3>
-                    {inr(r.amount) && <p className="cart-item__price">{inr(r.amount)}</p>}
-                    <div className="cart-item__foot">
-                      <span className="cart-item__date">{when(r.createdAt)}</span>
-                      {s === 'pending' ? (
-                        <span className="cart-item__decide">
-                          <button type="button" className="cart-btn cart-btn--ghost" disabled={p.busy} onClick={() => p.onDecline(r.id)}>Decline</button>
-                          <button type="button" className="cart-btn cart-btn--solid" disabled={p.busy} onClick={() => p.onAccept(r.id)}>Accept</button>
-                        </span>
-                      ) : s === 'accepted' ? (
-                        <button type="button" className="cart-btn cart-btn--solid" onClick={() => p.onOpenRequestChat(r)}>Open chat</button>
-                      ) : (
-                        <span className={`cart-status is-${s}`}>{r.status}</span>
-                      )}
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <Empty title="No one has asked yet" body="Requests for your books land here. The more books on your shelf, the sooner one arrives." action="List a book" onAction={p.onListBook} />
-        )
-      )}
-
       {/* ── Chats ────────────────────────────────────────── */}
-      {p.view === 'chats' && (
+      {view === 'chats' && (
         openChats.length ? (
           <ul className="cart-chats">
             {openChats.map((c) => {
@@ -296,11 +312,11 @@ export default function CartPage(p: CartPageProps) {
       )}
 
       {/* ── Wanted ───────────────────────────────────────── */}
-      {p.view === 'wanted' && (
+      {view === 'wanted' && (
         <>
           <div className="cart-wanted-bar">
-            <p>Can’t find a book? Ask, and readers near you will see it.</p>
-            <button type="button" className="cart-btn cart-btn--solid" onClick={p.onRequestBook}>Request a book</button>
+            <p><b>My wishlist</b> — books you want. Readers near you see it and can offer theirs.</p>
+            <button type="button" className="cart-btn cart-btn--solid" onClick={p.onRequestBook}>Add a book</button>
           </div>
           {p.wanted.length ? (
             <div className="cart-list">
@@ -335,10 +351,137 @@ export default function CartPage(p: CartPageProps) {
               })}
             </div>
           ) : (
-            <Empty title="Nothing on your wish list" body="Ask for a book here, or in Community → Book requests." action="Request a book" onAction={p.onRequestBook} />
+            <Empty title="Your wishlist is empty" body="Add a book you want, and readers near you will see it. You can also ask in Community → Book requests." action="Add to wishlist" onAction={p.onRequestBook} />
           )}
         </>
       )}
+
+      {/* ── My orders ────────────────────────────────────── */}
+      {view === 'orders' && (
+        orders.length || p.received.length ? (
+          <>
+            <div className="cart-order-filters" role="group" aria-label="Show orders">
+              {[{ id: 'all', label: 'All', n: orders.length + p.received.length }, { id: 'requests', label: 'Requests', n: p.received.length }]
+                .concat(ORDER_SECTIONS.map((sec) => ({ ...sec, n: orders.filter((o) => (o.category || 'received') === sec.id).length })))
+                .filter((x) => x.n > 0 || x.id === orderFilter)
+                .map((f) => (
+                  <button key={f.id} type="button" className={`cart-order-filter ${orderFilter === f.id ? 'is-on' : ''}`} aria-pressed={orderFilter === f.id} onClick={() => setOrderFilter(f.id)}>
+                    {f.label} <span>{f.n}</span>
+                  </button>
+                ))}
+            </div>
+            {/* Requests for my books: accept or decline here. */}
+            {(orderFilter === 'all' || orderFilter === 'requests') && (p.received.length ? (
+              <section className="cart-order-section" aria-label="Requests" data-testid="orders-requests">
+                <h2 className="cart-order-section__title">Requests {pendingIn > 0 ? <span className="is-alert">{pendingIn} waiting on you</span> : <span>{p.received.length}</span>}</h2>
+                <div className="cart-list">
+                  {p.received.map((r) => {
+                    const s = status(r.status);
+                    return (
+                      <article key={r.id} className={`cart-item ${s === 'pending' ? 'is-waiting' : ''}`} data-testid="cart-incoming">
+                        <Cover src={p.coverFor(r.bookId, r.requestedBookTitle)} title={r.requestedBookTitle} />
+                        <div className="cart-item__body">
+                          <p className="cart-item__kind">
+                            <span className="cart-chip">{kindOf(r.serviceType, false)}</span>
+                            <span>{nameOf(r.senderEmail)}</span>
+                          </p>
+                          <h3 className="cart-item__title">{r.requestedBookTitle}</h3>
+                          {inr(r.amount) && <p className="cart-item__price">{inr(r.amount)}</p>}
+                          <div className="cart-item__foot">
+                            <span className="cart-item__date">{when(r.createdAt)}</span>
+                            {s === 'pending' ? (
+                              <span className="cart-item__decide">
+                                <button type="button" className="cart-btn cart-btn--ghost" disabled={p.busy} onClick={() => p.onDecline(r.id)}>Decline</button>
+                                <button type="button" className="cart-btn cart-btn--solid" disabled={p.busy} onClick={() => p.onAccept(r.id)}>Accept</button>
+                              </span>
+                            ) : s === 'accepted' ? (
+                              <button type="button" className="cart-btn cart-btn--solid" onClick={() => p.onOpenRequestChat(r)}>Open chat</button>
+                            ) : (
+                              <span className={`cart-status is-${s}`}>{r.status}</span>
+                            )}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : orderFilter === 'requests' ? (
+              <p className="cart-order__line">No one has asked for your books right now. The more books on your shelf, the sooner a request arrives.</p>
+            ) : null)}
+            {ORDER_SECTIONS.filter((sec) => orderFilter === 'all' || orderFilter === sec.id).map((sec) => {
+              const list = orders.filter((o) => (o.category || 'received') === sec.id);
+              if (!list.length) return null;
+              return (
+                <section key={sec.id} className="cart-order-section" aria-label={sec.label} data-testid={'orders-' + sec.id}>
+                  <h2 className="cart-order-section__title">{sec.label} <span>{list.length}</span></h2>
+                  <div className="cart-list">
+                    {list.map((o) => (
+                      <React.Fragment key={o.swapId}>
+                        <OrderCard o={o} cover={p.coverFor(o.bookId, o.bookTitle)} onOpenChat={o.chatId ? () => p.onOpenChatById(o.chatId!) : undefined} />
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+          </>
+        ) : (
+          <Empty title="No orders yet" body="Requests for your books, and books you buy, sell, swap, rent or lend, appear here — sorted by kind, with what was paid." action="Browse books" onAction={p.onBrowse} />
+        )
+      )}
     </div>
+  );
+}
+
+/** One order: the book, who with, what was paid, and where the money / book stands. */
+function OrderCard({ o, cover, onOpenChat }: { o: CartOrder; cover: string; onOpenChat?: () => void }) {
+  const paidParts = o.paid ? [
+    o.paid.sale > 0 ? `${inr(o.paid.sale)} book` : '',
+    o.paid.deposit > 0 ? `${inr(o.paid.deposit)} deposit` : '',
+    o.paid.fee > 0 ? `${inr(o.paid.fee)} fee` : '',
+  ].filter(Boolean) : [];
+  const dep = o.deposit;
+  const r = o.inReturn;
+  return (
+    <article className="cart-item" data-testid="cart-order">
+      <Cover src={cover} title={o.bookTitle} />
+      <div className="cart-item__body">
+        <p className="cart-item__kind">
+          <span className="cart-chip">{o.kind}</span>
+          <span>{o.role === 'owner' ? (o.serviceType === 'SWAP' ? 'with' : 'to') : (o.serviceType === 'SWAP' ? 'with' : 'from')} {o.otherName}</span>
+        </p>
+        <h3 className="cart-item__title">{o.bookTitle}</h3>
+        {o.offeredBook && <p className="cart-item__author">⇄ {o.offeredBook}{o.swapPreference ? ` · ${o.swapPreference.toLowerCase()} swap` : ''}</p>}
+        {o.paid ? (
+          <p className="cart-item__price">
+            You paid {inr(o.paid.total) || '₹0'}{paidParts.length > 1 ? <span className="cart-order__parts"> ({paidParts.join(' + ')})</span> : null}
+          </p>
+        ) : !o.payout ? <p className="cart-order__line">Nothing paid through SwapSutra</p> : null}
+        {o.payout && (
+          <p className="cart-order__line">{o.payout.status === 'paid' ? `✓ ${inr(o.payout.amount)} paid to you` : `${inr(o.payout.amount)} on its way to you`} (book price minus the fee)</p>
+        )}
+        {dep && (
+          <p className={`cart-order__line ${dep.status === 'forfeited' ? 'is-bad' : ''}`}>
+            {dep.status === 'refunded' ? `✓ ${inr(dep.amount)} deposit refunded`
+              : dep.status === 'refund_due' ? `${inr(dep.amount)} deposit refund on its way`
+              : dep.status === 'forfeited' ? `${inr(dep.amount)} deposit — ${dep.note || 'forfeited'}`
+              : `${inr(dep.amount)} deposit held until the book is back`}
+          </p>
+        )}
+        {r && (
+          <p className={`cart-order__line ${r.overdue ? 'is-bad' : ''}`}>
+            {r.onItsWay ? 'On its way back' : r.overdue ? 'Return overdue' : 'With the reader'}
+            {r.dueAt ? ` · due ${when(r.dueAt)}` : ''}{!r.overdue && typeof r.daysLeft === 'number' && r.daysLeft > 0 ? ` (${r.daysLeft} days left)` : ''} · Step {r.step}: {r.stepTitle}
+          </p>
+        )}
+        <div className="cart-item__foot">
+          <span className="cart-item__date">{r ? 'In progress' : `Completed ${when(o.completedAt)}`}</span>
+          {r && onOpenChat
+            ? <button type="button" className="cart-btn cart-btn--solid" onClick={onOpenChat}>Open chat</button>
+            : <span className="cart-status is-completed">Done</span>}
+        </div>
+      </div>
+    </article>
   );
 }
