@@ -182,6 +182,10 @@ const AdminPaymentSettings = lazyScreen<any>(
   () => import('./components/AdminPaymentSettings'),
   'Opening the payment details'
 );
+const PartnersPage = lazyScreen<any>(
+  () => import('./components/partners/PartnersPage'),
+  'Opening SwapSutra partners'
+);
 const AdminPartners = lazyScreen<any>(
   () => import('./components/AdminPartners'),
   'Opening partners'
@@ -1272,8 +1276,11 @@ const bookHasPublicUse = (book: Partial<Book> | any) => {
   return flags.permanentExchange || flags.temporaryExchange || flags.rent || flags.sell;
 };
 
-const bookHasLibraryVisibility = (book: Partial<Book> | any) =>
-  truthyFlag(book?.favourite) || truthyFlag(book?.currently_reading) || truthyFlag(book?.tbr) || truthyFlag(book?.bookshelf) || bookHasPublicUse(book);
+// 9 Oct 2026: a partner's book with no copies left stays off the shelf.
+const bookOutOfStock = (book: Partial<Book> | any) =>
+  book?.stock !== undefined && book?.stock !== null && String(book.stock) !== '' && Number(book.stock) <= 0;
+const bookHasLibraryVisibility = (book: Partial<Book> | any) => !bookOutOfStock(book) && (
+  truthyFlag(book?.favourite) || truthyFlag(book?.currently_reading) || truthyFlag(book?.tbr) || truthyFlag(book?.bookshelf) || bookHasPublicUse(book));
 
 const readingStatusBadgesFromBook = (book: Partial<Book> | any) => {
   const availability = bookAvailabilityFromBook(book);
@@ -3783,6 +3790,13 @@ const BookDetailModal = memo(({
                   </div>
                   <h2 className="text-4xl md:text-5xl font-serif text-[var(--text-primary)] leading-tight">{book.title}</h2>
                   <p className="text-sm font-bold text-brand-gold-text uppercase tracking-eyebrow font-serif italic">by {book.author}</p>
+                  {/* 9 Oct 2026: sold by a SwapSutra partner, with the copies left. */}
+                  {(book as any).sellerType && (
+                    <p className="text-xs text-[var(--text-secondary)]" data-testid="partner-seller">
+                      <span className="inline-block rounded-full bg-brand-gold/10 px-2 py-0.5 font-bold text-brand-gold-text">{({ bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' } as Record<string, string>)[(book as any).sellerType] || 'Partner'}</span>
+                      {' '}{(book as any).sellerName}{Number((book as any).stock) > 0 ? ` · ${(book as any).stock} in stock` : ''}
+                    </p>
+                  )}
                   <span className={`inline-block px-3 py-1 rounded-full text-2xs font-bold uppercase tracking-widest border ${book.genre ? 'border-brand-gold/30 bg-brand-gold/10 text-brand-gold-text' : 'border-brand-border/60 text-[var(--text-secondary)] italic'}`}>
                     {book.genre || 'Genre not specified'}
                   </span>
@@ -6103,7 +6117,7 @@ const ChatModal = memo(({
     );
   };
 
-type AppTab = 'home' | 'mugs' | 'cart' | 'about' | 'tracker' | 'newsletter' | 'browse' | 'book-requests' | 'notifications' | 'list' | 'info' | 'privacy' | 'profile' | 'reader' | 'reader-circle' | 'reading-room' | 'cafe' | 'events' | 'events-gallery' | 'newsletter-manager' | 'support' | 'management' | 'unsubscribe' | 'ambassador' | 'terms' | 'refund-policy' | 'grievance';
+type AppTab = 'home' | 'mugs' | 'cart' | 'about' | 'tracker' | 'newsletter' | 'browse' | 'book-requests' | 'notifications' | 'list' | 'info' | 'privacy' | 'profile' | 'reader' | 'reader-circle' | 'reading-room' | 'cafe' | 'events' | 'events-gallery' | 'newsletter-manager' | 'support' | 'management' | 'unsubscribe' | 'ambassador' | 'terms' | 'refund-policy' | 'grievance' | 'partners';
 const routeToTab = (path: string): AppTab => {
   const clean = path.replace(/\/+$/, '') || '/';
   if (clean.startsWith('/events-gallery/')) return 'events-gallery';
@@ -6156,6 +6170,9 @@ const routeToTab = (path: string): AppTab => {
     '/terms': 'terms',
     '/refund-policy': 'refund-policy',
     '/grievance': 'grievance',
+    // 9 Oct: bookstores, authors, publishers and promoters.
+    '/partners': 'partners',
+    '/partner': 'partners',
     '/mugs': 'mugs',
     '/coffee-mugs': 'mugs',
     // Older legal URLs, now part of the Terms of Use.
@@ -6186,6 +6203,7 @@ const tabToRoute = (tab: AppTab) => ({
   privacy: '/privacy',
   terms: '/terms',
   'refund-policy': '/refund-policy',
+  partners: '/partners',
   grievance: '/grievance',
   'newsletter-manager': '/management',
   unsubscribe: '/unsubscribe',
@@ -7406,7 +7424,7 @@ export default function App() {
   //                    That read-only welcome is the feature, so the
   //                    route itself must not be gated.
   // 'mugs' is public: anyone may browse the shelf and send a mug idea.
-  const GATE_ALLOWED_TABS: AppTab[] = ['home', 'mugs', 'about', 'browse', 'cafe', 'reader', 'events', 'events-gallery', 'privacy', 'terms', 'refund-policy', 'grievance', 'unsubscribe', 'ambassador', 'newsletter'];
+  const GATE_ALLOWED_TABS: AppTab[] = ['home', 'mugs', 'about', 'browse', 'cafe', 'reader', 'events', 'events-gallery', 'privacy', 'terms', 'refund-policy', 'grievance', 'unsubscribe', 'ambassador', 'newsletter', 'partners'];
   const isAccessGated = !isAdmin && (userTier === 'guest' || userTier === 'pending' || userTier === 'expired');
 
   // Remembers the protected tab a gated visitor originally tried to reach
@@ -10911,6 +10929,8 @@ export default function App() {
         noPrintedMrp: formData.get('noPrintedMrp') === 'on',
         // Oct 2026: the owner's own prices, only for what they actually offer.
         sellPrice: listingStatuses.sell && listingSellPrice !== '' ? Number(listingSellPrice) : null,
+        // Partners only (the server ignores it for readers).
+        stock: formData.get('stock') ? Number(formData.get('stock')) : undefined,
         rentPerMonth: listingStatuses.rent && listingRentPrice !== '' ? Number(listingRentPrice) : null,
         // The reader's declaration about the copy itself, kept apart from
         // which printing it is.
@@ -14088,6 +14108,7 @@ export default function App() {
                     ['privacy', 'Privacy'],
                     ['refund-policy', 'Refunds'],
                     ['grievance', 'Grievances'],
+                    ['partners', 'Bookstores & authors'],
                   ] as const).map(([tab, label]) => (
                     <button key={tab} type="button" onClick={() => { navigateTo(tab); setIsMobileMenuOpen(false); }} className="hover:text-brand-gold-text">
                       {label}
@@ -17337,6 +17358,25 @@ export default function App() {
             </motion.div>
           )}
 
+          {activeTab === 'partners' && (
+            <motion.div key="partners" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <PartnersPage
+                signedInEmail={activeUserEmail || ''}
+                onSession={(sess: { sessionToken: string; email: string; role?: string }) => {
+                  // A partner verifies their email here (9 Oct 2026); the same
+                  // signed session as any login.
+                  setSessionToken(sess.sessionToken);
+                  setActiveUserEmail(sess.email);
+                  try { localStorage.setItem('swapsutraUserEmail', sess.email); } catch { /* private mode */ }
+                  if (sess.role) { setUserRole(sess.role); try { localStorage.setItem('swapsutraUserRole', sess.role); } catch { /* ignore */ } }
+                  setSessionVerified(true);
+                }}
+                onOpenOrders={() => navigateTo('cart')}
+                onListBook={() => navigateTo('list')}
+              />
+            </motion.div>
+          )}
+
           {activeTab === 'mugs' && (
             <motion.div key="mugs" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
               <MugsPage
@@ -18012,8 +18052,20 @@ export default function App() {
                         <p className="text-xs text-amber-700">That's more than the printed MRP (₹{listingMrpNumber}). You can still list it, but buyers may pass.</p>
                       )}
                       <p className="text-2xs text-[var(--text-secondary)] opacity-80 leading-relaxed">
-                        You decide the price. The buyer pays SwapSutra, and you receive the price minus the ₹10 platform fee on your UPI once the buyer has the book and closes the purchase. No security deposit on a sale.
+                        {listingAllowance?.unlockedVia === 'PARTNER'
+                          ? 'You decide the price. The buyer pays SwapSutra (plus their ₹10 platform fee); you are paid monthly, minus SwapSutra\'s commission. No security deposit on a sale.'
+                          : 'You decide the price. The buyer pays SwapSutra, and you receive the price minus the ₹10 platform fee on your UPI once the buyer has the book and closes the purchase. No security deposit on a sale.'}
                       </p>
+                    </div>
+                  )}
+
+                  {/* 9 Oct 2026: a partner (bookstore, publisher…) says how many copies it has. */}
+                  {listingAllowance?.unlockedVia === 'PARTNER' && (
+                    <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-4 space-y-2" data-testid="listing-stock">
+                      <label htmlFor="listing-stock" className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">Copies in stock</label>
+                      <input id="listing-stock" name="stock" type="number" inputMode="numeric" min={1} max={9999} step={1} defaultValue={1}
+                        className="input-classic bg-[var(--bg-surface)] w-32" />
+                      <p className="text-2xs text-[var(--text-secondary)] opacity-80 leading-relaxed">Each sale takes one copy off. Change it any time from your partner dashboard.</p>
                     </div>
                   )}
 

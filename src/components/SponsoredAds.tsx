@@ -72,6 +72,7 @@ export function SponsoredBanner({ ads, onOpenBook, startAt = 0 }: { ads: Sponsor
         label={`Sponsored by ${ad.sponsor}: ${ad.headline} — ${adCta(ad)}`}>
         <span className="ss-adbanner__media">
           {ad.imageUrl && <img key={ad.id} src={adImageSrc(ad.imageUrl)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" />}
+          {ad.partner && <span className="ss-adbanner__logo"><img src="/swapsutra-logo.png" alt="" />SwapSutra partner</span>}
         </span>
         <span className="ss-adbanner__body">
           <span className="ss-ad__eyebrow"><span className="ss-ad__chip">Sponsored</span>{AD_KIND_LABEL[ad.kind]} · {ad.sponsor}</span>

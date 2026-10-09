@@ -26,6 +26,8 @@ export interface SponsoredAd {
   bookId: string;
   ctaLabel: string;
   placement: AdPlacement;
+  /** A SwapSutra partner's banner or ad (9 Oct 2026) — shown with the SwapSutra logo. */
+  partner?: boolean;
 }
 
 export const AD_KIND_LABEL: Record<AdKind, string> = { bookstore: 'Bookstore', author: 'Author', book: 'Book' };

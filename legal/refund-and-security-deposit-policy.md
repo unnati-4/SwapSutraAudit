@@ -49,9 +49,9 @@ Where a payment also includes a security deposit, the QR code shows the two toge
 | The chat has opened | **No refund** |
 | Your account is suspended for breach of our Terms or Community Guidelines | **No refund** |
 
-## A2. Listing unlock — ₹20, one time
+## A2. Listing unlock — ₹20 for 3 months
 
-Lets you list more than 20 books. Never expires.
+Lets you list more than 20 books for 3 months (books already listed stay listed when it ends). Coupon codes are no longer used. Partners (bookstores, authors, publishers, promoters) have no listing limit and do not pay this.
 
 | Situation | Refund |
 |---|---|
@@ -59,6 +59,16 @@ Lets you list more than 20 books. Never expires.
 | You were charged twice | **Refund of the duplicate** |
 | You ask within **48 hours** and have not listed a 21st book | **Full refund** |
 | Otherwise | **No refund** |
+
+## A2a. Partner promotion — ₹100 for every 2 months
+
+A partner's banner and ads are free for the first 6 months after approval, then cost ₹100 for every 2 months, paid by UPI and verified by SwapSutra. Partners pay no ₹10 platform fee; buyers still pay it. SwapSutra keeps a 2% commission on partner payouts (0% in the first year for a partner approved commission-free) and pays partners monthly — see the partner agreements.
+
+| Situation | Refund |
+|---|---|
+| We could not verify your payment | **Full refund** |
+| You were charged twice | **Refund of the duplicate** |
+| The 2-month period has started | **No refund** |
 
 ## A3. How to request a refund
 

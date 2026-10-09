@@ -6348,6 +6348,7 @@ function doPostHandler_(e) {
     if (action === 'updatePartnerProfile') return respondJson(updatePartnerProfile(data));
     if (action === 'uploadPartnerBanner') return respondJson(uploadPartnerBanner(data));
     if (action === 'savePartnerAd') return respondJson(savePartnerAd(data));
+    if (action === 'uploadPartnerAdImage') return respondJson(uploadPartnerAdImage(data));
     if (action === 'submitPartnerAdPayment') return respondJson(submitPartnerAdPayment(data));
     if (action === 'setPartnerBookStock') return respondJson(setPartnerBookStock(data));
     if (action === 'adminListPartners') return respondJson(adminListPartners());
@@ -27060,6 +27061,14 @@ function uploadPartnerBanner(data) {
       '"' + hit.obj.name + '" uploaded a new banner. Approve it in Management → Partners.', '', 'partner_banner_' + hit.obj.id + '_' + Date.now(), { whatsapp: false });
   } catch (e) { /* saved */ }
   return { success: true, url: saved.url, message: 'Banner uploaded. SwapSutra will check it before it goes on the Library page.' };
+}
+
+/** Action: uploadPartnerAdImage { dataUrl } — a picture for a partner's ad. */
+function uploadPartnerAdImage(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const hit = partnerByEmail_(caller);
+  if (!hit || String(hit.obj.status) !== 'APPROVED') return { success: false, error: 'NOT_PARTNER', message: 'Only an approved partner can place ads.' };
+  return savePublicImage_(data, 'SwapSutra_Partner_Ads', 'pad_' + hit.obj.id + '_');
 }
 
 /** Action: savePartnerAd — a partner's own ad; it waits for the admin's approval. */

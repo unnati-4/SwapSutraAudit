@@ -294,7 +294,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
           <div className="space-y-2">
             {counterAddr ? (
               <p className="rounded-xl bg-[var(--bg-page)] p-3 text-xs text-[var(--text-secondary)] leading-relaxed">
-                <b className="text-[var(--text-primary)]">Send to {room.otherName}:</b> {[counterAddr.line1, counterAddr.line2, counterAddr.landmark, counterAddr.area, counterAddr.city, counterAddr.state, counterAddr.pincode].filter(Boolean).join(', ')}
+                <b className="text-[var(--text-primary)]">Send to {counterAddr.name || room.otherName}:</b> {[counterAddr.line1, counterAddr.line2, counterAddr.landmark, counterAddr.area, counterAddr.city, counterAddr.state, counterAddr.pincode].filter(Boolean).join(', ')}
                 {counterAddr.phone && <> · <a className="underline" href={`tel:${counterAddr.phone}`}>{counterAddr.phone}</a></>}
               </p>
             ) : <p className="text-xs italic text-[var(--text-secondary)]">{room.otherName} hasn't added their address yet — ask in the chat.</p>}
@@ -452,6 +452,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
             <p className="font-semibold text-[var(--text-primary)]">{room.otherName}'s address</p>
             {counterAddr ? (
               <p className="text-[var(--text-secondary)] leading-relaxed select-all">
+                {counterAddr.name && <><b>{counterAddr.name}</b><br /></>}
                 {[counterAddr.line1, counterAddr.line2, counterAddr.landmark, counterAddr.area, counterAddr.city, counterAddr.state, counterAddr.pincode].filter(Boolean).join(', ')}
                 {counterAddr.phone && <><br />📞 <a className="underline" href={`tel:${counterAddr.phone}`}>{counterAddr.phone}</a></>}
               </p>

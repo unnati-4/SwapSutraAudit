@@ -201,7 +201,9 @@ export default function AdminSponsoredAds() {
                 {AD_KIND_LABEL[i.kind as AdKind] || i.kind} · {i.sponsor} · {PLACEMENT_LABEL[i.placement] || i.placement}
               </p>
               <p className="type-caption">
-                <strong>{i.showingNow ? 'Showing now' : i.status === 'paused' ? 'Paused' : 'Not showing (outside its dates)'}</strong>
+                <strong>{i.status === 'pending' ? 'Waiting for your approval' : i.status === 'rejected' ? 'Not approved' : i.showingNow ? 'Showing now' : i.status === 'paused' ? 'Paused'
+                  : i.partnerName && i.partnerPromotionActive === false ? 'Not showing (partner\'s promotion is not paid)' : 'Not showing (outside its dates)'}</strong>
+                {i.partnerName ? ` · partner: ${i.partnerName}` : ''}
                 {(i.startDate || i.endDate) ? ` · ${i.startDate || '…'} → ${i.endDate || '…'}` : ''} · {Number(i.clicks) || 0} clicks
               </p>
             </div>
@@ -209,7 +211,10 @@ export default function AdminSponsoredAds() {
               <button type="button" className="mug-btn mug-btn--quiet" onClick={() => edit(i)}>Edit</button>
               {i.status === 'live'
                 ? <button type="button" className="mug-btn mug-btn--quiet" onClick={() => quick(i, 'paused')}>Pause</button>
-                : <button type="button" className="mug-btn mug-btn--quiet" onClick={() => quick(i, 'live')}>Make live</button>}
+                : <button type="button" className={i.status === 'pending' ? 'mug-btn mug-btn--solid' : 'mug-btn mug-btn--quiet'} onClick={() => quick(i, 'live')}>{i.status === 'pending' ? 'Approve' : 'Make live'}</button>}
+              {i.status === 'pending' && (
+                <button type="button" className="mug-btn mug-btn--quiet" onClick={() => { const r = window.prompt('Why is it not approved?'); if (r) quick({ ...i, reviewNote: r }, 'rejected'); }}>Reject</button>
+              )}
               <button type="button" className="mug-btn mug-btn--quiet" onClick={() => quick(i, 'removed')}>Remove</button>
             </div>
           </li>

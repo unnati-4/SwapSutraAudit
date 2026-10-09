@@ -96,7 +96,9 @@ Creating a SwapSutra account is **free**, and membership does not expire. You ne
 
 The fee is separate from any money readers pay each other.
 
-**Listing limit.** Each reader may list up to **20 books** free. To list more, a payment of **₹20** covers **3 months** of further listings (books already listed stay listed when it ends); a valid SwapSutra coupon removes the limit for that account.
+**Listing limit.** Each reader may list up to **20 books** free. To list more, a payment of **₹20** covers **3 months** of further listings (books already listed stay listed when it ends). SwapSutra no longer uses coupon codes.
+
+**Partners — bookstores, authors, publishers and promoters.** A business or author registers separately as a SwapSutra partner (at /partners), with documents that SwapSutra verifies, and signs the partner agreement for its type (published as *SwapSutra Bookstore / Author / Publisher / Promoter Partner Agreement*). An approved partner lists without the 20-book limit, keeps a stock count for each listing, pays **no ₹10 platform fee**, and SwapSutra keeps a **2% commission** on its payouts (0% for the first year when SwapSutra approves it commission-free), paid monthly. Its banner and ads are free for 6 months, then **₹100 for every 2 months**. A partner ships its own orders and is responsible for delivery; it receives only the shipping details of an order, never other buyer details. **When you buy from a partner you still pay the ₹10 platform fee.** Banners and ads on SwapSutra are always marked "Sponsored".
 
 - Fees are **payable to SwapSutra** and are separate from any money you exchange with another reader.
 - Refunds are governed by our [Refund & Security Deposit Policy](/refund-policy).
