@@ -4512,7 +4512,6 @@ const ManagementConsole = memo(() => {
     let apiActions: string[] = [];
     if (currentTab === 'dashboard') apiActions = ['getAdminDashboardMetrics'];
     else if (currentTab === 'approvals') apiActions = ['getPendingMembershipApprovals'];
-    else if (currentTab === 'coupons') apiActions = ['getMembershipCoupons'];
     else if (currentTab === 'events') apiActions = ['getEvents'];
     else if (currentTab === 'eventSubscribers') apiActions = ['getEventSubscribers'];
     else if (currentTab === 'newsletterSubscribers') apiActions = ['getNewsletterSubscribers'];
@@ -4670,7 +4669,6 @@ const ManagementConsole = memo(() => {
           {label: 'Activation Type', key: 'activationType', render: (row: any) => row.activationType || row.membershipType || 'paid'},
           {label: 'Status', key: 'adminStatus'}
         ];
-        case 'coupons': return [{label: 'Code', key: 'couponCode'}, {label: 'Discount', key: 'discountValue'}, {label: 'Status', key: 'active'}];
         case 'members': return [
           {label: 'Name', key: 'name'},
           {label: 'Email', key: 'email'},
@@ -4724,11 +4722,6 @@ const ManagementConsole = memo(() => {
             </>
         );
     }
-    if (tabId === 'coupons') {
-        return (
-            <button onClick={() => performAction('manageMembershipCoupon', {id: row.id, subAction: 'delete'})} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-red-800 hover:bg-red-100 transition-colors"><Trash2 size={12} />Delete</button>
-        );
-    }
     if (tabId === 'books') {
         if (isApprovedStatus(row.status)) {
             return (
@@ -4774,51 +4767,7 @@ const ManagementConsole = memo(() => {
     return null;
   };
 
-  const createCoupon = async () => {
-    const couponCode = prompt("Coupon code");
-    if (!couponCode) return;
-    const discountType = prompt("Discount type: free, fixed_amount, percentage, or absolute", "fixed_amount");
-    if (!discountType || !['free', 'fixed_amount', 'absolute', 'percentage', 'fixed'].includes(discountType)) return notify.error("Use free, fixed_amount, percentage, or absolute.");
-    const discountValue = prompt("Discount value");
-    if (!discountValue) return;
-    const expiryDate = prompt("Expiry date (YYYY-MM-DD)", new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().slice(0, 10));
-    if (!expiryDate) return;
-    const maxUsage = prompt("Max usage", "100");
-    if (!maxUsage) return;
 
-    await performAction('manageMembershipCoupon', {
-      subAction: 'create',
-      couponCode,
-      discountType,
-      discountValue: Number(discountValue),
-      expiryDate,
-      maxUsage: Number(maxUsage)
-    });
-  };
-
-  const editCoupon = async (coupon: any) => {
-    const couponCode = prompt("Coupon code", coupon.couponCode || '');
-    if (!couponCode) return;
-    const discountType = prompt("Discount type: free, fixed_amount, percentage, or absolute", coupon.discountType || 'fixed_amount');
-    if (!discountType || !['free', 'fixed_amount', 'absolute', 'percentage', 'fixed'].includes(discountType)) return notify.error("Use free, fixed_amount, percentage, or absolute.");
-    const discountValue = prompt("Discount value", String(coupon.discountValue ?? ''));
-    if (!discountValue) return;
-    const expiryDate = prompt("Expiry date (YYYY-MM-DD)", coupon.expiryDate ? new Date(coupon.expiryDate).toISOString().slice(0, 10) : '');
-    if (!expiryDate) return;
-    const maxUsage = prompt("Max usage", String(coupon.maxUsage ?? 100));
-    if (!maxUsage) return;
-
-    await performAction('manageMembershipCoupon', {
-      subAction: 'update',
-      id: coupon.id,
-      couponCode,
-      discountType,
-      discountValue: Number(discountValue),
-      expiryDate,
-      maxUsage: Number(maxUsage),
-      notes: coupon.notes || ''
-    });
-  };
 
   const savePricing = async () => {
     await performAction('updateAppSettings', {
@@ -4988,7 +4937,6 @@ const ManagementConsole = memo(() => {
             <button onClick={() => fetchData(tab)} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-brand-border bg-[var(--bg-surface)] px-4 py-2 text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)] hover:bg-[var(--bg-page-alt)] transition-colors"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} />Refresh</button>
             <button onClick={() => performAction('repairDatabase', {})} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-2xs font-bold uppercase tracking-widest text-amber-900 hover:bg-amber-100 transition-colors"><RefreshCw size={14} />Repair Database</button>
             {tab === 'events' && <button onClick={openCreateEvent} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-brand-brown px-4 py-2 text-2xs font-bold uppercase tracking-widest text-white shadow-sm hover:bg-brand-dark transition-colors"><Plus size={14} />Create Event</button>}
-            {tab === 'coupons' && <button onClick={createCoupon} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-brand-brown px-4 py-2 text-2xs font-bold uppercase tracking-widest text-white shadow-sm hover:bg-brand-dark transition-colors"><Plus size={14} />Create Coupon</button>}
             </div>
         </div>
         {error && (
@@ -5180,44 +5128,6 @@ const ManagementConsole = memo(() => {
                 Save Pricing
               </button>
             </div>
-          </div>
-        )}
-        {tab === 'coupons' && (
-          <div className="overflow-x-auto rounded-2xl border border-brand-border bg-[var(--bg-surface)] shadow-sm">
-            <table className="w-full min-w-[900px] text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-brand-border bg-[var(--bg-surface-inset)]/45 text-[var(--text-secondary)] uppercase tracking-eyebrow font-bold">
-                  {['couponCode', 'discountType', 'discountValue', 'expiryDate', 'usedCount', 'active', 'actions'].map(h => (
-                    <th key={h} className="px-5 py-4 whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {items.length > 0 ? items.map((coupon) => (
-                  <tr key={coupon.id || coupon.couponCode} className="border-b border-brand-border/70 last:border-0 hover:bg-[var(--bg-page-alt)]/70 transition-colors">
-                    <td className="px-5 py-4 font-bold text-[var(--text-primary)] uppercase">{coupon.couponCode}</td>
-                    <td className="px-5 py-4 text-[var(--text-primary)]">{coupon.discountType}</td>
-                    <td className="px-5 py-4 text-[var(--text-primary)]">{coupon.discountValue}</td>
-                    <td className="px-5 py-4 text-[var(--text-primary)]">{coupon.expiryDate ? new Date(coupon.expiryDate).toLocaleDateString() : ''}</td>
-                    <td className="px-5 py-4 text-[var(--text-primary)]">{coupon.usedCount || 0} / {coupon.maxUsage || 0}</td>
-                    <td className="px-5 py-4">
-                      <span className={`rounded-full px-3 py-1 text-2xs font-bold uppercase tracking-widest ${coupon.active === true || coupon.active === 'TRUE' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                        {coupon.active === true || coupon.active === 'TRUE' ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="flex flex-wrap gap-2">
-                        <button onClick={() => editCoupon(coupon)} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-brand-border bg-[var(--bg-surface)] px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)] hover:bg-[var(--bg-page-alt)] transition-colors"><Edit size={12} />Edit</button>
-                        <button onClick={() => performAction('manageMembershipCoupon', {id: coupon.id, subAction: 'toggle'})} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-brand-gold/30 bg-brand-gold/10 px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-brand-gold-text hover:bg-brand-gold hover:text-[var(--text-primary)] transition-colors"><Power size={12} />Toggle</button>
-                        <button onClick={() => confirm('Delete this coupon?') && performAction('manageMembershipCoupon', {id: coupon.id, subAction: 'delete'})} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-red-800 hover:bg-red-100 transition-colors"><Trash2 size={12} />Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                )) : (
-                  <tr><td colSpan={7} className="px-5 py-12 text-center text-xs italic text-[var(--text-secondary)]">No coupons found.</td></tr>
-                )}
-              </tbody>
-            </table>
           </div>
         )}
         {tab === 'quillInsights' && data && (
@@ -7550,10 +7460,8 @@ export default function App() {
   });
 
   // Coupon State
-  const [couponCode, setCouponCode] = useState('');
-  const [isCouponApplied, setIsCouponApplied] = useState(false);
-  const [couponError, setCouponError] = useState<string | null>(null);
-  const [isCouponApplying, setIsCouponApplying] = useState(false);
+  // Coupons were removed on 9 Oct 2026 (owner's request); membership is free.
+  const isCouponApplied = false;
   const [paymentScreenshotName, setPaymentScreenshotName] = useState('');
   const [paymentScreenshotError, setPaymentScreenshotError] = useState<string | null>(null);
 
@@ -7659,7 +7567,7 @@ export default function App() {
   const [appSettings, setAppSettings] = useState<{ standardFee: number }>({
     standardFee: 49
   });
-  const [appliedCouponData, setAppliedCouponData] = useState<any | null>(null);
+  const appliedCouponData: any = null;
   const [notifySuccess, setNotifySuccess] = useState<string | null>(null);
   const [unsubscribeMessage, setUnsubscribeMessage] = useState<string | null>(null);
 
@@ -8188,7 +8096,7 @@ export default function App() {
       payableAmount: finalAmount,
       paymentRequired,
       activationType,
-      couponCode: coupon ? String(coupon.couponCode || coupon.code || couponCode).trim() : '',
+      couponCode: coupon ? String(coupon.couponCode || coupon.code || '').trim() : '',
     };
   };
   const [unreadRequestsCount, setUnreadRequestsCount] = useState(0);
@@ -10537,40 +10445,6 @@ export default function App() {
   const getAmount = () => {
     if (subFormTier === 'free') return 0;
     return calculateMembershipPayment().finalAmount;
-  };
-
-  const applyCoupon = async () => {
-    if (!couponCode.trim()) return;
-    setIsCouponApplying(true);
-    setCouponError(null);
-    
-    try {
-      const res = await fetch(`${API_URL}?action=validateMembershipCoupon&code=${encodeURIComponent(couponCode.trim())}`);
-      const data = await res.json();
-      
-      if (data.success) {
-        setIsCouponApplied(true);
-        setAppliedCouponData((() => {
-          const normalizedCode = couponCode.trim().toLowerCase();
-          const coupon = data.coupon || data.data || data.result || {};
-          return {
-            ...coupon,
-            couponCode: coupon.couponCode || coupon.code || normalizedCode,
-            discountType: coupon.discountType || (normalizedCode === 'swapfree2026' ? 'free' : normalizedCode === 'swap12-2026' ? 'absolute' : ''),
-            finalAmount: coupon.finalAmount ?? coupon.payableAmount ?? (normalizedCode === 'swapfree2026' ? 0 : normalizedCode === 'swap12-2026' ? 12 : undefined),
-          };
-        })());
-        setSuccessMessage('Special offer applied successfully! ✨');
-      } else {
-        setCouponError(data.message || 'Invalid or expired code.');
-        setIsCouponApplied(false);
-        setAppliedCouponData(null);
-      }
-    } catch (err) {
-      setCouponError('Network error verifying code.');
-    } finally {
-      setIsCouponApplying(false);
-    }
   };
 
   const handlePaymentScreenshotChange = (e: React.ChangeEvent<HTMLInputElement>) => {

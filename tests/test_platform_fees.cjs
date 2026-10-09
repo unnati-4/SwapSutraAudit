@@ -186,14 +186,12 @@ console.log('--- listing allowance ---');
   check('19. 20 listed: blocked', full.canList === false && full.remaining === 0);
   check('20. Message names the ₹20 unlock', /₹20/.test(env.api.listingLimitMessage_(full)));
 
-  const bad = env.api.redeemListingUnlockCoupon({ code: 'BOOKSTORE2026' });
-  check('21. Wrong coupon is refused', bad.success === false && bad.error === 'INVALID_COUPON');
-
-  const ok = env.api.redeemListingUnlockCoupon({ code: ' bookstore2627 ' });
-  check('22. BOOKSTORE2627 (any case, spaces) unlocks immediately', ok.success === true && ok.allowance.unlimited === true);
-  env.setBooks('r@x.com', 300);
-  check('23. Unlimited after coupon', env.api.getListingAllowanceFor_('r@x.com').canList === true);
-  check('24. Redeeming again is harmless', env.api.redeemListingUnlockCoupon({ code: 'BOOKSTORE2627' }).alreadyUnlimited === true);
+  // 9 Oct 2026 (owner's request): coupon codes were removed.
+  const old = env.api.redeemListingUnlockCoupon({ code: 'BOOKSTORE2627' });
+  check('21. Coupon codes are no longer accepted (even the old bookstore code)', old.success === false && old.error === 'COUPONS_REMOVED');
+  check('22. ...and the reply points bookstores to partner registration', /\/partners/.test(old.message));
+  check('23. Still blocked after trying a code', env.api.getListingAllowanceFor_('r@x.com').canList === false);
+  check('24. The limit message no longer mentions coupons', !/coupon/i.test(env.api.listingLimitMessage_(full)));
 }
 
 {

@@ -2593,68 +2593,9 @@ function doGetHandler_(e) {
       return respondJson({ success: true, subscribers: subscribers, total: subscribers.length });
     }
 
-    if (action === 'getMembershipCoupons') {
-      if (!isAuthorizedAdminEmail(e.parameter.adminEmail)) return respondJson({ success: false, message: "Unauthorized" });
-      const sheet = getOrCreateSheet('MembershipCoupons', []);
-      const data = sheet.getDataRange().getValues();
-      if (data.length <= 1) return respondJson({ success: true, coupons: [] });
-      const headers = data[0];
-      const coupons = data.slice(1).map(row => {
-        const obj = {};
-        headers.forEach((h, i) => {
-          const key = mapHeaderToKey(h);
-          obj[key] = row[i];
-        });
-        return obj;
-      });
-      return respondJson({ success: true, coupons: coupons });
-    }
-
-    if (action === 'validateMembershipCoupon') {
-      const code = e.parameter.code.toUpperCase();
-      const sheet = getOrCreateSheet('MembershipCoupons', []);
-      const data = sheet.getDataRange().getValues();
-      if (data.length <= 1) return respondJson({ success: false, message: "Invalid coupon" });
-      
-      const headers = data[0];
-      const codeIdx = headers.indexOf('couponCode');
-      const activeIdx = headers.indexOf('active');
-      const expiryIdx = headers.indexOf('expiryDate');
-      const maxIdx = headers.indexOf('maxUsage');
-      const usedIdx = headers.indexOf('usedCount');
-      const typeIdx = headers.indexOf('discountType');
-      const valIdx = headers.indexOf('discountValue');
-
-      const couponRow = data.slice(1).find(row => row[codeIdx] === code);
-      if (!couponRow) return respondJson({ success: false, message: "Coupon not found" });
-      const activeValue = String(couponRow[activeIdx] || '').trim().toLowerCase();
-      if (couponRow[activeIdx] !== true && !['true', 'yes', 'active', '1'].includes(activeValue)) return respondJson({ success: false, message: "Coupon is inactive" });
-      
-      const expiry = new Date(couponRow[expiryIdx]);
-      if (expiry < new Date()) return respondJson({ success: false, message: "Coupon expired" });
-      
-      if (Number(couponRow[usedIdx]) >= Number(couponRow[maxIdx])) return respondJson({ success: false, message: "Coupon usage limit reached" });
-
-      const couponType = String(couponRow[typeIdx] || '').trim().toLowerCase();
-      const couponValue = Number(couponRow[valIdx] || 0);
-      let finalAmount = null;
-      if (couponType === 'free') finalAmount = 0;
-      if (code === 'SWAPFREE2026') finalAmount = 0;
-      if (code === 'SWAP12-2026') finalAmount = 12;
-
-      return respondJson({ 
-        success: true, 
-        coupon: {
-          code: couponRow[codeIdx],
-          couponCode: couponRow[codeIdx],
-          discountType: couponRow[typeIdx],
-          discountValue: couponValue,
-          finalAmount: finalAmount,
-          payableAmount: finalAmount,
-          isPaymentRequired: finalAmount === null ? null : finalAmount > 0
-        }
-      });
-    }
+    // Coupons were removed on 9 Oct 2026 (owner's request): membership is free
+    // and bookstores / authors register as partners instead.
+    if (action === 'getMembershipCoupons' || action === 'validateMembershipCoupon') return respondJson({ success: false, error: 'COUPONS_REMOVED', message: 'Coupon codes are no longer used on SwapSutra.' });
 
     if (action === 'getPendingMembershipApprovals') {
       if (!isAuthorizedAdminEmail(e.parameter.adminEmail)) return respondJson({ success: false, message: "Unauthorized" });
@@ -6701,69 +6642,7 @@ function doPostHandler_(e) {
       return respondJson({ success: false, message: "Invalid subAction" });
     }
 
-    if (action === 'manageMembershipCoupon') {
-      if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: "Unauthorized" });
-
-      const headers = ["id", "couponCode", "discountType", "discountValue", "active", "expiryDate", "maxUsage", "usedCount", "notes", "createdAt", "updatedAt"];
-      const sheet = getOrCreateSheet('MembershipCoupons', headers);
-      const values = sheet.getDataRange().getValues();
-      const sheetHeaders = values[0];
-      const idIdx = sheetHeaders.indexOf('id');
-      const now = new Date();
-
-      const setCell = (rowIndex, key, value) => {
-        const idx = sheetHeaders.indexOf(key);
-        if (idx !== -1) sheet.getRange(rowIndex + 1, idx + 1).setValue(value);
-      };
-
-      if (data.subAction === 'create') {
-        const id = generateId('SS_COUPON_');
-        const row = new Array(sheetHeaders.length).fill("");
-        sheetHeaders.forEach((h, i) => {
-          if (h === 'id') row[i] = id;
-          else if (h === 'couponCode') row[i] = String(data.couponCode || '').trim().toUpperCase();
-          else if (h === 'discountType') row[i] = data.discountType || 'absolute';
-          else if (h === 'discountValue') row[i] = Number(data.discountValue || 0);
-          else if (h === 'active') row[i] = data.active === false ? false : true;
-          else if (h === 'expiryDate') row[i] = data.expiryDate || '';
-          else if (h === 'maxUsage') row[i] = Number(data.maxUsage || 100);
-          else if (h === 'usedCount') row[i] = 0;
-          else if (h === 'notes') row[i] = data.notes || '';
-          else if (h === 'createdAt') row[i] = now;
-          else if (h === 'updatedAt') row[i] = now;
-        });
-        sheet.appendRow(row);
-        const coupon = {};
-        sheetHeaders.forEach((h, i) => coupon[mapHeaderToKey(h)] = row[i]);
-        return respondJson({ success: true, message: "Coupon created", coupon });
-      }
-
-      const rowIdx = values.findIndex(r => r[idIdx] === data.id);
-      if (rowIdx === -1) return respondJson({ success: false, message: "Coupon not found" });
-
-      if (data.subAction === 'update') {
-        ['couponCode', 'discountType', 'discountValue', 'expiryDate', 'maxUsage', 'notes'].forEach(key => {
-          if (data[key] !== undefined) setCell(rowIdx, key, key === 'discountValue' || key === 'maxUsage' ? Number(data[key]) : data[key]);
-        });
-        setCell(rowIdx, 'updatedAt', now);
-        return respondJson({ success: true, message: "Coupon updated" });
-      }
-
-      if (data.subAction === 'toggle') {
-        const activeIdx = sheetHeaders.indexOf('active');
-        const current = values[rowIdx][activeIdx] === true || values[rowIdx][activeIdx] === 'TRUE';
-        setCell(rowIdx, 'active', !current);
-        setCell(rowIdx, 'updatedAt', now);
-        return respondJson({ success: true, message: "Coupon status updated" });
-      }
-
-      if (data.subAction === 'delete') {
-        sheet.deleteRow(rowIdx + 1);
-        return respondJson({ success: true, message: "Coupon deleted" });
-      }
-
-      return respondJson({ success: false, message: "Invalid coupon action" });
-    }
+    if (action === 'manageMembershipCoupon') return respondJson({ success: false, error: 'COUPONS_REMOVED', message: 'Coupon codes are no longer used on SwapSutra.' });
 
     if (action === 'manageBook') {
       if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: "Unauthorized" });
@@ -23647,7 +23526,7 @@ function listingLimitMessage_(allowance) {
   if (allowance.unlockExpired) {
     return `Your 3 months of extra listings have ended. Pay ₹${allowance.unlockFee} to list more books for another 3 months — your books already listed stay.`;
   }
-  return `You've listed ${allowance.used} of ${allowance.limit} free books. If you'd like to list more, it's ₹${allowance.unlockFee} for 3 months (or enter a coupon code).`;
+  return `You've listed ${allowance.used} of ${allowance.limit} free books. If you'd like to list more, it's ₹${allowance.unlockFee} for 3 months.`;
 }
 
 /** Action: getListingAllowance */
@@ -23661,27 +23540,15 @@ function getListingAllowance() {
   };
 }
 
-/** Action: redeemListingUnlockCoupon { code } */
-function redeemListingUnlockCoupon(data) {
-  const caller = normalizeEmail(getAuthenticatedEmail());
-  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to use a coupon.' };
-  if (!isRegisteredReader_(caller)) return { success: false, error: 'MEMBERSHIP_REQUIRED', message: 'Sign up first — it is free.' };
-
-  const code = String((data && data.code) || '').trim().toUpperCase();
-  if (!code || listingUnlockCoupons_().indexOf(code) === -1) {
-    return { success: false, error: 'INVALID_COUPON', message: "That code isn't valid. Check the spelling and try again." };
-  }
-
-  const before = getListingAllowanceFor_(caller);
-  if (before.unlimited) return { success: true, alreadyUnlimited: true, allowance: before, message: 'Your listings are already unlimited.' };
-
-  const { sheet, headers } = loadListingUnlockRows_();
-  const now = new Date();
-  appendUnlockRow_(sheet, headers, {
-    id: generateId('SS_UNLOCK_'), email: caller, method: 'COUPON', amount: 0, couponCode: code,
-    status: 'APPROVED', reviewedBy: 'coupon', reviewedAt: now, createdAt: now, updatedAt: now
-  });
-  return { success: true, allowance: getListingAllowanceFor_(caller), message: 'Coupon applied. You can now list as many books as you like.' };
+/**
+ * Action: redeemListingUnlockCoupon — removed 9 Oct 2026 (owner's request).
+ * Coupon codes are no longer accepted; bookstores, authors, publishers and
+ * promoters register as SwapSutra partners (unlimited listings) instead.
+ * Unlocks already granted by a coupon stay as they are.
+ */
+function redeemListingUnlockCoupon() {
+  return { success: false, error: 'COUPONS_REMOVED',
+    message: 'Coupon codes are no longer used. A bookstore, author, publisher or promoter can register as a SwapSutra partner at /partners to list without a limit.' };
 }
 
 /** Action: submitListingUnlockPayment { utr, fileData, fileName } */

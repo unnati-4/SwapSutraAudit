@@ -90,7 +90,7 @@ export default function AdminListingUnlockQueue() {
         <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
           Verified so far: <span className="text-[var(--text-primary)] font-semibold tabular-nums">₹{revenue.total}</span> —
           ₹{revenue.exchangeFees} from {revenue.exchangePayments} exchange fees, ₹{revenue.unlockFees} from {revenue.unlocksPaid} paid unlocks
-          ({revenue.unlocksByCoupon} unlocked by coupon).
+          {revenue.unlocksByCoupon ? ` (${revenue.unlocksByCoupon} earlier coupon unlocks — coupons are no longer used)` : ''}.
         </p>
       )}
 
