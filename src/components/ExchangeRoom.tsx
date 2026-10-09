@@ -52,6 +52,12 @@ export interface RoomData {
   payment: { payers: Payer[]; allApproved: boolean; upi: { vpa: string; payee: string } };
   returnInfo: { dueAt: string; daysLeft: number; overdue: boolean; extensionDays: number } | null;
   sale: { price: number; sellerReceives: number; payoutStatus: string } | null;
+  /** A rental: the rent, taken from the deposit at the end and paid to the owner. */
+  rentCharge?: number;
+  /** This reader has rated SwapSutra before — asked once only (9 Oct 2026). */
+  platformRated?: boolean;
+  /** This reader has reflected & rated: the exchange has moved to their My orders. */
+  closedForYou?: boolean;
   exchangeDone: boolean; myAddressSaved?: boolean;
   stampCode: string; couriers: string[]; reviewUrl: string;
 }
@@ -222,6 +228,8 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         if (!p) return null;
         const parts = (p.saleAmount ?? 0) > 0
           ? `₹${p.saleAmount} book price + ₹${p.platformFee ?? 0} platform fee. SwapSutra holds the price and pays the seller only after you have the book and say you're happy.`
+          : (p.depositAmount ?? 0) > 0 && (room.rentCharge ?? 0) > 0 && room.role === 'requester'
+            ? `₹${p.depositAmount} security deposit + ₹${p.platformFee ?? 0} platform fee. When the book is back, the rent (₹${Math.min(room.rentCharge ?? 0, p.depositAmount ?? 0)}) goes to the owner from the deposit and ₹${Math.max(0, (p.depositAmount ?? 0) - (room.rentCharge ?? 0))} comes back to you.`
           : (p.depositAmount ?? 0) > 0 ? `₹${p.depositAmount} refundable security deposit + ₹${p.platformFee ?? 0} platform fee. The deposit comes back when the exchange is complete.`
           : `₹${p.platformFee ?? p.requiredAmount} platform fee.`;
         return card('pay', `Pay ₹${p.requiredAmount}`, (
@@ -361,12 +369,16 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
               {stars(rating.reader, n => setRating(r => ({ ...r, reader: n })), 'Rate the other reader')}
               <input value={rating.readerComment} onChange={e => setRating(r => ({ ...r, readerComment: e.target.value }))} maxLength={300} placeholder="A line for other readers (optional)" className="input-classic !py-2 text-xs w-full bg-[var(--input-bg)]" />
             </div>
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-[var(--text-primary)]">How was SwapSutra?</p>
-              {stars(rating.platform, n => setRating(r => ({ ...r, platform: n })), 'Rate SwapSutra')}
-              <input value={rating.platformComment} onChange={e => setRating(r => ({ ...r, platformComment: e.target.value }))} maxLength={300} placeholder="What should we improve? (optional)" className="input-classic !py-2 text-xs w-full bg-[var(--input-bg)]" />
-            </div>
-            <button type="button" disabled={busy === 'rate' || !rating.reader || !rating.platform} onClick={async () => {
+            {/* SwapSutra is rated once per reader (owner's rule). */}
+            {!room.platformRated && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-[var(--text-primary)]">How was SwapSutra?</p>
+                {stars(rating.platform, n => setRating(r => ({ ...r, platform: n })), 'Rate SwapSutra')}
+                <input value={rating.platformComment} onChange={e => setRating(r => ({ ...r, platformComment: e.target.value }))} maxLength={300} placeholder="What should we improve? (optional)" className="input-classic !py-2 text-xs w-full bg-[var(--input-bg)]" />
+              </div>
+            )}
+            <p className="text-2xs text-[var(--text-secondary)]">After this, the exchange moves to Cart → My orders.</p>
+            <button type="button" disabled={busy === 'rate' || !rating.reader || (!room.platformRated && !rating.platform)} onClick={async () => {
               setBusy('rate'); setMsg('');
               try {
                 const res = await post({ action: 'exchangeRoomAction', swapId, act: 'rate', readerRating: rating.reader, readerComment: rating.readerComment, platformRating: rating.platform, platformComment: rating.platformComment });
@@ -416,6 +428,11 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         )}
       </div>
 
+      {room.closedForYou && !room.closed && (
+        <p className="rounded-2xl border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-800" data-testid="room-closed-for-you">
+          ✓ You’ve reflected & rated — this exchange is now in <b>Cart → My orders</b>. The chat closes for you; SwapSutra keeps the record.
+        </p>
+      )}
       {room.disputeOpen && (
         <p className="rounded-2xl border border-red-300 bg-red-50 p-3 text-xs text-red-700">A problem was reported. SwapSutra is reviewing the videos — the steps are paused until it decides. You can keep chatting.</p>
       )}

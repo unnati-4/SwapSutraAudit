@@ -32,8 +32,9 @@ export interface CartOrder {
   otherName: string;
   price?: number;
   paid: { total: number; sale: number; deposit: number; fee: number } | null;
-  deposit: { amount: number; status: 'refunded' | 'refund_due' | 'held' | 'forfeited'; note?: string; paidAt?: string } | null;
-  payout: { amount: number; status: 'paid' | 'due'; paidAt?: string } | null;
+  /** amount = what comes back; rent = the rent taken from it (rentals); of = the deposit paid. */
+  deposit: { amount: number; status: 'refunded' | 'refund_due' | 'held' | 'forfeited' | 'rent_used'; note?: string; paidAt?: string; rent?: number; of?: number } | null;
+  payout: { amount: number; status: 'paid' | 'due'; paidAt?: string; kind?: 'sale' | 'rent' } | null;
   completedAt: string;
   /** sold · received · swapped · rented · lent · in_return */
   category?: string;
@@ -459,14 +460,16 @@ function OrderCard({ o, cover, onOpenChat }: { o: CartOrder; cover: string; onOp
           </p>
         ) : !o.payout ? <p className="cart-order__line">Nothing paid through SwapSutra</p> : null}
         {o.payout && (
-          <p className="cart-order__line">{o.payout.status === 'paid' ? `✓ ${inr(o.payout.amount)} paid to you` : `${inr(o.payout.amount)} on its way to you`} (book price minus the fee)</p>
+          <p className="cart-order__line">{o.payout.status === 'paid' ? `✓ ${inr(o.payout.amount)} paid to you` : `${inr(o.payout.amount)} on its way to you`} {o.payout.kind === 'rent' ? '(rent, from the renter’s deposit)' : '(book price minus the fee)'}</p>
         )}
         {dep && (
           <p className={`cart-order__line ${dep.status === 'forfeited' ? 'is-bad' : ''}`}>
-            {dep.status === 'refunded' ? `✓ ${inr(dep.amount)} deposit refunded`
-              : dep.status === 'refund_due' ? `${inr(dep.amount)} deposit refund on its way`
+            {dep.rent ? (dep.status === 'held' ? `Of your ${inr(dep.of)} deposit, ${inr(dep.rent)} rent goes to the owner · ` : `${inr(dep.rent)} rent paid to the owner from your ${inr(dep.of)} deposit · `) : ''}
+            {dep.status === 'refunded' ? `✓ ${inr(dep.amount)} ${dep.rent ? 'refunded to you' : 'deposit refunded'}`
+              : dep.status === 'refund_due' ? `${inr(dep.amount)} ${dep.rent ? 'coming back to you' : 'deposit refund on its way'}`
+              : dep.status === 'rent_used' ? 'nothing left to refund'
               : dep.status === 'forfeited' ? `${inr(dep.amount)} deposit — ${dep.note || 'forfeited'}`
-              : `${inr(dep.amount)} deposit held until the book is back`}
+              : dep.rent ? `${inr(Math.max(0, (dep.of || 0) - dep.rent))} comes back when the book is returned` : `${inr(dep.amount)} deposit held until the book is back`}
           </p>
         )}
         {r && (

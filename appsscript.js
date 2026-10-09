@@ -2999,13 +2999,18 @@ function doGetHandler_(e) {
         let obj = {};
         headers.forEach((h, i) => obj[h] = row[i]);
         return obj;
-      }).filter(c => 
+      });
+      // 9 Oct 2026: an exchange the reader has reflected on & rated is closed
+      // for them — it leaves their chats and appears in My orders.
+      const ratedByUser = email === 'swapsutra@gmail.com' ? {} : ratedSwapIdsFor_(email);
+      const visibleChats = chats.filter(c => 
         (normalizeEmail(c.ownerEmail) === email || 
         normalizeEmail(c.requesterEmail) === email || 
         normalizeEmail(c.adminEmail) === email) &&
-        (c.chatStatus !== 'Archived' || email === 'swapsutra@gmail.com')
+        (c.chatStatus !== 'Archived' || email === 'swapsutra@gmail.com') &&
+        !ratedByUser[String(c.swapId || '')]
       );
-      return respondJson(chats);
+      return respondJson(visibleChats);
     }
 
     if (action === 'getChatMessages') {
@@ -24233,6 +24238,7 @@ function adminMarkForfeitPaid(data) {
   set('note', String((data && data.note) || '').slice(0, 300));
   const kindOfPayout = String(row.obj.leg) === 'sale' ? 'the payment for your sale of "' + row.obj.bookTitle + '" (price minus the platform fee)'
     : String(row.obj.leg).indexOf('refund:') === 0 ? 'the refund of your payment / security deposit on "' + row.obj.bookTitle + '"'
+    : String(row.obj.leg) === 'rent' ? 'the rent for "' + row.obj.bookTitle + '" (taken from the renter\'s deposit)'
     : String(row.obj.leg).indexOf('dispute:') === 0 ? 'the deposit awarded to you after SwapSutra reviewed the exchange videos'
     : 'the deposit forfeited when your book was not returned on time';
   const account = readPayoutAccount_(row.obj.ownerEmail);
@@ -24771,7 +24777,7 @@ function confirmSaleComplete(data) {
     (account ? ' to ' + account.upiId + '.' : '. Add your UPI ID in the exchange\'s Delivery panel so we can pay you.'),
     swap.obj.id, 'sale_closed_seller_' + swap.obj.id);
   returnNotify_(caller, 'sale_closed_buyer', 'Thank you — purchase closed',
-    'Enjoy the book! If you liked using SwapSutra, a Google review helps other readers find us (optional): ' + GOOGLE_REVIEW_URL,
+    'Enjoy the book!' + (hasRatedPlatform_(caller) ? '' : ' Rate the exchange in its room — it moves to My orders after that.'),
     swap.obj.id, 'sale_closed_buyer_' + swap.obj.id, { whatsapp: false });
   returnNotify_('swapsutra@gmail.com', 'sale_payout_admin', 'Pay a seller',
     'Sale ' + swap.obj.id + ' closed by the buyer. Pay ₹' + st.sellerReceives + ' to ' + swap.ownerEmail + (account ? ' (' + account.upiId + ')' : ' (no UPI yet)') + ' and mark it paid.',
@@ -24967,6 +24973,28 @@ function roomPost_(swapId, message) {
   } catch (err) {
     Logger.log('roomPost_ failed: ' + err);
   }
+}
+
+/**
+ * Has this reader ever rated SwapSutra? (9 Oct 2026, owner's rule: SwapSutra
+ * — and the Google review — is asked for once per reader, not every exchange.)
+ */
+function hasRatedPlatform_(email) {
+  const e = normalizeEmail(email);
+  if (!e) return false;
+  return readSheetObjects_(getPlatformFeedbackSheet_()).rows
+    .some(r => normalizeEmail(r.obj.email) === e && Number(r.obj.platformRating) > 0);
+}
+
+/** swapId → true for every exchange this reader has already reflected on (rated). */
+function ratedSwapIdsFor_(email) {
+  const e = normalizeEmail(email);
+  const out = {};
+  if (!e) return out;
+  readSheetObjects_(getPlatformFeedbackSheet_()).rows.forEach(r => {
+    if (normalizeEmail(r.obj.email) === e) out[String(r.obj.swapId)] = true;
+  });
+  return out;
 }
 
 function getPlatformFeedbackSheet_() {
@@ -25230,7 +25258,8 @@ function computeExchangeRoom_(input) {
   if (me && !closedEarly && !input.myPayoutAccount) {
     const owedSale = sale && me === 'owner' && input.saleEscrow !== false;
     const owedRefund = exchangeDone && (fee.payers || []).some(p => p.payerRole === me && Number(p.depositAmount || 0) > 0);
-    if (owedSale || owedRefund) push({ type: 'payoutAccount', step: sale ? 9 : (needsReturn ? 14 : 9) });
+    const owedRent = type === 'RENT' && me === 'owner' && exchangeDone && rentChargeFor_(o) > 0;
+    if (owedSale || owedRefund || owedRent) push({ type: 'payoutAccount', step: sale ? 9 : (needsReturn ? 14 : 9) });
   }
 
   // What the viewer is waiting for, when there is nothing for them to do.
@@ -25333,6 +25362,12 @@ function getExchangeRoom(data) {
       returnInfo: ret.applies && ret.started ? { dueAt: ret.dueAt, daysLeft: ret.daysLeft, overdue: ret.overdue, extensionDays: ret.extensionDays,
         window: ret.extensionWindow || null, pendingExtension: pending } : null,
       sale: String(swap.obj.serviceType || '').toUpperCase() === 'SELL' ? saleStatusFor_(swap) : null,
+      // A rental: the rent comes out of the deposit at the end (9 Oct 2026).
+      rentCharge: rentChargeFor_(swap.obj),
+      // SwapSutra is rated once per reader; and the room closes for a reader
+      // as soon as they have reflected & rated.
+      platformRated: hasRatedPlatform_(caller),
+      closedForYou: !!(input.viewerRole && room.rated && room.rated[input.viewerRole]),
       payoutAccount: input.myPayoutAccount,
       myAddressSaved: input.myAddressSaved,
       stampCode: vmsStampCode_(swap.obj.id),
@@ -25500,8 +25535,11 @@ function roomFinishExchange_(swap, room) {
   appendStageEvent({ swapId: id, stage: 'ROOM', party: 'system', actionType: 'exchange_done', actorEmail: 'swapsutra@gmail.com',
     note: room && room.needsReturn ? 'Returned and received by both readers.' : 'Delivered and received.' });
   markSwapCompletedInChat(swap);
-  const refunds = roomCreateRefunds_(swap);
+  const created = roomCreateRefunds_(swap);
+  const refunds = created.filter(r => /^refund:/.test(String(r.leg)));
+  const rentRec = created.find(r => String(r.leg) === 'rent');
   roomPost_(id, '🎉 ' + (room && room.needsReturn ? 'Step 14 done — the book is back with its owner.' : 'Step 9 done — the exchange is complete.') +
+    (rentRec ? ' The rent, ₹' + rentRec.amount + ', comes out of the deposit and goes to the owner.' : '') +
     (refunds.length ? ' SwapSutra will refund ₹' + refunds.map(r => r.amount).join(' and ₹') + ' of security deposit to the UPI ID in your settings.' : '') +
     '\n\nStep 15 · Reflect & rate: rate each other and SwapSutra at the top of this room. The room then closes (it stays saved with SwapSutra).');
   [swap.ownerEmail, swap.requesterEmail].forEach(email => {
@@ -25535,20 +25573,58 @@ function roomCreateRefunds_(swap) {
     if (existing.some(f => String(f.leg) === forfeitLeg)) return;
     if (existing.some(f => /^dispute:/.test(String(f.leg)) && String(f.leg).split(':').pop() === role)) return;
     if (existing.some(f => String(f.leg) === 'refund:' + role)) return;
+    const title = String(swap.obj.requestedBookTitle || 'the book');
+
+    // A rental (owner's rule, 9 Oct 2026): the rent comes out of the
+    // renter's deposit and goes to the book's owner; the rest is refunded.
+    let rent = 0;
+    if (role === 'requester' && String(swap.obj.serviceType || '').toUpperCase() === 'RENT') {
+      rent = Math.min(deposit, rentChargeFor_(swap.obj));
+      if (rent > 0 && !existing.some(f => String(f.leg) === 'rent')) {
+        const rentRec = {
+          id: generateId('SS_RENT_'), swapId: id, leg: 'rent', bookTitle: title,
+          defaulterEmail: normalizeEmail(rec.payerEmail), ownerEmail: swap.ownerEmail, amount: rent, dueAt: '', forfeitedAt: new Date(),
+          payoutStatus: 'TO_PAY_OWNER', note: 'Rent for "' + title + '", taken from the renter\'s ₹' + deposit + ' deposit.'
+        };
+        sheet.appendRow(headers.map(k => rentRec[k] !== undefined ? rentRec[k] : ''));
+        existing.push(rentRec);
+        created.push(rentRec);
+        try {
+          returnNotify_(swap.ownerEmail, 'room_rent_due', 'Your rent is on its way',
+            '"' + title + '" is back with you. SwapSutra will send you the rent, ₹' + rent + (readPayoutAccount_(swap.ownerEmail) ? '.' : ' — add your UPI ID in Profile → Settings so we can pay you.'),
+            id, 'room_rent_owner_' + id);
+          returnNotify_('swapsutra@gmail.com', 'room_rent_admin', 'Pay rent to an owner',
+            'Exchange ' + id + ': pay ₹' + rent + ' rent to ' + swap.ownerEmail + ' (from the renter\'s deposit) and mark it paid in Admin → Payouts.', id, 'room_rent_admin_' + id, { whatsapp: false });
+        } catch (e) { /* the payout record is the source of truth */ }
+      }
+    }
+    const refundAmount = deposit - rent;
+    if (!(refundAmount > 0)) return;
     const rec2 = {
-      id: generateId('SS_REFUND_'), swapId: id, leg: 'refund:' + role, bookTitle: String(swap.obj.requestedBookTitle || 'the book'),
-      defaulterEmail: '', ownerEmail: normalizeEmail(rec.payerEmail), amount: deposit, dueAt: '', forfeitedAt: new Date(),
-      payoutStatus: 'TO_PAY_OWNER', note: 'Security deposit refund — exchange completed.'
+      id: generateId('SS_REFUND_'), swapId: id, leg: 'refund:' + role, bookTitle: title,
+      defaulterEmail: '', ownerEmail: normalizeEmail(rec.payerEmail), amount: refundAmount, dueAt: '', forfeitedAt: new Date(),
+      payoutStatus: 'TO_PAY_OWNER',
+      note: rent > 0 ? 'Deposit refund: ₹' + deposit + ' deposit − ₹' + rent + ' rent paid to the owner.' : 'Security deposit refund — exchange completed.'
     };
     sheet.appendRow(headers.map(k => rec2[k] !== undefined ? rec2[k] : ''));
     existing.push(rec2);
     created.push(rec2);
     try {
       returnNotify_('swapsutra@gmail.com', 'room_refund_admin', 'Refund a security deposit',
-        'Exchange ' + id + ' is complete. Refund ₹' + deposit + ' to ' + rec.payerEmail + ' and mark it paid in Admin → Payouts.', id, 'room_refund_admin_' + id + '_' + role, { whatsapp: false });
+        'Exchange ' + id + ' is complete. Refund ₹' + refundAmount + ' to ' + rec.payerEmail + (rent > 0 ? ' (₹' + deposit + ' deposit − ₹' + rent + ' rent)' : '') + ' and mark it paid in Admin → Payouts.', id, 'room_refund_admin_' + id + '_' + role, { whatsapp: false });
     } catch (e) { /* the payout record is the source of truth */ }
   });
   return created;
+}
+
+/** The rent agreed for a rental (monthly rent × months, set on the server at request time). */
+function rentChargeFor_(swapObj) {
+  if (String(swapObj.serviceType || '').toUpperCase() !== 'RENT') return 0;
+  const amount = Math.round(Number(swapObj.amount || 0));
+  if (amount > 0) return amount;
+  const monthly = Number(swapObj.monthlyRent || 0);
+  const months = Math.max(1, Math.ceil(Number(swapObj.durationDays || 30) / 30));
+  return monthly > 0 ? Math.round(monthly * months) : 0;
 }
 
 /** Closes a request before (or instead of) payment. Anything already paid is refunded. */
@@ -25623,11 +25699,14 @@ function roomRate_(swap, caller, role, data, room) {
   if (!room.exchangeDone) return { success: false, error: 'STEP_LOCKED', message: 'Rating opens once the exchange is complete.' };
   if (room.rated[role]) return { success: false, error: 'ALREADY_RATED', message: 'You have already rated this exchange.' };
   const readerRating = Math.round(Number(data && data.readerRating));
-  const platformRating = Math.round(Number(data && data.platformRating));
+  // SwapSutra is rated once per reader: on later exchanges only the other
+  // reader is rated (and no Google review is asked for again).
+  const firstPlatformRating = !hasRatedPlatform_(caller);
+  const platformRating = firstPlatformRating ? Math.round(Number(data && data.platformRating)) : 0;
   if (!(readerRating >= 1 && readerRating <= 5)) return { success: false, message: 'Rate the other reader from 1 to 5 stars.' };
-  if (!(platformRating >= 1 && platformRating <= 5)) return { success: false, message: 'Rate SwapSutra from 1 to 5 stars.' };
+  if (firstPlatformRating && !(platformRating >= 1 && platformRating <= 5)) return { success: false, message: 'Rate SwapSutra from 1 to 5 stars.' };
   const readerComment = String((data && data.readerComment) || '').trim().slice(0, 500);
-  const platformComment = String((data && data.platformComment) || '').trim().slice(0, 500);
+  const platformComment = firstPlatformRating ? String((data && data.platformComment) || '').trim().slice(0, 500) : '';
   // Free text is public-ish (a reader's rating shows on their profile): no contact details.
   if ([readerComment, platformComment].some(c => c && scanMessageForPII(c).blocked)) {
     return { success: false, blocked: true, message: 'Please leave phone numbers, emails and addresses out of your comments.' };
@@ -25640,11 +25719,11 @@ function roomRate_(swap, caller, role, data, room) {
   if (!rr.success && rr.error !== 'ALREADY_RATED') return rr;
   const sheet = getPlatformFeedbackSheet_();
   const headers = ensureSheetHeaders(sheet, PLATFORM_FEEDBACK_HEADERS);
-  const rec = { id: generateId('SS_PFB_'), swapId: id, email: caller, role: role, platformRating: platformRating, platformComment: platformComment,
+  const rec = { id: generateId('SS_PFB_'), swapId: id, email: caller, role: role, platformRating: platformRating || '', platformComment: platformComment,
     readerRating: readerRating, createdAt: new Date() };
   sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
-  roomPost_(id, '⭐ Step 15 · ' + roomName_(caller) + ' shared their reflection and rating.');
-  if (platformRating <= 2) {
+  roomPost_(id, '⭐ Step 15 · ' + roomName_(caller) + ' shared their reflection and rating. The exchange has moved to their My orders.');
+  if (firstPlatformRating && platformRating <= 2) {
     try {
       returnNotify_('swapsutra@gmail.com', 'room_low_rating', 'Low SwapSutra rating (' + platformRating + '★)',
         'Exchange ' + id + ': ' + caller + ' rated SwapSutra ' + platformRating + '/5. ' + platformComment, id, 'room_low_' + rec.id, { whatsapp: false });
@@ -25657,7 +25736,12 @@ function roomRate_(swap, caller, role, data, room) {
     roomArchive_(swap, '🏁 Step 16 · Both of you have rated. This exchange is complete and the room is now closed — it disappears from your chats, and SwapSutra keeps the full record. Happy reading!', 'Exchange complete — both readers rated.');
     closed = true;
   }
-  return { success: true, closed: closed, reviewUrl: GOOGLE_REVIEW_URL, message: platformRating >= 4 ? 'Thank you! If you have a minute, a Google review helps other readers find SwapSutra.' : 'Thank you — we read every reflection.' };
+  // The room closes for this reader now (it leaves their chats and moves to
+  // My orders); for the other reader when they rate too, or after 7 days.
+  const askReview = firstPlatformRating && platformRating >= 4;
+  return { success: true, closed: closed, closedForYou: true, reviewUrl: askReview ? GOOGLE_REVIEW_URL : '',
+    message: askReview ? 'Thank you! This exchange is now in My orders. If you have a minute, a Google review helps other readers find SwapSutra.'
+      : 'Thank you — this exchange is now in My orders.' };
 }
 
 /**
@@ -25973,6 +26057,7 @@ function getMyOrders() {
     if (!mine.length) return { success: true, orders: [] };
 
     const idSet = {}; mine.forEach(id => { idSet[id] = true; });
+    const ratedByMe = ratedSwapIdsFor_(caller);
     const roomEvents = {};
     readSheetObjects_(getStageEventsSheet()).rows.forEach(r => {
       const o = r.obj;
@@ -25992,7 +26077,7 @@ function getMyOrders() {
       const done = evs.filter(e => e.actionType === 'exchange_done').pop();
       // Until the room closes (both rated, or 7 days after completion) it
       // stays in the cart, where the reader rates; then it is an order.
-      const roomClosed = String((chats[id] || {}).chatStatus || '') === 'Archived' || evs.some(e => e.actionType === 'room_closed');
+      const roomClosed = String((chats[id] || {}).chatStatus || '') === 'Archived' || evs.some(e => e.actionType === 'room_closed') || !!ratedByMe[id];
       let inReturn = null;
       if (!done) {
         // Not finished — but a book that has reached the reader and has to
@@ -26025,15 +26110,18 @@ function getMyOrders() {
         const refund = p.find(x => String(x.leg) === 'refund:' + role);
         const forfeitLeg = role === 'requester' ? 'return' : 'counter_return';
         const forfeit = p.find(x => String(x.leg) === forfeitLeg || (/^dispute:/.test(String(x.leg)) && String(x.leg).split(':').pop() === role && Number(x.amount) > 0));
+        const rentRow = p.find(x => String(x.leg) === 'rent');
+        const rentCut = rentRow ? Number(rentRow.amount || 0) : 0;
         deposit = forfeit ? { amount: paid.deposit, status: 'forfeited', note: 'Forfeited' + (forfeit.amount ? ' (₹' + forfeit.amount + ')' : '') }
-          : refund ? { amount: Number(refund.amount || paid.deposit), status: refund.payoutStatus === 'PAID_TO_OWNER' ? 'refunded' : 'refund_due', paidAt: refund.paidAt || '' }
-          : { amount: paid.deposit, status: 'held' };
+          : refund ? { amount: Number(refund.amount || paid.deposit), status: refund.payoutStatus === 'PAID_TO_OWNER' ? 'refunded' : 'refund_due', paidAt: refund.paidAt || '', rent: rentCut, of: paid.deposit }
+          : rentCut >= paid.deposit ? { amount: 0, status: 'rent_used', rent: rentCut, of: paid.deposit }
+          : { amount: paid.deposit, status: 'held', rent: role === 'requester' ? rentChargeFor_(swap.obj) : 0, of: paid.deposit };
       }
-      // A seller's payout.
+      // A seller's payout, or an owner's rent.
       let payout = null;
-      if (role === 'owner' && type === 'SELL') {
-        const p = (payouts[id] || []).find(x => String(x.leg) === 'sale');
-        if (p) payout = { amount: Number(p.amount || 0), status: p.payoutStatus === 'PAID_TO_OWNER' ? 'paid' : 'due', paidAt: p.paidAt || '' };
+      if (role === 'owner' && (type === 'SELL' || type === 'RENT')) {
+        const p = (payouts[id] || []).find(x => String(x.leg) === (type === 'SELL' ? 'sale' : 'rent'));
+        if (p) payout = { amount: Number(p.amount || 0), status: p.payoutStatus === 'PAID_TO_OWNER' ? 'paid' : 'due', paidAt: p.paidAt || '', kind: type === 'SELL' ? 'sale' : 'rent' };
       }
       const other = role === 'owner' ? swap.requesterEmail : swap.ownerEmail;
       orders.push({

@@ -203,7 +203,9 @@ console.log('--- closing the purchase ---');
   const p = payouts(env);
   check('17. A ₹290 payout to the seller is created', p.length === 1 && p[0][5] === 'seller@x.com' && p[0][6] === 290 && p[0][9] === 'TO_PAY_OWNER');
   check('18. The seller is told, with their UPI', env.notifications.some(n => n[0] === 'seller@x.com' && /₹290/.test(n[3]) && /riya@okaxis/.test(n[3])));
-  check('19. The buyer is thanked and invited (optionally) to review', env.notifications.some(n => n[0] === 'buyer@x.com' && n[3].includes(REVIEW) && /optional/.test(n[3])));
+  // 9 Oct 2026 (owner's rule): the Google review is offered ONCE per reader,
+  // in the exchange room's rating step — not in every purchase notification.
+  check('19. The buyer is thanked; the review link is not repeated here', env.notifications.some(n => n[0] === 'buyer@x.com' && n[1] === 'sale_closed_buyer' && /Enjoy the book/.test(n[3]) && !n[3].includes(REVIEW)));
   check('20. SwapSutra is told to pay', env.notifications.some(n => n[0] === 'swapsutra@gmail.com' && /Pay a seller/.test(n[2])));
   check('21. A purchase closes only once', env.api.confirmSaleComplete({ swapId: 'S1', happy: true }).success === false);
   env.as('swapsutra@gmail.com');
