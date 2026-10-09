@@ -18,7 +18,7 @@ import {
   Film, Settings, ChevronLeft, LogOut, ExternalLink, Archive,
   Bell, ArrowDownLeft, ArrowUpRight, MessageCircle, Send, Paperclip,
   Instagram, Youtube, Linkedin, Facebook, Loader, ChevronDown, Eye, FileText, CheckCircle, CheckSquare, AlertTriangle, Image as ImageIcon,
-  Feather, Award, Zap, Sparkles, Smile, Trophy, Heart, Compass, Gift, Megaphone,
+  Feather, Award, Zap, Sparkles, Smile, Trophy, Heart, Compass, Gift, Megaphone, Store, Wallet,
   Share2, UserRound, ShoppingBag, ShoppingCart,
 } from 'lucide-react';
 import { } from 'qrcode.react';
@@ -176,6 +176,15 @@ const AdminCustomMugs = lazyScreen<any>(
 const AdminSponsoredAds = lazyScreen<any>(
   () => import('./components/AdminSponsoredAds'),
   'Opening the ads'
+);
+// 9 Oct: the admin's UPI ID / QR / bank details, and the partner console.
+const AdminPaymentSettings = lazyScreen<any>(
+  () => import('./components/AdminPaymentSettings'),
+  'Opening the payment details'
+);
+const AdminPartners = lazyScreen<any>(
+  () => import('./components/AdminPartners'),
+  'Opening partners'
 );
 const AdminMugProducts = lazyScreen<any>(
   () => import('./components/mugs/AdminMugProducts'),
@@ -4508,7 +4517,7 @@ const ManagementConsole = memo(() => {
       return;
     }
     // Screens that load their own data (no generic fetch, no error banner).
-    if (currentTab === 'customMugs' || currentTab === 'sponsoredAds') { setLoading(false); return; }
+    if (['customMugs', 'sponsoredAds', 'paymentSettings', 'partners'].includes(currentTab)) { setLoading(false); return; }
     let apiActions: string[] = [];
     if (currentTab === 'dashboard') apiActions = ['getAdminDashboardMetrics'];
     else if (currentTab === 'approvals') apiActions = ['getPendingMembershipApprovals'];
@@ -4626,7 +4635,9 @@ const ManagementConsole = memo(() => {
     { id: 'bookPricing', label: 'Book Pricing', icon: BookOpen },
     { id: 'readerBadges', label: 'Badges', icon: Star },
     { id: 'customMugs', label: 'Mugs', icon: Gift },
+    { id: 'partners', label: 'Partners', icon: Store },
     { id: 'sponsoredAds', label: 'Ads', icon: Megaphone },
+    { id: 'paymentSettings', label: 'Payment details', icon: Wallet },
   ];
 
   const normalizeStatus = (status: any) => String(status || '').trim().toLowerCase();
@@ -4979,6 +4990,8 @@ const ManagementConsole = memo(() => {
         )}
 
         {tab === 'sponsoredAds' && <AdminSponsoredAds />}
+        {tab === 'partners' && <AdminPartners />}
+        {tab === 'paymentSettings' && <AdminPaymentSettings />}
         {tab === 'customMugs' && (
           <AdminCustomMugs />
         )}

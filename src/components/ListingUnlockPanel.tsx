@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { QRCodeCanvas } from 'qrcode.react';
+import UpiPayBox, { type PayDetails } from './UpiPayBox';
 import { apiUrl } from '../config/runtime';
 
 /**
@@ -89,7 +89,7 @@ interface Props {
 
 export default function ListingUnlockPanel({ open, onClose, onChange }: Props) {
   const [allowance, setAllowance] = useState<ListingAllowance | null>(null);
-  const [upi, setUpi] = useState<{ vpa: string; payee: string } | null>(null);
+  const [upi, setUpi] = useState<PayDetails | null>(null);
   const [utr, setUtr] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -118,9 +118,6 @@ export default function ListingUnlockPanel({ open, onClose, onChange }: Props) {
   if (!open) return null;
 
   const fee = allowance?.unlockFee ?? 20;
-  const upiString = upi
-    ? `upi://pay?pa=${upi.vpa}&pn=${encodeURIComponent(upi.payee)}&am=${fee}&cu=INR&tn=SwapSutra%20Listing%20Unlock`
-    : '';
 
   const finish = (next: ListingAllowance, message: string) => {
     setAllowance(next);
@@ -206,9 +203,7 @@ export default function ListingUnlockPanel({ open, onClose, onChange }: Props) {
               <div className="space-y-5">
                 {upi && (
                   <div className="flex flex-col items-center gap-2 rounded-2xl bg-[var(--bg-page)] p-5">
-                    <a href={upiString} title="Open in your UPI app" className="block bg-white rounded-xl p-2">
-                      <QRCodeCanvas value={upiString} size={176} level="H" />
-                    </a>
+                    <UpiPayBox upi={upi} amount={fee} note="SwapSutra Listing Unlock" size={176} showAmountHint={false} />
                     <p className="font-serif text-3xl text-[var(--text-primary)] tabular-nums">₹{fee} <span className="text-sm font-sans text-[var(--text-secondary)]">for 3 months</span></p>
                     <p className="text-xs text-[var(--text-secondary)] text-center leading-relaxed">
                       Scan with any UPI app, or tap the code on your phone. Don't change the amount.

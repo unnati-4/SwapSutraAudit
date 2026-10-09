@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
-import { QRCodeCanvas } from 'qrcode.react';
+import UpiPayBox, { type PayDetails } from './UpiPayBox';
 import { apiUrl } from '../config/runtime';
 import { VideoRecorder, uploadExchangeVideo, VMS_TITLES, type VmsKind, type VmsLeg } from './ExchangeVideos';
 import { LocationCard } from './LocationPin';
@@ -49,7 +49,7 @@ export interface RoomData {
   legs: { out: RoomLeg[]; back: RoomLeg[] };
   route: { out: RoomRoute | null; back: RoomRoute | null };
   deadlines: { conditionBy: string; payBy: string };
-  payment: { payers: Payer[]; allApproved: boolean; upi: { vpa: string; payee: string } };
+  payment: { payers: Payer[]; allApproved: boolean; upi: PayDetails };
   returnInfo: { dueAt: string; daysLeft: number; overdue: boolean; extensionDays: number } | null;
   sale: { price: number; sellerReceives: number; payoutStatus: string } | null;
   /** A rental: the rent, taken from the deposit at the end and paid to the owner. */
@@ -208,7 +208,6 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   const legOf = (leg?: string) => room.legs.out.concat(room.legs.back).find(l => l.leg === leg);
   const myPayer = room.payment.payers.find(p => p.payerRole === room.role);
   const otherPayer = room.payment.payers.find(p => p.payerRole !== room.role);
-  const upiLink = (amount: number) => `upi://pay?pa=${room.payment.upi.vpa}&pn=${encodeURIComponent(room.payment.upi.payee)}&am=${amount}&cu=INR&tn=${encodeURIComponent('SwapSutra exchange ' + room.swapId.slice(-6))}`;
   const videoActions = room.actions.filter(a => a.type === 'video');
   const otherActions = room.actions.filter(a => a.type !== 'video');
 
@@ -237,10 +236,8 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
           <div className="space-y-3">
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{parts}</p>
             {p.adminStatus === 'ADMIN_REJECTED' && <p className="text-xs text-red-600">Your last payment was not accepted{p.rejectedReason ? `: ${p.rejectedReason}` : ''}. Please pay again.</p>}
-            <a href={upiLink(p.requiredAmount)} className="mx-auto block w-fit rounded-xl bg-white p-2" title="Open in your UPI app">
-              <QRCodeCanvas value={upiLink(p.requiredAmount)} size={156} level="H" includeMargin />
-            </a>
-            <p className="text-center text-2xs text-[var(--text-secondary)]">Scan with any UPI app (or tap it on your phone). Don't change the amount.{room.deadlines.payBy ? ` Pay by ${roomWhen(room.deadlines.payBy)}.` : ''}</p>
+            <UpiPayBox upi={room.payment.upi} amount={p.requiredAmount} note={'SwapSutra exchange ' + room.swapId.slice(-6)} size={156} />
+            <p className="text-center text-2xs text-[var(--text-secondary)]">Scan with any UPI app (or tap it on your phone).{room.deadlines.payBy ? ` Pay by ${roomWhen(room.deadlines.payBy)}.` : ''}</p>
             <input value={utr} onChange={e => setUtr(e.target.value)} placeholder="UTR / transaction reference" className="input-classic !py-2 text-xs w-full bg-[var(--input-bg)]" />
             <input type="file" accept="image/jpeg,image/png,image/webp" onChange={e => setPayFile(e.currentTarget.files?.[0] || null)} className="block w-full text-2xs" aria-label="Payment screenshot" />
             <button type="button" onClick={submitPayment} disabled={busy === 'pay'} className={`w-full ${btnSolid}`}>{busy === 'pay' ? 'Sending…' : 'I have paid — send for verification'}</button>

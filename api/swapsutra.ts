@@ -102,6 +102,8 @@ const PUBLIC_ACTIONS = new Set([
   'getMugProducts', 'submitCustomMugEnquiry',
   // Sponsored ads (9 Oct): the live ads for the Library, and a bare click count.
   'getSponsoredAds', 'recordAdClick',
+  // SwapSutra's payment details (UPI ID / QR / bank) for the Support box.
+  'getPaymentDetails',
   // 30 Sep: pages are open to look at; the Reading Room feed is readable
   // signed-out (Apps Script strips every email for a visitor).
   'getReadingRoomFeed'

@@ -496,7 +496,9 @@ const SESSION_EXEMPT_ACTIONS = {
   submitCustomMugEnquiry: true,
   // Sponsored ads (9 Oct): shown to everyone; a click is only counted.
   getSponsoredAds: true,
-  recordAdClick: true
+  recordAdClick: true,
+  // Payment details (9 Oct): SwapSutra's UPI ID / QR / bank for payers.
+  getPaymentDetails: true
 };
 
 /**
@@ -2989,8 +2991,11 @@ function doGetHandler_(e) {
         try { scriptCache.put(accessKey, '1', 120); } catch (cacheErr) { /* cache is an optimisation only */ }
       }
 
+      // A partner (9 Oct 2026) never sees who the buyer is.
+      const maskForPartner = (list) => (!Array.isArray(list) || !approvedPartner_(userEmail)) ? list
+        : list.map(m => (normalizeEmail(m.senderEmail) === userEmail || isAdminEmail(m.senderEmail)) ? m : Object.assign({}, m, { senderEmail: 'buyer', senderName: 'Buyer' }));
       const cachedThread = chatThreadCacheGet_(chatId);
-      if (cachedThread) return respondJson(cachedThread);
+      if (cachedThread) return respondJson(maskForPartner(cachedThread));
 
       const sheet = getOrCreateSheet('Messages', []);
       const data = sheet.getDataRange().getValues();
@@ -3002,7 +3007,7 @@ function doGetHandler_(e) {
         return obj;
       }).filter(m => m.chatId === chatId);
       chatThreadCachePut_(chatId, messages);
-      return respondJson(messages);
+      return respondJson(maskForPartner(messages));
     }
 
     if (action === 'getNotifications') {
@@ -5804,6 +5809,8 @@ function getBookHeaders() {
     "imageUrls", "driveFolderId", "notes", "mrp", "audioUrl", "videoUrl",
     "latitude", "longitude", "listedAt", "expiresAt", "status", "approvedAt",
     "rejectedAt", "rejectionReason", "visibleUntil", "hiddenReason",
+    // Partners (9 Oct 2026): how many copies a partner has, and who sells it.
+    "stock", "sellerType", "sellerName",
     "approvalEmailSent", "bookApprovalEmailSent", "bookApprovalEmailSentAt",
     "email_error", "createdAt", "updatedAt",
     "isbn", "publisher", "copyType", "copyTypeDeclaration", "referenceCoverUrl", "conditionNotes",
@@ -6330,6 +6337,24 @@ function doPostHandler_(e) {
     if (action === 'getAdminSponsoredAds') return respondJson(getAdminSponsoredAds());
     if (action === 'saveSponsoredAd') return respondJson(saveSponsoredAd(data));
     if (action === 'uploadSponsoredAdImage') return respondJson(uploadSponsoredAdImage(data));
+    // Payment details the admin can change (9 Oct).
+    if (action === 'getPaymentDetails') return respondJson(getPaymentDetails());
+    if (action === 'getAdminPaymentSettings') return respondJson(getAdminPaymentSettings());
+    if (action === 'saveAdminPaymentSettings') return respondJson(saveAdminPaymentSettings(data));
+    if (action === 'uploadPaymentQrImage') return respondJson(uploadPaymentQrImage(data));
+    // SwapSutra partners (9 Oct) — see the PARTNERS block at the end of the file.
+    if (action === 'getMyPartner') return respondJson(getMyPartner());
+    if (action === 'submitPartnerApplication') return respondJson(submitPartnerApplication(data));
+    if (action === 'updatePartnerProfile') return respondJson(updatePartnerProfile(data));
+    if (action === 'uploadPartnerBanner') return respondJson(uploadPartnerBanner(data));
+    if (action === 'savePartnerAd') return respondJson(savePartnerAd(data));
+    if (action === 'submitPartnerAdPayment') return respondJson(submitPartnerAdPayment(data));
+    if (action === 'setPartnerBookStock') return respondJson(setPartnerBookStock(data));
+    if (action === 'adminListPartners') return respondJson(adminListPartners());
+    if (action === 'adminReviewPartner') return respondJson(adminReviewPartner(data));
+    if (action === 'adminReviewPartnerBanner') return respondJson(adminReviewPartnerBanner(data));
+    if (action === 'adminReviewPartnerAdPayment') return respondJson(adminReviewPartnerAdPayment(data));
+    if (action === 'adminMarkPartnerMonthPaid') return respondJson(adminMarkPartnerMonthPaid(data));
     if (action === 'getDailyPushAdmin' || action === 'setDailyPushSettings' || action === 'sendDailyPushTest') {
       if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: 'Unauthorized' });
       if (action === 'getDailyPushAdmin') return respondJson(getDailyPushAdmin(data));
@@ -6974,7 +6999,7 @@ function doPostHandler_(e) {
     if (action === 'subscribeNewsletter') result = subscribeNewsletter(data);
     if (action === 'subscribeEventNotify' || action === 'notifyEvent') result = subscribeEventNotify(data);
     if (action === 'unsubscribeEventNotify') result = unsubscribeEventNotify(data);
-    if (action === 'sendOTP') result = sendOTP(data.email);
+    if (action === 'sendOTP') result = sendOTP(data.email, data.purpose);
     if (action === 'verifyOTP') result = verifyOTP(data.email, data.otp);
     if (action === 'resolveSession') result = resolveSessionForProxy(data);
     if (action === 'sendChatMessage') result = sendChatMessage(data);
@@ -7886,6 +7911,7 @@ function createBook(data) {
   }
   const submittedImages = mediaCheck.imagesForLegacyArray;
 
+  const listingPartner = approvedPartner_(ownerEmail);
   const currentCount = recalculateBooksListedCount(ownerEmail);
   // 20 books free; a one-time ₹20 payment or a coupon lifts the limit for
   // good. See getListingAllowanceFor_ in the platform-fee section.
@@ -8017,6 +8043,10 @@ function createBook(data) {
     else if (h === 'imageUrls') row[i] = uploadResult.imageUrls;
     else if (h === 'driveFolderId') row[i] = uploadResult.folderId;
     else if (h === 'notes') row[i] = data.notes;
+    // A partner (bookstore, publisher…) keeps a stock count; readers have one copy.
+    else if (h === 'stock') row[i] = listingPartner ? Math.max(1, Math.min(9999, Math.floor(Number(data.stock) || 1))) : '';
+    else if (h === 'sellerType') row[i] = listingPartner ? listingPartner.type : '';
+    else if (h === 'sellerName') row[i] = listingPartner ? listingPartner.name : '';
     // SwapSutra's resolved listing value. An unresolved price is written
     // as an empty cell, never as 0 — a blank reads as "not known" to every
     // parser here, and 0 reads as "this book is worth nothing".
@@ -8947,6 +8977,10 @@ function createSwapRequest(data) {
 
   const requestedBook = {};
   bookHeaders.forEach((h, i) => requestedBook[h] = requestedBookRow[i]);
+  // A partner's book with no copies left (9 Oct 2026).
+  if (requestedBook.stock !== undefined && requestedBook.stock !== '' && Number(requestedBook.stock) <= 0) {
+    return { success: false, error: 'OUT_OF_STOCK', message: 'This book is out of stock right now.' };
+  }
   const flags = bookAvailabilityFlags(requestedBook);
 
   // Authenticity gate, before any per-service check.
@@ -11197,7 +11231,7 @@ function recordOtpAttempt(normEmail, outcome) {
   }
 }
 
-function sendOTP(email) {
+function sendOTP(email, purpose) {
   const normEmail = normalizeEmail(email);
   if (!normEmail) {
     return { success: false, code: "EMAIL_REQUIRED", message: "Email is required." };
@@ -11233,7 +11267,12 @@ function sendOTP(email) {
   // could be locked out of their own login.
   const isQaLogin = isTestQAModeEnabled() && isTestQAEmail(normEmail);
   const isExemptAuthEmail = isQaLogin || isAdminEmail(normEmail);
-  if (!isExemptAuthEmail && !emailExistsInUsersSheet(normEmail)) {
+  // Partners (9 Oct 2026) register separately from readers: a bookstore,
+  // author, publisher or promoter verifies their email on /partners before
+  // they have an account. The session it gives can only apply as a partner
+  // (everything else still checks membership).
+  const isPartnerSignup = String(purpose || '') === 'partner';
+  if (!isExemptAuthEmail && !isPartnerSignup && !emailExistsInUsersSheet(normEmail)) {
     logActivity(normEmail, "Login OTP Blocked", "No registered SwapSutra account for this email", "Failed", "Auth");
     return {
       success: false,
@@ -20883,7 +20922,7 @@ function getSwapStage(data) {
       completed: completed,
       chatUnlocked: secApproved,
       securityFee: fee,
-      upi: { vpa: SWAPSM_UPI_VPA, payee: SWAPSM_UPI_PAYEE },
+      upi: paymentDetails_(),
       stages: {
         handover: Object.assign({ unlocked: handoverUnlocked }, handover),
         logistics: Object.assign({ unlocked: logisticsUnlocked }, logistics),
@@ -20912,7 +20951,7 @@ function getSecurityFeeStatus(data) {
     if (!swap) return { success: false, message: 'That exchange could not be found.' };
     if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
     const status = securityFeeStatus(swap, caller, isAuthenticatedAdmin());
-    return Object.assign({ success: true, swapId: swapId, upi: { vpa: SWAPSM_UPI_VPA, payee: SWAPSM_UPI_PAYEE } }, status);
+    return Object.assign({ success: true, swapId: swapId, upi: paymentDetails_() }, status);
   } catch (err) {
     return { success: false, message: err.toString() };
   }
@@ -22975,11 +23014,13 @@ function getMugProducts() {
 const AD_HEADERS = [
   'id', 'kind', 'sponsor', 'headline', 'tagline', 'imageUrl', 'linkUrl', 'bookId',
   'ctaLabel', 'placement', 'status', 'startDate', 'endDate', 'clicks',
-  'createdAt', 'updatedAt', 'createdBy'
+  'createdAt', 'updatedAt', 'createdBy',
+  // A partner's own ad (9 Oct 2026): it waits as "pending" until the admin approves it.
+  'partnerId', 'reviewNote'
 ];
 const AD_KINDS = ['bookstore', 'author', 'book'];
 const AD_PLACEMENTS = ['both', 'banner', 'shelf'];
-const AD_STATUSES = ['live', 'paused', 'removed'];
+const AD_STATUSES = ['live', 'paused', 'removed', 'pending', 'rejected'];
 const AD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 
 function adSheet_() {
@@ -23029,17 +23070,21 @@ function getSponsoredAds() {
   try {
     const today = adTodayIst_();
     const https = function (u) { u = String(u || '').trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u : ''; };
+    const partnersById = {};
+    try { partnerRows_().rows.forEach(function (r) { partnersById[String(r.obj.id)] = r.obj; }); } catch (e) { /* no partners yet */ }
     const items = adRows_().rows.map(function (r) { return r.obj; })
       .filter(function (o) { return adIsShowing_(o, today) && String(o.headline || '').trim() && (https(o.linkUrl) || String(o.bookId || '').trim()); })
+      // A partner's ad runs only while their promotion is paid up (or free) and they want ads.
+      .filter(function (o) { return !String(o.partnerId || '') || partnerPromotionLive_(partnersById[String(o.partnerId)], 'ads'); })
       .map(function (o) {
         const placement = AD_PLACEMENTS.indexOf(String(o.placement)) === -1 ? 'both' : String(o.placement);
         return {
           id: String(o.id), kind: AD_KINDS.indexOf(String(o.kind)) === -1 ? 'book' : String(o.kind),
           sponsor: mugText_(o.sponsor, 80), headline: mugText_(o.headline, 90), tagline: mugText_(o.tagline, 160),
           imageUrl: https(o.imageUrl), linkUrl: https(o.linkUrl), bookId: mugText_(o.bookId, 60),
-          ctaLabel: mugText_(o.ctaLabel, 30), placement: placement
+          ctaLabel: mugText_(o.ctaLabel, 30), placement: placement, partner: !!String(o.partnerId || '')
         };
-      });
+      }).concat(partnerBannerAds_());
     return { success: true, items: items };
   } catch (err) {
     Logger.log('getSponsoredAds failed: ' + err);
@@ -23072,7 +23117,10 @@ function getAdminSponsoredAds() {
   const items = adRows_().rows.map(function (r) { return r.obj; })
     .filter(function (o) { return String(o.status || '').toLowerCase() !== 'removed'; })
     .map(function (o) {
-      return Object.assign({}, o, { startDate: adDate_(o.startDate), endDate: adDate_(o.endDate), clicks: Number(o.clicks) || 0, showingNow: adIsShowing_(o, today) });
+      const partner = String(o.partnerId || '') ? ((partnerRows_().rows.find(function (r) { return String(r.obj.id) === String(o.partnerId); }) || {}).obj || null) : null;
+      return Object.assign({}, o, { startDate: adDate_(o.startDate), endDate: adDate_(o.endDate), clicks: Number(o.clicks) || 0,
+        showingNow: adIsShowing_(o, today) && (!partner || partnerPromotionLive_(partner, 'ads')),
+        partnerName: partner ? partner.name : '', partnerPromotionActive: partner ? partnerPromotionLive_(partner, 'ads') : null });
     });
   return { success: true, items: items, kinds: AD_KINDS, placements: AD_PLACEMENTS, statuses: AD_STATUSES };
 }
@@ -23091,6 +23139,7 @@ function validateSponsoredAd_(data) {
   };
   if (AD_STATUSES.indexOf(status) === -1) errors.status = 'Unknown status.';
   if (status === 'removed') return { errors: errors, clean: clean };
+  if (status === 'rejected') { clean.status = 'rejected'; }
   if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author or book.';
   if (AD_PLACEMENTS.indexOf(clean.placement) === -1) errors.placement = 'Choose where the ad shows.';
   if (!clean.sponsor) errors.sponsor = 'Who is the ad for? (the bookstore, author or publisher)';
@@ -23121,9 +23170,20 @@ function saveSponsoredAd(data) {
     if (id && !hit) return { success: false, message: 'That ad no longer exists.' };
     const now = new Date().toISOString();
     const rec = hit ? Object.assign({}, hit.obj) : { id: 'AD-' + Utilities.getUuid().slice(0, 8).toUpperCase(), clicks: 0, createdAt: now, createdBy: getAuthenticatedEmail() || '' };
+    const wasPending = hit && String(hit.obj.status) === 'pending';
     if (v.clean.status === 'removed') rec.status = 'removed';
     else Object.keys(v.clean).forEach(function (k) { rec[k] = v.clean[k]; });
+    if (rec.partnerId && hit) rec.sponsor = hit.obj.sponsor; // a partner's ad keeps the partner's name
+    rec.reviewNote = v.clean.status === 'rejected' ? mugText_((data || {}).reviewNote, 300) : '';
     rec.updatedAt = now;
+    if (rec.partnerId && wasPending && (rec.status === 'live' || rec.status === 'rejected')) {
+      try {
+        const partner = (partnerRows_().rows.find(function (r) { return String(r.obj.id) === String(rec.partnerId); }) || {}).obj;
+        if (partner) returnNotify_(partner.email, 'partner_ad_review', rec.status === 'live' ? 'Your ad is approved' : 'Your ad needs a change',
+          rec.status === 'live' ? '"' + rec.headline + '" is approved and runs on the Library page.' : '"' + rec.headline + '" was not approved' + (rec.reviewNote ? ': ' + rec.reviewNote : '.'),
+          '', 'partner_ad_rev_' + rec.id + '_' + Date.now());
+      } catch (e) { /* saved */ }
+    }
     const row = headers.map(function (h) { return rec[h] !== undefined ? rec[h] : ''; });
     if (hit) sheet.getRange(hit.rowIndex + 1, 1, 1, row.length).setValues([row]);
     else sheet.appendRow(row);
@@ -23136,19 +23196,111 @@ function saveSponsoredAd(data) {
 /** Admin: upload the ad picture to Drive and get back a link for it. */
 function uploadSponsoredAdImage(data) {
   if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  return savePublicImage_(data, 'SwapSutra_Ads', 'ad_');
+}
+
+// =====================================================================
+// PAYMENT DETAILS — editable by the admin (9 Oct 2026, owner's request:
+// "admin kabhi bhi chahe toh apna personal qr code or bank details change
+// kar sakta hai"). Stored in the Script Property PAYMENT_DETAILS_JSON; every
+// payment box on the site (exchange payments, listing unlock, partner ad
+// fees, Support SwapSutra) reads paymentDetails_(). Each change is logged
+// in the PaymentSettingsLog sheet.
+// =====================================================================
+
+const PAYMENT_DETAILS_PROP = 'PAYMENT_DETAILS_JSON';
+const PAYMENT_LOG_HEADERS = ['changedAt', 'changedBy', 'vpa', 'payee', 'qrImageUrl', 'useQrImage', 'bankAccountName', 'bankAccountLast4', 'ifsc', 'bankName'];
+
+function paymentDetails_() {
+  let saved = {};
+  try { saved = JSON.parse(readScriptProperty_(PAYMENT_DETAILS_PROP) || '{}') || {}; } catch (e) { saved = {}; }
+  const bank = saved.bank || {};
+  const hasBank = !!(bank.accountNumber || bank.ifsc);
+  return {
+    vpa: String(saved.vpa || SWAPSM_UPI_VPA),
+    payee: String(saved.payee || SWAPSM_UPI_PAYEE),
+    qrImageUrl: String(saved.qrImageUrl || ''),
+    useQrImage: !!(saved.useQrImage && saved.qrImageUrl),
+    bank: hasBank ? { accountName: String(bank.accountName || ''), accountNumber: String(bank.accountNumber || ''), ifsc: String(bank.ifsc || ''), bankName: String(bank.bankName || '') } : null
+  };
+}
+
+/** Public: what a payer needs to pay SwapSutra. */
+function getPaymentDetails() {
+  return { success: true, upi: paymentDetails_() };
+}
+
+function getAdminPaymentSettings() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  let meta = {};
+  try { meta = JSON.parse(readScriptProperty_(PAYMENT_DETAILS_PROP) || '{}') || {}; } catch (e) { meta = {}; }
+  return { success: true, upi: paymentDetails_(), updatedAt: meta.updatedAt || '', updatedBy: meta.updatedBy || '' };
+}
+
+function validatePaymentSettings_(data) {
+  const d = data || {};
+  const errors = {};
+  const vpa = String(d.vpa || '').trim();
+  const payee = mugText_(d.payee, 60);
+  const qrImageUrl = String(d.qrImageUrl || '').trim();
+  const b = d.bank || {};
+  const accountNumber = String(b.accountNumber || '').replace(/\s+/g, '');
+  const ifsc = String(b.ifsc || '').trim().toUpperCase();
+  if (!/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/.test(vpa)) errors.vpa = 'Enter a UPI ID like name@okhdfcbank.';
+  if (payee.length < 2) errors.payee = 'Enter the name shown in UPI apps.';
+  if (qrImageUrl && !/^https:\/\/[^\s]+$/i.test(qrImageUrl)) errors.qrImageUrl = 'The QR picture link must start with https://.';
+  if (d.useQrImage && !qrImageUrl) errors.qrImageUrl = 'Upload your QR picture first.';
+  if (accountNumber && !/^\d{6,20}$/.test(accountNumber)) errors.accountNumber = 'Account number: 6 to 20 digits.';
+  if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) errors.ifsc = 'IFSC looks like HDFC0001234.';
+  if ((accountNumber && !ifsc) || (!accountNumber && ifsc)) errors[accountNumber ? 'ifsc' : 'accountNumber'] = 'Give both the account number and the IFSC (or neither).';
+  return {
+    errors: errors,
+    clean: {
+      vpa: vpa, payee: payee, qrImageUrl: qrImageUrl, useQrImage: !!(d.useQrImage && qrImageUrl),
+      bank: accountNumber ? { accountName: mugText_(b.accountName, 80), accountNumber: accountNumber, ifsc: ifsc, bankName: mugText_(b.bankName, 60) } : null
+    }
+  };
+}
+
+function saveAdminPaymentSettings(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const v = validatePaymentSettings_(data);
+  if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
+  const who = getAuthenticatedEmail() || '';
+  const rec = Object.assign({}, v.clean, { updatedAt: new Date().toISOString(), updatedBy: who });
+  PropertiesService.getScriptProperties().setProperty(PAYMENT_DETAILS_PROP, JSON.stringify(rec));
+  try {
+    const sheet = getOrCreateSheet('PaymentSettingsLog', PAYMENT_LOG_HEADERS);
+    const h = ensureSheetHeaders(sheet, PAYMENT_LOG_HEADERS);
+    const b = rec.bank || {};
+    const row = { changedAt: new Date(), changedBy: who, vpa: rec.vpa, payee: rec.payee, qrImageUrl: rec.qrImageUrl, useQrImage: rec.useQrImage ? 'yes' : 'no',
+      bankAccountName: b.accountName || '', bankAccountLast4: b.accountNumber ? String(b.accountNumber).slice(-4) : '', ifsc: b.ifsc || '', bankName: b.bankName || '' };
+    sheet.appendRow(h.map(function (k) { return row[k] !== undefined ? row[k] : ''; }));
+  } catch (e) { /* the saved setting is what matters */ }
+  return { success: true, upi: paymentDetails_() };
+}
+
+/** Admin: upload SwapSutra's own UPI QR picture. */
+function uploadPaymentQrImage(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  return savePublicImage_(data, 'SwapSutra_Payment', 'upi_qr_');
+}
+
+/** A JPG/PNG/WebP data URL (≤2 MB) → a public picture link in a Drive folder. */
+function savePublicImage_(data, folderName, prefix) {
   const raw = String((data || {}).dataUrl || '');
   const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+\/=]+)$/.exec(raw);
   if (!m) return { success: false, message: 'Choose a JPG, PNG or WebP picture.' };
   const bytes = Utilities.base64Decode(m[2]);
-  if (bytes.length > AD_IMAGE_MAX_BYTES) return { success: false, message: 'The picture is too large (2 MB at most).' };
+  if (bytes.length > 2 * 1024 * 1024) return { success: false, message: 'The picture is too large (2 MB at most).' };
   try {
-    const folder = getOrCreateFolder('SwapSutra_Ads');
-    const file = folder.createFile(Utilities.newBlob(bytes, m[1], 'ad_' + Date.now() + '.' + m[1].split('/')[1]));
+    const folder = getOrCreateFolder(folderName);
+    const file = folder.createFile(Utilities.newBlob(bytes, m[1], prefix + Date.now() + '.' + m[1].split('/')[1]));
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     return { success: true, url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w1600' };
   } catch (err) {
-    Logger.log('uploadSponsoredAdImage failed: ' + err);
-    return { success: false, message: 'The picture could not be saved. Try again, or paste an image link.' };
+    Logger.log('savePublicImage_ failed: ' + err);
+    return { success: false, message: 'The picture could not be saved. Try again.' };
   }
 }
 
@@ -23235,6 +23387,7 @@ function isRegisteredReader_(email) {
   const normEmail = normalizeEmail(email);
   if (!normEmail) return false;
   if (isAdminEmail(normEmail)) return true;
+  if (approvedPartner_(normEmail)) return true;
 
   const sub = findRowByEmail_('Subscriptions', normEmail);
   if (sub) {
@@ -23361,7 +23514,8 @@ function computeExchangePayments_(swap) {
   const feeFromDeposit = serviceType === 'SWAP' && swapFeeFromDeposit_(obj);
   const add = (payerRole, payerEmail, depositAmount) => {
     if (!payerEmail) return;
-    const platformFee = isAdminEmail(payerEmail) || (feeFromDeposit && depositAmount > 0) ? 0 : baseFee;
+    // Partners (9 Oct 2026) pay no platform fee; a buyer always pays it.
+    const platformFee = isAdminEmail(payerEmail) || approvedPartner_(payerEmail) || (feeFromDeposit && depositAmount > 0) ? 0 : baseFee;
     const requiredAmount = depositAmount + platformFee;
     if (requiredAmount <= 0) return;
     reqs.push({ payerRole, payerEmail, requiredAmount, depositAmount, platformFee, saleAmount: 0 });
@@ -23385,7 +23539,7 @@ function swapFeeFromDeposit_(obj) {
 
 /** The fee SwapSutra keeps from this reader's swap deposit (0 when it was paid up front). */
 function feeTakenFromDeposit_(swapObj, payerEmail, feeRec) {
-  if (!swapFeeFromDeposit_(swapObj) || isAdminEmail(payerEmail)) return 0;
+  if (!swapFeeFromDeposit_(swapObj) || isAdminEmail(payerEmail) || approvedPartner_(payerEmail)) return 0;
   // Never charge twice: a reader who already paid the fee up front (e.g. a
   // payment made before this rule went live) has nothing taken.
   if (feeRec && feeRecordBreakdown_(feeRec).platformFee > 0) return 0;
@@ -23493,7 +23647,10 @@ function getListingAllowanceFor_(email, knownUsed) {
   const normEmail = normalizeEmail(email);
   const used = typeof knownUsed === 'number' ? knownUsed : recalculateBooksListedCount(normEmail);
   const limit = freeListingLimit_();
-  const state = isAdminEmail(normEmail) ? { approved: { obj: { method: 'ADMIN' } } } : listingUnlockStateFor_(normEmail);
+  // Partners (9 Oct 2026) list without a limit.
+  const state = isAdminEmail(normEmail) ? { approved: { obj: { method: 'ADMIN' } } }
+    : approvedPartner_(normEmail) ? { approved: { obj: { method: 'PARTNER' } } }
+    : listingUnlockStateFor_(normEmail);
   const unlimited = !!state.approved;
   return {
     used: used,
@@ -23536,7 +23693,7 @@ function getListingAllowance() {
   return {
     success: true,
     allowance: getListingAllowanceFor_(caller),
-    upi: { vpa: SWAPSM_UPI_VPA, payee: SWAPSM_UPI_PAYEE }
+    upi: paymentDetails_()
   };
 }
 
@@ -23677,9 +23834,10 @@ function adminPlatformRevenueSummary() {
   }
   // Swap fees taken from deposit refunds (9 Oct 2026).
   readSheetObjects_(getReturnForfeitSheet_()).rows.forEach(r => {
-    if (String(r.obj.payoutStatus) !== 'KEPT_AS_FEE') return;
+    if (String(r.obj.payoutStatus) !== 'KEPT_AS_FEE' || String(r.obj.leg) === 'commission') return;
     exchangeFees += Number(r.obj.amount || 0); exchangePayments++;
   });
+  const partnerMoney = partnerRevenue_();
   let unlockFees = 0;
   let unlocksPaid = 0;
   let unlocksByCoupon = 0;
@@ -23693,7 +23851,8 @@ function adminPlatformRevenueSummary() {
     success: true,
     exchangeFees, exchangePayments,
     unlockFees, unlocksPaid, unlocksByCoupon,
-    total: exchangeFees + unlockFees
+    partnerAdFees: partnerMoney.partnerAdFees, partnerAdPayments: partnerMoney.partnerAdPayments, partnerCommission: partnerMoney.partnerCommission,
+    total: Math.round((exchangeFees + unlockFees + partnerMoney.partnerAdFees + partnerMoney.partnerCommission) * 100) / 100
   };
 }
 
@@ -23872,7 +24031,9 @@ const RETURN_DAY_MS = 24 * 60 * 60 * 1000;
 const RETURN_EXTENSION_SHEET = 'ReturnExtensions';
 const RETURN_EXTENSION_HEADERS = ['id', 'swapId', 'requestedBy', 'days', 'reason', 'status', 'decidedBy', 'createdAt', 'decidedAt'];
 const RETURN_FORFEIT_SHEET = 'ReturnForfeits';
-const RETURN_FORFEIT_HEADERS = ['id', 'swapId', 'leg', 'bookTitle', 'defaulterEmail', 'ownerEmail', 'amount', 'dueAt', 'forfeitedAt', 'payoutStatus', 'paidAt', 'paidBy', 'note'];
+const RETURN_FORFEIT_HEADERS = ['id', 'swapId', 'leg', 'bookTitle', 'defaulterEmail', 'ownerEmail', 'amount', 'dueAt', 'forfeitedAt', 'payoutStatus', 'paidAt', 'paidBy', 'note',
+  // Partners (9 Oct 2026): the month a partner payout is paid in, and the amount before commission.
+  'payoutCycle', 'grossAmount'];
 
 const RETURN_POLICY_TEXT =
   'Return rule: the book must be on its way back within 21 days of reaching you — handed over in person, ' +
@@ -24337,7 +24498,10 @@ function installReturnDeadlineTrigger() {
 /** Admin action: adminListReturnForfeits — forfeits waiting to be paid to owners. */
 function adminListReturnForfeits() {
   if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  // Partner payouts and commission (rows with a payoutCycle) are paid monthly
+  // from Management → Partners, so they are not listed here.
   const items = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
+    .filter(it => !it.payoutCycle)
     .sort((a, b) => new Date(b.forfeitedAt) - new Date(a.forfeitedAt));
   // Where each payout goes: the recipient's saved UPI ID / QR (Oct 2026).
   items.forEach(it => { it.payTo = it.payoutStatus === 'TO_PAY_OWNER' ? readPayoutAccount_(it.ownerEmail) : null; });
@@ -24352,6 +24516,7 @@ function adminMarkForfeitPaid(data) {
   const row = t.rows.find(r => String(r.obj.id) === String(data && data.id));
   if (!row) return { success: false, message: 'Not found.' };
   if (row.obj.payoutStatus !== 'TO_PAY_OWNER') return { success: false, message: 'This one is not waiting for a payout.' };
+  if (row.obj.payoutCycle) return { success: false, message: 'This is a partner payout — pay it with the month in Management → Partners.' };
   const set = (name, v) => { const i = t.headers.indexOf(name); if (i !== -1) sheet.getRange(row.rowIndex + 1, i + 1).setValue(v); };
   set('payoutStatus', 'PAID_TO_OWNER');
   set('paidAt', new Date());
@@ -24820,17 +24985,21 @@ function saleStatusFor_(swap) {
   const id = String(swap.obj.id);
   const fee = platformFeePerParty_();
   const price = Math.max(0, Math.round(Number(swap.obj.amount || 0)));
-  const sellerFee = isAdminEmail(swap.ownerEmail) ? 0 : fee;
+  // A partner seller (9 Oct 2026) pays no ₹10 fee; SwapSutra keeps its commission instead.
+  const partnerSeller = approvedPartner_(swap.ownerEmail);
+  const sellerFee = isAdminEmail(swap.ownerEmail) || partnerSeller ? 0 : fee;
   const payout = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
     .find(f => String(f.swapId) === id && String(f.leg) === 'sale') || null;
+  const commission = partnerSeller ? partnerCommissionFor_(partnerSeller, price, payout && payout.forfeitedAt ? payout.forfeitedAt : new Date()) : { rate: 0, commission: 0 };
   const events = journeyEventsBySwap_()[id] || [];
   const received = events.some(e => e.leg === 'outbound' && e.event === 'received');
   return {
     escrow: saleEscrowActive_(swap),
     price: price,
     buyerPays: price + (isAdminEmail(swap.requesterEmail) ? 0 : fee),
-    sellerReceives: Math.max(0, price - sellerFee),
+    sellerReceives: Math.max(0, Math.round((price - sellerFee - commission.commission) * 100) / 100),
     sellerFee: sellerFee,
+    commission: commission.commission, commissionRate: commission.rate, partnerSeller: !!partnerSeller,
     received: received,
     closed: !!payout,
     payoutStatus: payout ? payout.payoutStatus : '',
@@ -24838,6 +25007,24 @@ function saleStatusFor_(swap) {
     disputeOpen: swapHasOpenDispute(id),
     reviewUrl: GOOGLE_REVIEW_URL
   };
+}
+
+/**
+ * A partner's sale (9 Oct 2026): the payout is paid with the month's
+ * statement, SwapSutra's commission is recorded, and one copy leaves stock.
+ */
+function salePartnerPayout_(swap, st, rec, sheet, headers) {
+  if (!st.partnerSeller) return;
+  const parts = partnerPayoutParts_(swap.ownerEmail, st.price, rec.forfeitedAt);
+  if (!parts) return;
+  rec.payoutCycle = parts.cycle;
+  rec.grossAmount = st.price;
+  rec.amount = parts.net;
+  rec.payoutStatus = parts.net > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT';
+  rec.note = 'Partner sale: price ₹' + st.price + (parts.commission ? ' − ₹' + parts.commission + ' commission (' + Math.round(parts.rate * 100) + '%)' : ' (no commission)') + '. Paid with the ' + parts.cycle + ' statement.';
+  appendCommissionRow_(sheet, headers, swap.obj.id, rec.bookTitle, swap.ownerEmail, parts.commission, parts.cycle,
+    Math.round(parts.rate * 100) + '% commission on a ₹' + st.price + ' sale.');
+  decrementPartnerStock_(swap.obj.requestedBookId, swap.ownerEmail);
 }
 
 /** Action: getSaleStatus { swapId } — buyer, seller or admin. */
@@ -24887,6 +25074,7 @@ function confirmSaleComplete(data) {
     payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
     note: 'Sale closed by the buyer: price ₹' + st.price + ' − ₹' + st.sellerFee + ' platform fee.' + (note ? ' Buyer: ' + note : '')
   };
+  salePartnerPayout_(swap, st, rec, sheet, headers);
   sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
   try {
     appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'requester', actionType: 'sale_closed', actorEmail: caller, note: 'Buyer is happy; payout ₹' + st.sellerReceives + ' created.' });
@@ -24894,7 +25082,9 @@ function confirmSaleComplete(data) {
 
   const account = readPayoutAccount_(swap.ownerEmail);
   returnNotify_(swap.ownerEmail, 'sale_payout_due', 'Your sale is complete',
-    'The buyer has the book and closed the purchase. SwapSutra will send you ₹' + st.sellerReceives + ' (₹' + st.price + ' minus the ₹' + st.sellerFee + ' platform fee)' +
+    'The buyer has the book and closed the purchase. SwapSutra will send you ₹' + st.sellerReceives + (st.partnerSeller
+      ? ' (₹' + st.price + (st.commission ? ' minus ' + Math.round(st.commissionRate * 100) + '% commission' : '') + ') with your monthly payout'
+      : ' (₹' + st.price + ' minus the ₹' + st.sellerFee + ' platform fee)') +
     (account ? ' to ' + account.upiId + '.' : '. Add your UPI ID in the exchange\'s Delivery panel so we can pay you.'),
     swap.obj.id, 'sale_closed_seller_' + swap.obj.id);
   returnNotify_(caller, 'sale_closed_buyer', 'Thank you — purchase closed',
@@ -24947,6 +25137,7 @@ function runSaleAutoRelease_() {
       payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
       note: 'Released automatically: received ' + SALE_AUTO_RELEASE_DAYS + '+ days ago, no problem reported. Price ₹' + st.price + ' − ₹' + st.sellerFee + '.'
     };
+    salePartnerPayout_(swap, st, rec, sheet, headers);
     sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
     payouts.push(rec);
     summary.released++;
@@ -25047,6 +25238,14 @@ function roomChatOpen_(swapId) {
 function roomName_(email) {
   try { return firstNameOnly(publicReaderName('', email) || humanizeEmailLocalPart(email)) || String(email).split('@')[0]; }
   catch (e) { return String(email || '').split('@')[0]; }
+}
+
+/** The parts of an address a parcel needs — nothing else about the buyer. */
+function shippingOnlyAddress_(a) {
+  const keep = ['name', 'line1', 'line2', 'landmark', 'area', 'city', 'state', 'pincode', 'phone'];
+  const out = {};
+  keep.forEach(k => { if (a[k] !== undefined && a[k] !== '') out[k] = a[k]; });
+  return out;
 }
 
 /** Who sends and who receives on a leg, by role. */
@@ -25485,15 +25684,21 @@ function getExchangeRoom(data) {
     if (courierLeft && (input.viewerRole === 'owner' || input.viewerRole === 'requester')) {
       const other = caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail;
       delivery = { theirAddress: readDeliveryAddress(other), myAddress: readDeliveryAddress(caller) };
+      // A partner gets only what a parcel needs (9 Oct 2026, owner's rule).
+      if (delivery.theirAddress && approvedPartner_(caller)) {
+        let recipient = '';
+        try { recipient = String((findRowByEmail_('Users', normalizeEmail(other)) || {}).name || ''); } catch (e) { recipient = ''; }
+        delivery.theirAddress = shippingOnlyAddress_(Object.assign({}, delivery.theirAddress, { name: recipient }));
+      }
     }
     const ret = input.returnState || {};
     const pending = ret.pendingExtension ? { id: ret.pendingExtension.id, days: ret.pendingExtension.days, reason: ret.pendingExtension.reason || '',
       youAsked: normalizeEmail(ret.pendingExtension.requestedBy) === caller } : null;
     return Object.assign({ success: true, swapId: swap.obj.id, role: input.viewerRole, chatId: input.chatId,
       bookTitle: String(swap.obj.requestedBookTitle || ''),
-      otherName: roomName_(caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail),
+      otherName: approvedPartner_(caller) ? 'the buyer' : roomName_(caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail),
       disputeOpen: input.disputeOpen,
-      payment: { payers: input.fee.payers, allApproved: input.fee.allApproved, upi: { vpa: SWAPSM_UPI_VPA, payee: SWAPSM_UPI_PAYEE } },
+      payment: { payers: input.fee.payers, allApproved: input.fee.allApproved, upi: paymentDetails_() },
       returnInfo: ret.applies && ret.started ? { dueAt: ret.dueAt, daysLeft: ret.daysLeft, overdue: ret.overdue, extensionDays: ret.extensionDays,
         window: ret.extensionWindow || null, pendingExtension: pending } : null,
       sale: String(swap.obj.serviceType || '').toUpperCase() === 'SELL' ? saleStatusFor_(swap) : null,
@@ -25726,6 +25931,13 @@ function roomCreateRefunds_(swap) {
           defaulterEmail: normalizeEmail(rec.payerEmail), ownerEmail: swap.ownerEmail, amount: rent, dueAt: '', forfeitedAt: new Date(),
           payoutStatus: 'TO_PAY_OWNER', note: 'Rent for "' + title + '", taken from the renter\'s ₹' + deposit + ' deposit.'
         };
+        // A partner owner (9 Oct 2026): commission kept, paid with the month's statement.
+        const rentParts = partnerPayoutParts_(swap.ownerEmail, rent, rentRec.forfeitedAt);
+        if (rentParts) {
+          rentRec.amount = rentParts.net; rentRec.grossAmount = rent; rentRec.payoutCycle = rentParts.cycle;
+          rentRec.note += rentParts.commission ? ' Partner: − ₹' + rentParts.commission + ' commission.' : ' Partner: no commission.';
+          appendCommissionRow_(sheet, headers, id, title, swap.ownerEmail, rentParts.commission, rentParts.cycle, Math.round(rentParts.rate * 100) + '% commission on ₹' + rent + ' rent.');
+        }
         sheet.appendRow(headers.map(k => rentRec[k] !== undefined ? rentRec[k] : ''));
         existing.push(rentRec);
         created.push(rentRec);
@@ -26292,7 +26504,7 @@ function getMyOrders() {
         inReturn: inReturn,
         chatId: inReturn ? String(chat.chatId || '') : '',
         swapPreference: String(swap.obj.swapPreference || ''),
-        otherName: roomName_(other),
+        otherName: approvedPartner_(caller) ? 'Buyer' : roomName_(other),
         price: Number(swap.obj.amount || 0),
         paid: paid,
         deposit: deposit,
@@ -26361,4 +26573,838 @@ function toggleWishlist(data) {
     sheet.deleteRow(existing.rowIndex + 1);
   }
   return { success: true, saved: want, message: want ? 'Saved to your wishlist.' : 'Removed from your wishlist.' };
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   SWAPSUTRA PARTNERS — bookstores, authors, publishers and promoters
+   (9 Oct 2026, owner's rules)
+   ────────────────────────────────────────────────────────────────────────
+   • A partner registers separately from readers (/partners): their own
+     form per type, a Google location, documents (whose name the business
+     is registered in, the owner's Aadhaar (masked) and PAN, a business
+     proof), and a contract they sign by typing their name. The admin
+     approves, asks for changes, rejects or suspends from Management.
+   • Documents go to a PRIVATE Drive folder (never shared); only the admin
+     opens them. Only the last 4 digits of Aadhaar are kept as text.
+   • An approved partner lists as many books as they like, each with a
+     stock count, and pays no ₹10 platform fee (the buyer still pays ₹10).
+   • Commission: 2% of every payout (sale price, rent). A partner approved
+     "commission-free" pays 0% for the first year from approval, then 2%.
+     Payouts are paid monthly, after the month ends.
+   • Promotion (the Library banner + ads): free for the first 6 months
+     from approval, then ₹100 for every 2 months, paid by UPI and verified
+     by the admin. The partner chooses whether to show a banner and
+     whether to run ads; banners and ads are checked by the admin first.
+   • A partner never sees a buyer's details — only the shipping address of
+     an order they have to post. Shipping and delivery are the partner's
+     responsibility (see their contract).
+   ════════════════════════════════════════════════════════════════════════ */
+
+const PARTNER_TYPES = ['bookstore', 'author', 'publisher', 'promoter'];
+const PARTNER_TYPE_LABEL = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' };
+/** Bump a type's version when its contract text changes; partners sign the current one. */
+const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-09', author: 'author-2026-10-09', publisher: 'publisher-2026-10-09', promoter: 'promoter-2026-10-09' };
+const PARTNER_HEADERS = [
+  'id', 'type', 'email', 'status', 'name', 'contactName', 'phone', 'about', 'website', 'instagram',
+  'address', 'city', 'pincode', 'lat', 'lng', 'placeLabel', 'registeredName', 'gstin', 'panNumber', 'aadhaarLast4',
+  'docsJson', 'typeFieldsJson', 'showBanner', 'runAds', 'bannerImageUrl', 'bannerHeadline', 'bannerTagline', 'bannerStatus', 'bannerNote',
+  'contractVersion', 'contractSignedName', 'contractSignedAt', 'commissionPlan', 'commissionFreeUntil', 'approvedAt', 'approvedBy',
+  'adsFreeUntil', 'reviewNote', 'createdAt', 'updatedAt', 'submittedAt'
+];
+const PARTNER_STATUSES = ['PENDING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUSPENDED'];
+const PARTNER_AD_PAYMENT_HEADERS = ['id', 'partnerId', 'email', 'amount', 'months', 'utr', 'screenshotUrl', 'status', 'periodFrom', 'periodTo', 'reviewedBy', 'reviewedAt', 'reason', 'createdAt'];
+const PARTNER_DOC_MAX_BYTES = 4 * 1024 * 1024;
+/** Which documents each type must upload (key → label). */
+const PARTNER_DOCS = {
+  bookstore: { aadhaar: "Owner's Aadhaar (masked)", pan: "Owner's PAN card", businessProof: 'Shop registration / GST / Udyam / trade licence' },
+  author: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' },
+  publisher: { aadhaar: "Signatory's Aadhaar (masked)", pan: 'PAN card (business or signatory)', businessProof: 'Company / GST / Udyam registration' },
+  promoter: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' }
+};
+const PARTNER_OPTIONAL_DOCS = { businessProof: 'Business proof (optional)', other: 'Any other document (optional)' };
+
+function partnerCommissionRate_() { const n = Number(readScriptProperty_('PARTNER_COMMISSION_PERCENT')); return (isFinite(n) && n >= 0 && n <= 50 ? n : 2) / 100; }
+function partnerAdFee_() { const n = Number(readScriptProperty_('PARTNER_AD_FEE')); return isFinite(n) && n > 0 ? Math.round(n) : 100; }
+const PARTNER_AD_PERIOD_MONTHS = 2;
+const PARTNER_FREE_PROMO_MONTHS = 6;
+const PARTNER_FREE_COMMISSION_MONTHS = 12;
+
+function addMonths_(date, months) {
+  const d = new Date(date.getTime());
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + months);
+  if (d.getDate() < day) d.setDate(0); // 31 Jan + 1 month → 28/29 Feb
+  return d;
+}
+/** "2026-10" for a date, in India time — a payout's month. */
+function istMonth_(date) { return new Date(new Date(date).getTime() + 5.5 * 3600e3).toISOString().slice(0, 7); }
+
+function partnerSheet_() {
+  const sheet = getOrCreateSheet('Partners', PARTNER_HEADERS);
+  ensureSheetHeaders(sheet, PARTNER_HEADERS);
+  return sheet;
+}
+function partnerRows_() { return readSheetObjects_(partnerSheet_()); }
+function partnerByEmail_(email) {
+  const e = normalizeEmail(email);
+  if (!e) return null;
+  const hit = partnerRows_().rows.find(r => normalizeEmail(r.obj.email) === e);
+  return hit || null;
+}
+/** The approved (not suspended) partner record for an email, or null. Cached per run. */
+let __SS_PARTNER_CACHE__ = null;
+function approvedPartner_(email) {
+  const e = normalizeEmail(email);
+  if (!e) return null;
+  if (!__SS_PARTNER_CACHE__) {
+    __SS_PARTNER_CACHE__ = {};
+    try {
+      partnerRows_().rows.forEach(r => { if (String(r.obj.status) === 'APPROVED') __SS_PARTNER_CACHE__[normalizeEmail(r.obj.email)] = r.obj; });
+    } catch (err) { /* no partners sheet yet */ }
+  }
+  return __SS_PARTNER_CACHE__[e] || null;
+}
+function resetPartnerCache_() { __SS_PARTNER_CACHE__ = null; }
+function setPartnerFields_(rowIndex, headers, fields) {
+  const sheet = partnerSheet_();
+  Object.keys(fields).forEach(k => {
+    const i = headers.indexOf(k);
+    if (i !== -1) sheet.getRange(rowIndex + 1, i + 1).setValue(fields[k]);
+  });
+  resetPartnerCache_();
+}
+
+/** 2% (or 0% inside a commission-free first year) for a payout made at `at`. */
+function partnerCommissionRateAt_(partner, at) {
+  if (!partner) return 0;
+  const when = at ? new Date(at) : new Date();
+  if (String(partner.commissionPlan) === 'free_first_year' && partner.commissionFreeUntil && when < new Date(partner.commissionFreeUntil)) return 0;
+  return partnerCommissionRate_();
+}
+function partnerCommissionFor_(partner, amount, at) {
+  const rate = partnerCommissionRateAt_(partner, at);
+  return { rate: rate, commission: Math.round(Math.max(0, Number(amount) || 0) * rate * 100) / 100 };
+}
+
+/** Promotion (banner + ads): free months, paid months, and what is due. */
+function partnerPromotionState_(partner, payments, now) {
+  now = now || new Date();
+  const freeUntil = partner.adsFreeUntil ? new Date(partner.adsFreeUntil) : null;
+  const approved = (payments || []).filter(p => String(p.status) === 'APPROVED' && p.periodTo);
+  const paidUntil = approved.reduce((m, p) => { const t = new Date(p.periodTo); return !m || t > m ? t : m; }, null);
+  const activeUntil = [freeUntil, paidUntil].filter(Boolean).reduce((m, t) => (!m || t > m ? t : m), null);
+  const pending = (payments || []).find(p => String(p.status) === 'SUBMITTED') || null;
+  const active = String(partner.status) === 'APPROVED' && !!activeUntil && now <= activeUntil;
+  return {
+    freeUntil: freeUntil ? freeUntil.toISOString() : '', paidUntil: paidUntil ? paidUntil.toISOString() : '',
+    activeUntil: activeUntil ? activeUntil.toISOString() : '', active: active,
+    inFreePeriod: !!freeUntil && now <= freeUntil,
+    fee: partnerAdFee_(), months: PARTNER_AD_PERIOD_MONTHS,
+    dueSoon: !!activeUntil && active && (activeUntil - now) < 10 * 24 * 3600e3,
+    pendingPayment: pending ? { id: pending.id, utr: pending.utr, submittedAt: pending.createdAt } : null
+  };
+}
+function partnerAdPaymentSheet_() {
+  const sheet = getOrCreateSheet('PartnerAdPayments', PARTNER_AD_PAYMENT_HEADERS);
+  ensureSheetHeaders(sheet, PARTNER_AD_PAYMENT_HEADERS);
+  return sheet;
+}
+function partnerAdPayments_(partnerId) {
+  return readSheetObjects_(partnerAdPaymentSheet_()).rows.map(r => r.obj).filter(p => !partnerId || String(p.partnerId) === String(partnerId));
+}
+/** Is this approved partner's promotion running right now (and do they want it)? */
+function partnerPromotionLive_(partner, what) {
+  if (!partner || String(partner.status) !== 'APPROVED') return false;
+  if (what === 'banner' && !truthy_(partner.showBanner)) return false;
+  if (what === 'ads' && !truthy_(partner.runAds)) return false;
+  return partnerPromotionState_(partner, partnerAdPayments_(partner.id)).active;
+}
+function truthy_(v) { return v === true || ['true', 'yes', '1'].indexOf(String(v).toLowerCase()) !== -1; }
+
+// ── Validation ────────────────────────────────────────────────────────────
+function cleanPartnerText_(v, max) { return mugText_(v, max); }
+function validPan_(v) { return /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(v || '').trim().toUpperCase()); }
+function validGstin_(v) { return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(String(v || '').trim().toUpperCase()); }
+
+/** Shared by submit and the tests. Returns { errors, clean }. */
+function validatePartnerApplication_(d, existingDocs) {
+  d = d || {};
+  const errors = {};
+  const type = String(d.type || '').toLowerCase();
+  if (PARTNER_TYPES.indexOf(type) === -1) errors.type = 'Choose bookstore, author, publisher or promoter.';
+  const clean = {
+    type: type,
+    name: cleanPartnerText_(d.name, 100), contactName: cleanPartnerText_(d.contactName, 80),
+    phone: String(d.phone || '').replace(/[^\d+]/g, '').slice(0, 15),
+    about: cleanPartnerText_(d.about, 600), website: '', instagram: cleanPartnerText_(d.instagram, 80),
+    address: cleanPartnerText_(d.address, 300), city: cleanPartnerText_(d.city, 60), pincode: String(d.pincode || '').trim(),
+    lat: Number(d.lat), lng: Number(d.lng), placeLabel: cleanPartnerText_(d.placeLabel, 120),
+    registeredName: cleanPartnerText_(d.registeredName, 120), gstin: String(d.gstin || '').trim().toUpperCase(),
+    panNumber: String(d.panNumber || '').trim().toUpperCase(), aadhaarLast4: String(d.aadhaarLast4 || '').trim(),
+    showBanner: truthy_(d.showBanner), runAds: truthy_(d.runAds),
+    typeFields: {}
+  };
+  const web = String(d.website || '').trim();
+  if (web) { if (/^https:\/\/[^\s]+$/i.test(web)) clean.website = web.slice(0, 300); else errors.website = 'The website must start with https://.'; }
+  const nameLabel = { bookstore: 'Bookstore name', author: 'Author name (as on your books)', publisher: 'Publisher / imprint name', promoter: 'Agency / promoter name' }[type] || 'Name';
+  if (clean.name.length < 2) errors.name = nameLabel + ' is required.';
+  if (clean.contactName.length < 2) errors.contactName = 'Your full name is required.';
+  if (!/^(\+91)?[6-9]\d{9}$/.test(clean.phone)) errors.phone = 'Enter a 10-digit Indian mobile number.';
+  if (!/^\d{6}$/.test(clean.pincode)) errors.pincode = 'Enter a 6-digit pincode.';
+  if (clean.city.length < 2) errors.city = 'City is required.';
+  if (type === 'bookstore' || type === 'publisher') {
+    if (clean.address.length < 8) errors.address = 'Enter the full address.';
+    if (!(isFinite(clean.lat) && isFinite(clean.lng) && Math.abs(clean.lat) <= 90 && Math.abs(clean.lng) <= 180 && (clean.lat || clean.lng))) errors.location = 'Pin your location on Google Maps.';
+  }
+  if (!(isFinite(clean.lat) && isFinite(clean.lng)) || (!clean.lat && !clean.lng)) { clean.lat = ''; clean.lng = ''; }
+  if (clean.registeredName.length < 2) errors.registeredName = type === 'bookstore' || type === 'publisher'
+    ? 'Whose name is the business registered in?' : 'Your name as on your PAN card.';
+  if (!validPan_(clean.panNumber)) errors.panNumber = 'Enter the PAN number (like ABCDE1234F).';
+  if (!/^\d{4}$/.test(clean.aadhaarLast4)) errors.aadhaarLast4 = 'Enter the last 4 digits of the Aadhaar.';
+  if (clean.gstin && !validGstin_(clean.gstin)) errors.gstin = 'That GSTIN does not look right (15 characters).';
+  // Type-specific details.
+  const tf = d.typeFields || {};
+  const pick = (k, max) => { clean.typeFields[k] = cleanPartnerText_(tf[k], max || 200); return clean.typeFields[k]; };
+  if (type === 'bookstore') { pick('storeType', 60); pick('openingHours', 120); pick('genres', 200); }
+  if (type === 'author') { pick('penName', 80); if (!pick('booksPublished', 400)) errors.booksPublished = 'Name at least one of your books.'; pick('genres', 200); }
+  if (type === 'publisher') { pick('imprints', 200); pick('yearEstablished', 4); pick('genres', 200); }
+  if (type === 'promoter') { if (!pick('promotes', 300)) errors.promotes = 'What do you promote (books, authors, events)?'; pick('clients', 300); }
+  // Documents: new uploads (data URLs) or ones already on file.
+  const have = existingDocs || {};
+  const docs = d.docs || {};
+  Object.keys(PARTNER_DOCS[type] || {}).forEach(k => {
+    if (!have[k] && !docs[k]) errors['doc_' + k] = 'Upload: ' + PARTNER_DOCS[type][k] + '.';
+  });
+  Object.keys(docs).forEach(k => {
+    if (!(PARTNER_DOCS[type] || {})[k] && !PARTNER_OPTIONAL_DOCS[k]) return;
+    const m = /^data:(image\/(?:jpeg|png|webp)|application\/pdf);base64,([A-Za-z0-9+\/=]+)$/.exec(String(docs[k] || ''));
+    if (!m) errors['doc_' + k] = 'Upload a JPG, PNG, WebP or PDF.';
+    else if (m[2].length * 0.75 > PARTNER_DOC_MAX_BYTES) errors['doc_' + k] = 'Each document must be under 4 MB.';
+  });
+  // The contract.
+  if (!truthy_(d.agree)) errors.agree = 'Read and accept the partner agreement.';
+  const signed = cleanPartnerText_(d.signedName, 80);
+  if (signed.length < 2 || signed.toLowerCase() !== clean.contactName.toLowerCase()) errors.signedName = 'Type your full name exactly as above to sign.';
+  if (type && String(d.contractVersion || '') !== PARTNER_CONTRACT_VERSIONS[type]) errors.contract = 'The agreement has been updated — please reload the page and read it again.';
+  clean.signedName = signed;
+  return { errors: errors, clean: clean };
+}
+
+/** Saves partner documents to a private folder. Returns { key: { id, name, mime } }. */
+function savePartnerDocs_(partnerId, docs) {
+  const out = {};
+  const keys = Object.keys(docs || {});
+  if (!keys.length) return out;
+  const root = getOrCreateFolder('SwapSutra_Partner_Documents');
+  const found = root.getFoldersByName(String(partnerId));
+  const folder = found.hasNext() ? found.next() : root.createFolder(String(partnerId));
+  keys.forEach(k => {
+    const m = /^data:(image\/(?:jpeg|png|webp)|application\/pdf);base64,([A-Za-z0-9+\/=]+)$/.exec(String(docs[k] || ''));
+    if (!m) return;
+    const ext = m[1] === 'application/pdf' ? 'pdf' : m[1].split('/')[1];
+    const file = folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[2]), m[1], k + '_' + Date.now() + '.' + ext));
+    // Deliberately NOT shared: identity documents stay private to SwapSutra.
+    out[k] = { id: file.getId(), mime: m[1], at: new Date().toISOString() };
+  });
+  return out;
+}
+function parseJson_(v, fallback) { try { const o = JSON.parse(String(v || '')); return o && typeof o === 'object' ? o : fallback; } catch (e) { return fallback; } }
+
+/** Action: submitPartnerApplication — a new application, or a resubmission after "changes requested". */
+function submitPartnerApplication(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Verify your email first.' };
+  const existing = partnerByEmail_(caller);
+  if (existing && ['APPROVED', 'SUSPENDED'].indexOf(String(existing.obj.status)) !== -1) {
+    return { success: false, error: 'ALREADY_PARTNER', message: 'This email is already a SwapSutra partner. Update your details from your partner dashboard.' };
+  }
+  if (existing && String(existing.obj.status) === 'PENDING') {
+    return { success: false, error: 'UNDER_REVIEW', message: 'Your application is being reviewed. We will email you as soon as it is decided.' };
+  }
+  const prevDocs = existing ? parseJson_(existing.obj.docsJson, {}) : {};
+  if (existing && String(existing.obj.type) !== String((data || {}).type)) {
+    // A different type is a different form: documents start again.
+    Object.keys(prevDocs).forEach(k => delete prevDocs[k]);
+  }
+  const v = validatePartnerApplication_(data, prevDocs);
+  if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
+  const c = v.clean;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const t = partnerRows_();
+    const id = existing ? String(existing.obj.id) : generateId('SS_PARTNER_');
+    let docs;
+    try { docs = Object.assign({}, prevDocs, savePartnerDocs_(id, (data || {}).docs)); }
+    catch (err) { Logger.log('savePartnerDocs_ failed: ' + err); return { success: false, message: 'Your documents could not be saved. Please try again.' }; }
+    const now = new Date();
+    const rec = {
+      id: id, type: c.type, email: caller, status: 'PENDING', name: c.name, contactName: c.contactName, phone: c.phone, about: c.about,
+      website: c.website, instagram: c.instagram, address: c.address, city: c.city, pincode: c.pincode, lat: c.lat, lng: c.lng,
+      placeLabel: c.placeLabel, registeredName: c.registeredName, gstin: c.gstin, panNumber: c.panNumber, aadhaarLast4: c.aadhaarLast4,
+      docsJson: JSON.stringify(docs), typeFieldsJson: JSON.stringify(c.typeFields), showBanner: c.showBanner ? 'TRUE' : 'FALSE', runAds: c.runAds ? 'TRUE' : 'FALSE',
+      contractVersion: PARTNER_CONTRACT_VERSIONS[c.type], contractSignedName: c.signedName, contractSignedAt: now, reviewNote: '',
+      updatedAt: now, submittedAt: now
+    };
+    if (existing) setPartnerFields_(existing.rowIndex, t.headers, rec);
+    else {
+      rec.createdAt = now;
+      const headers = ensureSheetHeaders(partnerSheet_(), PARTNER_HEADERS);
+      partnerSheet_().appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+      resetPartnerCache_();
+    }
+    try {
+      returnNotify_('swapsutra@gmail.com', 'partner_application', 'New partner application',
+        PARTNER_TYPE_LABEL[c.type] + ' "' + c.name + '" (' + caller + ') applied. Review it in Management → Partners.', '', 'partner_app_' + id + '_' + now.getTime(), { whatsapp: false });
+    } catch (e) { /* the application is saved */ }
+    return { success: true, id: id, message: 'Application received. SwapSutra will check your documents and email you, usually within 2 working days.' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** What the partner should do next, in order. */
+function partnerNextSteps_(p, promo, ctx) {
+  const steps = [];
+  const st = String(p.status);
+  if (st === 'PENDING') steps.push({ key: 'wait', text: 'SwapSutra is checking your documents. We will email you when it is decided.' });
+  if (st === 'CHANGES_REQUESTED') steps.push({ key: 'fix', text: 'Update your application: ' + (p.reviewNote || 'see the note from SwapSutra') + '.', urgent: true });
+  if (st === 'REJECTED') steps.push({ key: 'rejected', text: 'Your application was not approved' + (p.reviewNote ? ': ' + p.reviewNote : '.') });
+  if (st === 'SUSPENDED') steps.push({ key: 'suspended', text: 'Your partner account is paused' + (p.reviewNote ? ': ' + p.reviewNote : '.') + ' Write to swapsutra@gmail.com.' });
+  if (st !== 'APPROVED') return steps;
+  if (!ctx.payoutAccount) steps.push({ key: 'payout', text: 'Add the UPI ID your monthly payouts should go to.', urgent: true });
+  (ctx.orders || []).filter(o => o.nextStep).forEach(o => steps.push({ key: 'order_' + o.swapId, text: '"' + o.bookTitle + '": ' + o.nextStep, swapId: o.swapId, urgent: !!o.urgent }));
+  if (!ctx.books) steps.push({ key: 'list', text: 'List your books — there is no limit, and you can set how many copies you have.' });
+  if (truthy_(p.showBanner) && !p.bannerImageUrl) steps.push({ key: 'banner', text: 'Upload your banner for the Library page.' });
+  if (String(p.bannerStatus) === 'REJECTED') steps.push({ key: 'banner_fix', text: 'Your banner needs a change' + (p.bannerNote ? ': ' + p.bannerNote : '.') });
+  if ((truthy_(p.showBanner) || truthy_(p.runAds)) && !promo.active && !promo.pendingPayment) steps.push({ key: 'promo_pay', text: 'Your free promotion has ended — pay ₹' + promo.fee + ' for ' + promo.months + ' months to keep your banner and ads on SwapSutra.', urgent: true });
+  else if (promo.dueSoon && !promo.inFreePeriod && !promo.pendingPayment) steps.push({ key: 'promo_due', text: 'Your promotion ends on ' + returnDateLabel_(new Date(promo.activeUntil)) + '. Pay ₹' + promo.fee + ' to continue for ' + promo.months + ' more months.' });
+  else if (promo.dueSoon && promo.inFreePeriod && !promo.pendingPayment) steps.push({ key: 'promo_free_end', text: 'Your 6 free months of promotion end on ' + returnDateLabel_(new Date(promo.activeUntil)) + '. After that it is ₹' + promo.fee + ' for ' + promo.months + ' months.' });
+  return steps;
+}
+
+/** A partner's orders: book, amount, status, the step they must do — never who the buyer is. */
+function partnerOrders_(email) {
+  const swaps = readSheetObjects_(getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests)).rows.map(r => r.obj)
+    .filter(o => normalizeEmail(o.ownerEmail) === email && ['pending', 'declined', 'rejected'].indexOf(String(o.status || '').toLowerCase()) === -1);
+  const out = [];
+  swaps.slice(-60).forEach(o => {
+    const item = { swapId: String(o.id), bookTitle: String(o.requestedBookTitle || 'A book'), serviceType: String(o.serviceType || '').toUpperCase(),
+      amount: Number(o.amount || 0), status: String(o.status || ''), createdAt: o.createdAt ? new Date(o.createdAt).toISOString() : '', nextStep: '', step: 0 };
+    try {
+      const swap = loadSwapForCirculation(String(o.id));
+      if (swap) {
+        const room = computeExchangeRoom_(roomInputFor_(swap, email));
+        item.step = room.current || 0;
+        item.closed = !!room.closed;
+        const mine = (room.actions || [])[0];
+        if (!room.closed && mine) {
+          const s = (room.steps || []).find(x => x.n === room.current) || {};
+          item.nextStep = 'step ' + room.current + ' — ' + (s.title || 'open the exchange room');
+          item.urgent = true;
+        }
+      }
+    } catch (e) { /* the order still lists */ }
+    out.push(item);
+  });
+  return out.reverse();
+}
+
+/** Money: what the partner has earned, what SwapSutra kept, what was paid and what is due — by month. */
+function partnerEarnings_(email) {
+  const rows = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
+    .filter(f => normalizeEmail(f.ownerEmail) === email && ['sale', 'rent'].indexOf(String(f.leg)) !== -1);
+  const commissions = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
+    .filter(f => String(f.leg) === 'commission' && normalizeEmail(f.defaulterEmail) === email);
+  const months = {};
+  const add = (cycle) => (months[cycle] = months[cycle] || { month: cycle, gross: 0, commission: 0, net: 0, paid: 0, due: 0, items: 0 });
+  rows.forEach(f => {
+    const cycle = String(f.payoutCycle || istMonth_(f.forfeitedAt || new Date()));
+    const m = add(cycle);
+    const net = Number(f.amount || 0);
+    const gross = Number(f.grossAmount || 0) || net;
+    m.gross += gross; m.net += net; m.items++;
+    if (String(f.payoutStatus) === 'PAID_TO_OWNER') m.paid += net; else if (String(f.payoutStatus) === 'TO_PAY_OWNER') m.due += net;
+  });
+  commissions.forEach(f => { add(String(f.payoutCycle || istMonth_(f.forfeitedAt || new Date()))).commission += Number(f.amount || 0); });
+  const list = Object.keys(months).sort().reverse().map(k => {
+    const m = months[k];
+    ['gross', 'commission', 'net', 'paid', 'due'].forEach(x => { m[x] = Math.round(m[x] * 100) / 100; });
+    m.payableFrom = m.month + '-01';
+    return m;
+  });
+  const total = list.reduce((t, m) => ({ gross: t.gross + m.gross, commission: t.commission + m.commission, net: t.net + m.net, paid: t.paid + m.paid, due: t.due + m.due }),
+    { gross: 0, commission: 0, net: 0, paid: 0, due: 0 });
+  return { months: list, total: total };
+}
+
+function partnerPublicView_(p, forAdmin) {
+  const docs = parseJson_(p.docsJson, {});
+  const out = {
+    id: p.id, type: p.type, typeLabel: PARTNER_TYPE_LABEL[p.type] || p.type, email: p.email, status: p.status, name: p.name, contactName: p.contactName,
+    phone: p.phone, about: p.about, website: p.website, instagram: p.instagram, address: p.address, city: p.city, pincode: p.pincode,
+    lat: p.lat === '' ? null : Number(p.lat), lng: p.lng === '' ? null : Number(p.lng), placeLabel: p.placeLabel,
+    registeredName: p.registeredName, gstin: p.gstin,
+    panMasked: p.panNumber ? String(p.panNumber).slice(0, 2) + '•••••' + String(p.panNumber).slice(-3) : '', aadhaarLast4: p.aadhaarLast4,
+    typeFields: parseJson_(p.typeFieldsJson, {}),
+    showBanner: truthy_(p.showBanner), runAds: truthy_(p.runAds), bannerImageUrl: p.bannerImageUrl, bannerHeadline: p.bannerHeadline,
+    bannerTagline: p.bannerTagline, bannerStatus: p.bannerStatus || '', bannerNote: p.bannerNote || '',
+    contractVersion: p.contractVersion, contractSignedName: p.contractSignedName,
+    contractSignedAt: p.contractSignedAt ? new Date(p.contractSignedAt).toISOString() : '',
+    currentContractVersion: PARTNER_CONTRACT_VERSIONS[p.type] || '',
+    commissionPlan: p.commissionPlan || 'standard', commissionFreeUntil: p.commissionFreeUntil ? new Date(p.commissionFreeUntil).toISOString() : '',
+    commissionNow: partnerCommissionRateAt_(p, new Date()) * 100,
+    approvedAt: p.approvedAt ? new Date(p.approvedAt).toISOString() : '', reviewNote: p.reviewNote || '',
+    submittedAt: p.submittedAt ? new Date(p.submittedAt).toISOString() : '',
+    docs: Object.keys(docs).map(k => ({ key: k, label: (PARTNER_DOCS[p.type] || {})[k] || PARTNER_OPTIONAL_DOCS[k] || k, at: docs[k].at || '' }))
+  };
+  if (forAdmin) {
+    out.panNumber = p.panNumber;
+    out.docs = Object.keys(docs).map(k => ({ key: k, label: (PARTNER_DOCS[p.type] || {})[k] || PARTNER_OPTIONAL_DOCS[k] || k, at: docs[k].at || '',
+      url: 'https://drive.google.com/file/d/' + docs[k].id + '/view', mime: docs[k].mime }));
+  }
+  return out;
+}
+
+/** Action: getMyPartner — the partner dashboard. */
+function getMyPartner() {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in first.' };
+  const hit = partnerByEmail_(caller);
+  const base = { success: true, email: caller, contractVersions: PARTNER_CONTRACT_VERSIONS, requiredDocs: PARTNER_DOCS,
+    adFee: partnerAdFee_(), adMonths: PARTNER_AD_PERIOD_MONTHS, commissionPercent: partnerCommissionRate_() * 100, upi: paymentDetails_() };
+  if (!hit) return Object.assign(base, { partner: null });
+  const p = hit.obj;
+  const payments = partnerAdPayments_(p.id);
+  const promo = partnerPromotionState_(p, payments);
+  const approved = String(p.status) === 'APPROVED';
+  const orders = approved ? partnerOrders_(caller) : [];
+  const books = approved ? partnerBooks_(caller) : [];
+  const ads = approved ? adRows_().rows.map(r => r.obj).filter(a => String(a.partnerId) === String(p.id) && String(a.status) !== 'removed')
+    .map(a => ({ id: a.id, kind: a.kind, sponsor: a.sponsor, headline: a.headline, tagline: a.tagline, imageUrl: a.imageUrl, linkUrl: a.linkUrl, bookId: a.bookId,
+      ctaLabel: a.ctaLabel, placement: a.placement, status: a.status, reviewNote: a.reviewNote || '', clicks: Number(a.clicks) || 0 })) : [];
+  const payoutAccount = readPayoutAccount_(caller);
+  return Object.assign(base, {
+    partner: partnerPublicView_(p, false),
+    promotion: promo,
+    adPayments: payments.map(x => ({ id: x.id, amount: Number(x.amount || 0), utr: x.utr, status: x.status, periodFrom: x.periodFrom ? new Date(x.periodFrom).toISOString() : '',
+      periodTo: x.periodTo ? new Date(x.periodTo).toISOString() : '', reason: x.reason || '', createdAt: x.createdAt ? new Date(x.createdAt).toISOString() : '' })).reverse(),
+    earnings: approved ? partnerEarnings_(caller) : null,
+    orders: orders, books: books, ads: ads, payoutAccount: payoutAccount,
+    nextSteps: partnerNextSteps_(p, promo, { payoutAccount: payoutAccount, orders: orders, books: books.length })
+  });
+}
+
+function partnerBooks_(email) {
+  const values = getOrCreateSheet('Books', getBookHeaders()).getDataRange().getValues();
+  if (values.length <= 1) return [];
+  const h = values[0].map(x => String(x).trim());
+  const col = k => h.indexOf(k);
+  return values.slice(1).filter(r => normalizeEmail(r[col('ownerEmail')]) === email && String(r[col('status')] || '').toLowerCase() !== 'removed')
+    .map(r => ({ id: String(r[col('id')]), title: String(r[col('title')] || ''), author: String(r[col('author')] || ''), status: String(r[col('status')] || ''),
+      stock: r[col('stock')] === '' || r[col('stock')] === undefined ? 1 : Number(r[col('stock')]) || 0,
+      sellPrice: Number(r[col('ownerSellPrice')] || 0) || null }));
+}
+
+/** Action: updatePartnerProfile — the details an approved partner may change themselves. */
+function updatePartnerProfile(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const hit = partnerByEmail_(caller);
+  if (!hit) return { success: false, error: 'NOT_PARTNER', message: 'Register as a partner first.' };
+  const d = data || {};
+  const fields = {};
+  const errors = {};
+  if (d.about !== undefined) fields.about = cleanPartnerText_(d.about, 600);
+  if (d.instagram !== undefined) fields.instagram = cleanPartnerText_(d.instagram, 80);
+  if (d.website !== undefined) {
+    const w = String(d.website || '').trim();
+    if (w && !/^https:\/\/[^\s]+$/i.test(w)) errors.website = 'The website must start with https://.'; else fields.website = w;
+  }
+  if (d.phone !== undefined) {
+    const ph = String(d.phone || '').replace(/[^\d+]/g, '');
+    if (!/^(\+91)?[6-9]\d{9}$/.test(ph)) errors.phone = 'Enter a 10-digit Indian mobile number.'; else fields.phone = ph;
+  }
+  if (d.lat !== undefined && d.lng !== undefined) {
+    const lat = Number(d.lat), lng = Number(d.lng);
+    if (isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) { fields.lat = lat; fields.lng = lng; fields.placeLabel = cleanPartnerText_(d.placeLabel, 120); }
+    else errors.location = 'Pin your location on Google Maps.';
+  }
+  if (d.showBanner !== undefined) fields.showBanner = truthy_(d.showBanner) ? 'TRUE' : 'FALSE';
+  if (d.runAds !== undefined) fields.runAds = truthy_(d.runAds) ? 'TRUE' : 'FALSE';
+  if (d.bannerHeadline !== undefined || d.bannerTagline !== undefined) {
+    fields.bannerHeadline = cleanPartnerText_(d.bannerHeadline, 90);
+    fields.bannerTagline = cleanPartnerText_(d.bannerTagline, 160);
+    if (hit.obj.bannerImageUrl) { fields.bannerStatus = 'PENDING'; fields.bannerNote = ''; }
+  }
+  if (Object.keys(errors).length) return { success: false, errors: errors, message: 'Please fix the highlighted fields.' };
+  fields.updatedAt = new Date();
+  setPartnerFields_(hit.rowIndex, partnerRows_().headers, fields);
+  return { success: true, message: 'Saved.' };
+}
+
+/** Action: uploadPartnerBanner { dataUrl } — the banner shown on the Library page (checked by the admin first). */
+function uploadPartnerBanner(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const hit = partnerByEmail_(caller);
+  if (!hit) return { success: false, error: 'NOT_PARTNER', message: 'Register as a partner first.' };
+  const saved = savePublicImage_(data, 'SwapSutra_Partner_Banners', 'banner_' + hit.obj.id + '_');
+  if (!saved.success) return saved;
+  setPartnerFields_(hit.rowIndex, partnerRows_().headers, { bannerImageUrl: saved.url, bannerStatus: 'PENDING', bannerNote: '', updatedAt: new Date() });
+  try {
+    returnNotify_('swapsutra@gmail.com', 'partner_banner', 'A partner banner to check',
+      '"' + hit.obj.name + '" uploaded a new banner. Approve it in Management → Partners.', '', 'partner_banner_' + hit.obj.id + '_' + Date.now(), { whatsapp: false });
+  } catch (e) { /* saved */ }
+  return { success: true, url: saved.url, message: 'Banner uploaded. SwapSutra will check it before it goes on the Library page.' };
+}
+
+/** Action: savePartnerAd — a partner's own ad; it waits for the admin's approval. */
+function savePartnerAd(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const hit = partnerByEmail_(caller);
+  if (!hit || String(hit.obj.status) !== 'APPROVED') return { success: false, error: 'NOT_PARTNER', message: 'Only an approved partner can place ads.' };
+  const p = hit.obj;
+  const d = Object.assign({}, data || {});
+  const all = adRows_();
+  const id = String(d.id || '').trim();
+  const mine = id ? all.rows.find(r => String(r.obj.id) === id && String(r.obj.partnerId) === String(p.id)) : null;
+  if (id && !mine) return { success: false, message: 'That ad is not yours.' };
+  const wanted = String(d.status || '').toLowerCase();
+  if (mine && (wanted === 'removed' || wanted === 'paused')) {
+    const sheet = adSheet_();
+    sheet.getRange(mine.rowIndex + 1, all.headers.indexOf('status') + 1).setValue(wanted);
+    return { success: true, id: id };
+  }
+  d.kind = p.type === 'author' ? 'author' : p.type === 'bookstore' ? 'bookstore' : (AD_KINDS.indexOf(String(d.kind)) !== -1 ? d.kind : 'book');
+  d.sponsor = p.name;
+  d.status = 'live'; // validated as a live ad; stored as pending below
+  const v = validateSponsoredAd_(d);
+  if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = adSheet_();
+    const headers = all.headers;
+    const now = new Date().toISOString();
+    const rec = mine ? Object.assign({}, mine.obj) : { id: 'AD-' + Utilities.getUuid().slice(0, 8).toUpperCase(), clicks: 0, createdAt: now, createdBy: caller, partnerId: p.id };
+    Object.keys(v.clean).forEach(k => { rec[k] = v.clean[k]; });
+    rec.status = 'pending';
+    rec.reviewNote = '';
+    rec.updatedAt = now;
+    const row = headers.map(h => rec[h] !== undefined ? rec[h] : '');
+    if (mine) sheet.getRange(mine.rowIndex + 1, 1, 1, row.length).setValues([row]);
+    else sheet.appendRow(row);
+    try {
+      returnNotify_('swapsutra@gmail.com', 'partner_ad', 'A partner ad to approve',
+        '"' + p.name + '" sent an ad: "' + rec.headline + '". Approve it in Management → Ads.', '', 'partner_ad_' + rec.id + '_' + Date.now(), { whatsapp: false });
+    } catch (e) { /* saved */ }
+    return { success: true, id: rec.id, message: 'Sent to SwapSutra for approval.' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Action: submitPartnerAdPayment { utr, fileData } — ₹100 for 2 more months of promotion. */
+function submitPartnerAdPayment(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const hit = partnerByEmail_(caller);
+  if (!hit || String(hit.obj.status) !== 'APPROVED') return { success: false, error: 'NOT_PARTNER', message: 'Only an approved partner can pay for promotion.' };
+  const utr = String((data || {}).utr || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{8,30}$/.test(utr)) return { success: false, errors: { utr: 'Enter the UTR / transaction reference (8–30 letters or digits).' }, message: 'Enter the UTR.' };
+  const payments = partnerAdPayments_(hit.obj.id);
+  if (payments.some(p => String(p.status) === 'SUBMITTED')) return { success: false, message: 'Your last payment is still being checked.' };
+  if (payments.some(p => String(p.utr).toUpperCase() === utr)) return { success: false, errors: { utr: 'This UTR was already sent.' }, message: 'This UTR was already sent.' };
+  let shot = '';
+  if ((data || {}).fileData) {
+    const saved = savePublicImage_({ dataUrl: data.fileData }, 'SwapSutra_Partner_Payments', 'adpay_' + hit.obj.id + '_');
+    if (!saved.success) return saved;
+    shot = saved.url;
+  }
+  const rec = { id: generateId('SS_ADPAY_'), partnerId: hit.obj.id, email: caller, amount: partnerAdFee_(), months: PARTNER_AD_PERIOD_MONTHS,
+    utr: utr, screenshotUrl: shot, status: 'SUBMITTED', createdAt: new Date() };
+  const sheet = partnerAdPaymentSheet_();
+  const headers = ensureSheetHeaders(sheet, PARTNER_AD_PAYMENT_HEADERS);
+  sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  try {
+    returnNotify_('swapsutra@gmail.com', 'partner_ad_payment', 'A partner paid for promotion',
+      '"' + hit.obj.name + '" paid ₹' + rec.amount + ' (UTR ' + utr + '). Verify it in Management → Partners.', '', 'partner_adpay_' + rec.id, { whatsapp: false });
+  } catch (e) { /* saved */ }
+  return { success: true, message: 'Payment sent. SwapSutra will verify it, usually within a day.' };
+}
+
+/** Action: setPartnerBookStock { bookId, stock } — how many copies a partner has. */
+function setPartnerBookStock(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!approvedPartner_(caller)) return { success: false, error: 'NOT_PARTNER', message: 'Only an approved partner keeps stock counts.' };
+  const stock = Math.floor(Number((data || {}).stock));
+  if (!isFinite(stock) || stock < 0 || stock > 9999) return { success: false, message: 'Stock must be a number from 0 to 9999.' };
+  const sheet = getOrCreateSheet('Books', getBookHeaders());
+  const headers = ensureSheetHeaders(sheet, getBookHeaders());
+  const values = sheet.getDataRange().getValues();
+  const id = String((data || {}).bookId || '');
+  for (let r = 1; r < values.length; r++) {
+    if (String(values[r][headers.indexOf('id')]) !== id) continue;
+    if (normalizeEmail(values[r][headers.indexOf('ownerEmail')]) !== caller) return { success: false, message: 'That book is not yours.' };
+    sheet.getRange(r + 1, headers.indexOf('stock') + 1).setValue(stock);
+    try { invalidateLibraryCache(); } catch (e) { /* cache refreshes on its own */ }
+    return { success: true, stock: stock, message: stock ? stock + ' in stock.' : 'Out of stock — it no longer shows in the Library.' };
+  }
+  return { success: false, message: 'Book not found.' };
+}
+
+/** One copy sold: a partner's stock goes down by one (never below 0). */
+function decrementPartnerStock_(bookId, ownerEmail) {
+  if (!bookId || !approvedPartner_(ownerEmail)) return;
+  try {
+    const sheet = getOrCreateSheet('Books', getBookHeaders());
+    const headers = ensureSheetHeaders(sheet, getBookHeaders());
+    const values = sheet.getDataRange().getValues();
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][headers.indexOf('id')]) !== String(bookId)) continue;
+      const cur = values[r][headers.indexOf('stock')];
+      const n = cur === '' || cur === undefined ? 1 : Number(cur) || 0;
+      sheet.getRange(r + 1, headers.indexOf('stock') + 1).setValue(Math.max(0, n - 1));
+      try { invalidateLibraryCache(); } catch (e) { /* ignore */ }
+      return;
+    }
+  } catch (e) { Logger.log('decrementPartnerStock_ failed: ' + e); }
+}
+
+/**
+ * The payout rows for a partner (sale or rent): the partner's net, SwapSutra's
+ * commission kept, and the month it is paid in. Used by the sale and rent paths.
+ */
+function partnerPayoutParts_(ownerEmail, gross, at) {
+  const partner = approvedPartner_(ownerEmail);
+  if (!partner) return null;
+  const c = partnerCommissionFor_(partner, gross, at);
+  return { partner: partner, rate: c.rate, commission: c.commission, net: Math.round((gross - c.commission) * 100) / 100, cycle: istMonth_(at || new Date()) };
+}
+function appendCommissionRow_(sheet, headers, swapId, title, partnerEmail, amount, cycle, note) {
+  if (!(amount > 0)) return null;
+  const rec = { id: generateId('SS_COMMISSION_'), swapId: swapId, leg: 'commission', bookTitle: title, defaulterEmail: normalizeEmail(partnerEmail),
+    ownerEmail: 'swapsutra@gmail.com', amount: amount, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'KEPT_AS_FEE', payoutCycle: cycle, note: note };
+  sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  return rec;
+}
+
+// ── Admin ─────────────────────────────────────────────────────────────────
+function adminListPartners() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const payments = partnerAdPayments_();
+  const items = partnerRows_().rows.map(r => r.obj).map(p => {
+    const v = partnerPublicView_(p, true);
+    const mine = payments.filter(x => String(x.partnerId) === String(p.id));
+    v.promotion = partnerPromotionState_(p, mine);
+    v.payoutAccount = readPayoutAccount_(p.email);
+    return v;
+  }).reverse();
+  const pendingPayments = payments.filter(p => String(p.status) === 'SUBMITTED').map(x => ({
+    id: x.id, partnerId: x.partnerId, email: x.email, amount: Number(x.amount || 0), utr: x.utr, screenshotUrl: x.screenshotUrl,
+    createdAt: x.createdAt ? new Date(x.createdAt).toISOString() : '',
+    partnerName: ((partnerRows_().rows.find(r => String(r.obj.id) === String(x.partnerId)) || {}).obj || {}).name || ''
+  }));
+  return { success: true, items: items, pendingPayments: pendingPayments, monthly: adminPartnerMonthly_(),
+    commissionPercent: partnerCommissionRate_() * 100, adFee: partnerAdFee_(), adMonths: PARTNER_AD_PERIOD_MONTHS };
+}
+
+/** Monthly statements per partner: due after the month ends. */
+function adminPartnerMonthly_() {
+  const rows = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj).filter(f => f.payoutCycle && ['sale', 'rent'].indexOf(String(f.leg)) !== -1);
+  const groups = {};
+  rows.forEach(f => {
+    const key = normalizeEmail(f.ownerEmail) + '|' + f.payoutCycle;
+    const g = groups[key] = groups[key] || { email: normalizeEmail(f.ownerEmail), month: String(f.payoutCycle), net: 0, due: 0, paid: 0, items: 0 };
+    g.net += Number(f.amount || 0); g.items++;
+    if (String(f.payoutStatus) === 'TO_PAY_OWNER') g.due += Number(f.amount || 0); else if (String(f.payoutStatus) === 'PAID_TO_OWNER') g.paid += Number(f.amount || 0);
+  });
+  const thisMonth = istMonth_(new Date());
+  return Object.keys(groups).map(k => {
+    const g = groups[k];
+    const p = approvedPartner_(g.email) || ((partnerByEmail_(g.email) || {}).obj) || {};
+    g.partnerName = p.name || g.email; g.partnerId = p.id || '';
+    g.payable = g.month < thisMonth; // a month is paid after it ends
+    g.payTo = readPayoutAccount_(g.email);
+    ['net', 'due', 'paid'].forEach(x => { g[x] = Math.round(g[x] * 100) / 100; });
+    return g;
+  }).sort((a, b) => (a.month < b.month ? 1 : -1));
+}
+
+/** Admin action: adminReviewPartner { id, decision, note } */
+function adminReviewPartner(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const d = data || {};
+  const t = partnerRows_();
+  const hit = t.rows.find(r => String(r.obj.id) === String(d.id));
+  if (!hit) return { success: false, message: 'Partner not found.' };
+  const p = hit.obj;
+  const decision = String(d.decision || '');
+  const note = cleanPartnerText_(d.note, 400);
+  const now = new Date();
+  const admin = normalizeEmail(getAuthenticatedEmail());
+  const fields = { updatedAt: now };
+  let title = '', body = '';
+  if (decision === 'approve' || decision === 'approve_free_year') {
+    if (['PENDING', 'CHANGES_REQUESTED', 'REJECTED'].indexOf(String(p.status)) === -1) return { success: false, message: 'Only an application waiting for review can be approved.' };
+    fields.status = 'APPROVED'; fields.approvedAt = now; fields.approvedBy = admin; fields.reviewNote = '';
+    fields.adsFreeUntil = addMonths_(now, PARTNER_FREE_PROMO_MONTHS);
+    fields.commissionPlan = decision === 'approve_free_year' ? 'free_first_year' : 'standard';
+    fields.commissionFreeUntil = decision === 'approve_free_year' ? addMonths_(now, PARTNER_FREE_COMMISSION_MONTHS) : '';
+    ensurePartnerUserRow_(p);
+    title = 'You are a SwapSutra partner';
+    body = 'Welcome! "' + p.name + '" is approved. List as many books as you like, and your banner and ads are free until ' + returnDateLabel_(fields.adsFreeUntil) + '. ' +
+      (decision === 'approve_free_year' ? 'No commission for your first year (until ' + returnDateLabel_(fields.commissionFreeUntil) + '); after that SwapSutra keeps ' + (partnerCommissionRate_() * 100) + '% of payouts.'
+        : 'SwapSutra keeps ' + (partnerCommissionRate_() * 100) + '% of each payout; payouts are made monthly.');
+  } else if (decision === 'request_changes') {
+    if (!note) return { success: false, message: 'Say what needs to change.' };
+    fields.status = 'CHANGES_REQUESTED'; fields.reviewNote = note;
+    title = 'Please update your partner application'; body = 'SwapSutra needs a change before approving "' + p.name + '": ' + note;
+  } else if (decision === 'reject') {
+    if (!note) return { success: false, message: 'Give a reason.' };
+    fields.status = 'REJECTED'; fields.reviewNote = note;
+    title = 'Your partner application'; body = 'SwapSutra could not approve "' + p.name + '": ' + note;
+  } else if (decision === 'suspend') {
+    if (String(p.status) !== 'APPROVED') return { success: false, message: 'Only an approved partner can be paused.' };
+    fields.status = 'SUSPENDED'; fields.reviewNote = note;
+    title = 'Your partner account is paused'; body = '"' + p.name + '" is paused' + (note ? ': ' + note : '.');
+  } else if (decision === 'reinstate') {
+    if (String(p.status) !== 'SUSPENDED') return { success: false, message: 'Only a paused partner can be reinstated.' };
+    fields.status = 'APPROVED'; fields.reviewNote = '';
+    title = 'Your partner account is active again'; body = '"' + p.name + '" is active on SwapSutra again.';
+  } else if (decision === 'plan_standard' || decision === 'plan_free_year') {
+    if (String(p.status) !== 'APPROVED') return { success: false, message: 'Change the plan of an approved partner.' };
+    const from = p.approvedAt ? new Date(p.approvedAt) : now;
+    fields.commissionPlan = decision === 'plan_free_year' ? 'free_first_year' : 'standard';
+    fields.commissionFreeUntil = decision === 'plan_free_year' ? addMonths_(from, PARTNER_FREE_COMMISSION_MONTHS) : '';
+  } else {
+    return { success: false, message: 'Unknown decision.' };
+  }
+  setPartnerFields_(hit.rowIndex, t.headers, fields);
+  if (title) {
+    try {
+      returnNotify_(p.email, 'partner_review', title, body, '', 'partner_review_' + p.id + '_' + decision + '_' + now.getTime());
+      sendSwapSutraEmail({ to: p.email, subject: title, body: body + '\n\nYour partner dashboard: ' + BASE_APP_URL + '/partners' });
+    } catch (e) { /* the decision is saved */ }
+  }
+  return { success: true };
+}
+
+/** An approved partner gets a member row so they can sign in, list and sell. */
+function ensurePartnerUserRow_(p) {
+  const email = normalizeEmail(p.email);
+  if (!email || emailExistsInUsersSheet(email)) return;
+  const headers = ["id", "name", "email", "phone", "area", "pincode", "genres", "bio", "membershipStatus", "paymentStatus", "createdAt", "updatedAt"];
+  const sheet = getOrCreateSheet('Users', headers);
+  const h = ensureSheetHeaders(sheet, headers);
+  const rec = { id: generateId('SS_USER_'), name: p.name, email: email, phone: p.phone, area: p.city, pincode: p.pincode, genres: '',
+    bio: PARTNER_TYPE_LABEL[p.type] + ' on SwapSutra', membershipStatus: 'PARTNER', paymentStatus: 'Not required', createdAt: new Date(), updatedAt: new Date() };
+  sheet.appendRow(h.map(k => rec[k] !== undefined ? rec[k] : ''));
+}
+
+/** Admin action: adminReviewPartnerBanner { id, approve, note } */
+function adminReviewPartnerBanner(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const t = partnerRows_();
+  const hit = t.rows.find(r => String(r.obj.id) === String((data || {}).id));
+  if (!hit) return { success: false, message: 'Partner not found.' };
+  const approve = truthy_((data || {}).approve);
+  const note = cleanPartnerText_((data || {}).note, 300);
+  if (!approve && !note) return { success: false, message: 'Say what needs to change.' };
+  setPartnerFields_(hit.rowIndex, t.headers, { bannerStatus: approve ? 'APPROVED' : 'REJECTED', bannerNote: approve ? '' : note, updatedAt: new Date() });
+  try {
+    returnNotify_(hit.obj.email, 'partner_banner_review', approve ? 'Your banner is live' : 'Your banner needs a change',
+      approve ? 'Your banner now shows on the SwapSutra Library page.' : 'SwapSutra could not use your banner: ' + note, '', 'partner_banner_rev_' + hit.obj.id + '_' + Date.now());
+  } catch (e) { /* saved */ }
+  return { success: true };
+}
+
+/** Admin action: adminReviewPartnerAdPayment { id, approve, reason } — a verified payment adds 2 months. */
+function adminReviewPartnerAdPayment(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const sheet = partnerAdPaymentSheet_();
+  const t = readSheetObjects_(sheet);
+  const hit = t.rows.find(r => String(r.obj.id) === String((data || {}).id));
+  if (!hit) return { success: false, message: 'Payment not found.' };
+  if (String(hit.obj.status) !== 'SUBMITTED') return { success: false, message: 'This payment was already reviewed.' };
+  const partnerHit = partnerRows_().rows.find(r => String(r.obj.id) === String(hit.obj.partnerId));
+  if (!partnerHit) return { success: false, message: 'Partner not found.' };
+  const approve = truthy_((data || {}).approve);
+  const reason = cleanPartnerText_((data || {}).reason, 300);
+  if (!approve && !reason) return { success: false, message: 'Give a reason.' };
+  const now = new Date();
+  const set = (k, v) => { const i = t.headers.indexOf(k); if (i !== -1) sheet.getRange(hit.rowIndex + 1, i + 1).setValue(v); };
+  set('status', approve ? 'APPROVED' : 'REJECTED'); set('reviewedBy', normalizeEmail(getAuthenticatedEmail())); set('reviewedAt', now); set('reason', reason);
+  let to = null;
+  if (approve) {
+    // The 2 months start when the current promotion ends (or today, if it has ended).
+    const promo = partnerPromotionState_(partnerHit.obj, partnerAdPayments_(partnerHit.obj.id).filter(p => String(p.id) !== String(hit.obj.id)));
+    const from = promo.activeUntil && new Date(promo.activeUntil) > now ? new Date(promo.activeUntil) : now;
+    to = addMonths_(from, Number(hit.obj.months) || PARTNER_AD_PERIOD_MONTHS);
+    set('periodFrom', from); set('periodTo', to);
+  }
+  try {
+    returnNotify_(partnerHit.obj.email, 'partner_ad_payment_review', approve ? 'Promotion extended' : 'Payment not verified',
+      approve ? 'Thank you — your banner and ads run until ' + returnDateLabel_(to) + '.' : 'SwapSutra could not verify your ₹' + hit.obj.amount + ' payment: ' + reason,
+      '', 'partner_adpay_rev_' + hit.obj.id);
+  } catch (e) { /* saved */ }
+  return { success: true, periodTo: to ? to.toISOString() : '' };
+}
+
+/** Admin action: adminMarkPartnerMonthPaid { email, month, note } — pays a partner's whole month. */
+function adminMarkPartnerMonthPaid(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const email = normalizeEmail((data || {}).email);
+  const month = String((data || {}).month || '');
+  if (!email || !/^\d{4}-\d{2}$/.test(month)) return { success: false, message: 'Pick a partner and a month.' };
+  if (month >= istMonth_(new Date())) return { success: false, message: 'A month is paid after it ends.' };
+  const sheet = getReturnForfeitSheet_();
+  const t = readSheetObjects_(sheet);
+  const rows = t.rows.filter(r => r.obj.payoutCycle === month && normalizeEmail(r.obj.ownerEmail) === email
+    && ['sale', 'rent'].indexOf(String(r.obj.leg)) !== -1 && String(r.obj.payoutStatus) === 'TO_PAY_OWNER');
+  if (!rows.length) return { success: false, message: 'Nothing is due for that month.' };
+  const now = new Date();
+  const admin = normalizeEmail(getAuthenticatedEmail());
+  const note = String((data || {}).note || '').slice(0, 200);
+  let total = 0;
+  rows.forEach(r => {
+    const set = (k, v) => { const i = t.headers.indexOf(k); if (i !== -1) sheet.getRange(r.rowIndex + 1, i + 1).setValue(v); };
+    set('payoutStatus', 'PAID_TO_OWNER'); set('paidAt', now); set('paidBy', admin);
+    if (note) set('note', String(r.obj.note || '') + ' Paid: ' + note);
+    total += Number(r.obj.amount || 0);
+  });
+  total = Math.round(total * 100) / 100;
+  try {
+    returnNotify_(email, 'partner_month_paid', 'SwapSutra has paid you ₹' + total,
+      'Your payout for ' + month + ' (' + rows.length + ' order' + (rows.length === 1 ? '' : 's') + ', after commission) has been sent.', '', 'partner_paid_' + email + '_' + month);
+  } catch (e) { /* saved */ }
+  return { success: true, total: total, count: rows.length };
+}
+
+/** Partner banners for the Library banner (approved, chosen, promotion running). */
+function partnerBannerAds_() {
+  const out = [];
+  try {
+    partnerRows_().rows.map(r => r.obj).forEach(p => {
+      if (String(p.status) !== 'APPROVED' || String(p.bannerStatus) !== 'APPROVED' || !p.bannerImageUrl) return;
+      if (!partnerPromotionLive_(p, 'banner')) return;
+      const link = /^https:\/\//i.test(String(p.website || '')) ? String(p.website)
+        : (p.lat !== '' && p.lng !== '' && isFinite(Number(p.lat)) ? 'https://www.google.com/maps/search/?api=1&query=' + Number(p.lat) + ',' + Number(p.lng) : '');
+      if (!link) return;
+      out.push({ id: 'PB-' + p.id, kind: p.type === 'author' ? 'author' : p.type === 'bookstore' ? 'bookstore' : 'book', sponsor: mugText_(p.name, 80),
+        headline: mugText_(p.bannerHeadline || p.name, 90), tagline: mugText_(p.bannerTagline || (p.city ? PARTNER_TYPE_LABEL[p.type] + ' · ' + p.city : ''), 160),
+        imageUrl: String(p.bannerImageUrl), linkUrl: link, bookId: '', ctaLabel: p.type === 'bookstore' && !p.website ? 'Find the store' : '',
+        placement: 'banner', partner: true, partnerType: p.type });
+    });
+  } catch (e) { Logger.log('partnerBannerAds_ failed: ' + e); }
+  return out;
+}
+
+/** Revenue from partners: promotion fees verified, commission kept. */
+function partnerRevenue_() {
+  let adFees = 0, adPayments = 0, commission = 0;
+  try {
+    partnerAdPayments_().forEach(p => { if (String(p.status) === 'APPROVED') { adFees += Number(p.amount || 0); adPayments++; } });
+    readSheetObjects_(getReturnForfeitSheet_()).rows.forEach(r => { if (String(r.obj.leg) === 'commission') commission += Number(r.obj.amount || 0); });
+  } catch (e) { /* no sheets yet */ }
+  return { partnerAdFees: adFees, partnerAdPayments: adPayments, partnerCommission: Math.round(commission * 100) / 100 };
 }
