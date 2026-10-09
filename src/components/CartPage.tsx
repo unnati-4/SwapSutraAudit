@@ -98,6 +98,10 @@ export interface CartPageProps {
   wanted: CartWanted[];
   /** Finished exchanges whose room has closed. */
   orders?: CartOrder[];
+  /** Listed books the reader hearted ("Add to wishlist", 9 Oct 2026). */
+  saved?: { bookId: string; title: string; author?: string; available: boolean; price?: number; savedAt?: string }[];
+  onOpenSaved?: (bookId: string) => void;
+  onRemoveSaved?: (bookId: string) => void;
   busy?: boolean;
   coverFor: (bookId?: string, title?: string) => string;
   bookTitleFor: (bookId?: string) => string;
@@ -203,7 +207,7 @@ export default function CartPage(props: CartPageProps) {
   const tabs: { id: CartView; label: string; count: number; alert?: boolean }[] = [
     { id: 'cart', label: 'My cart', count: p.sent.length },
     { id: 'chats', label: 'Chats', count: openChats.length },
-    { id: 'wanted', label: 'Wishlist', count: openWanted.length },
+    { id: 'wanted', label: 'Wishlist', count: (p.saved || []).length + openWanted.length },
     { id: 'orders', label: 'My orders', count: orders.length + p.received.length, alert: pendingIn > 0 },
   ];
   const goRequests = () => { setOrderFilter('requests'); p.onViewChange('orders'); };
@@ -315,8 +319,38 @@ export default function CartPage(props: CartPageProps) {
       {/* ── Wanted ───────────────────────────────────────── */}
       {view === 'wanted' && (
         <>
+          {/* Saved books: hearted from the Library or a book's page. */}
+          {(p.saved || []).length > 0 && (
+            <section className="cart-order-section" aria-label="Saved books" data-testid="wishlist-saved">
+              <h2 className="cart-order-section__title">Saved books <span>{(p.saved || []).length}</span></h2>
+              <div className="cart-list">
+                {(p.saved || []).map((b) => (
+                  <article key={b.bookId} className={`cart-item ${b.available ? '' : 'is-closed'}`} data-testid="wishlist-item">
+                    <Cover src={b.available ? p.coverFor(b.bookId, b.title) : ''} title={b.title} />
+                    <div className="cart-item__body">
+                      <p className="cart-item__kind">
+                        <span className="cart-chip">♥ Saved</span>
+                        {b.savedAt && <span>{when(b.savedAt)}</span>}
+                      </p>
+                      <h3 className="cart-item__title">{b.title}</h3>
+                      {b.author && <p className="cart-item__author">{b.author}</p>}
+                      {b.price ? <p className="cart-item__price">{inr(b.price)}</p> : null}
+                      <div className="cart-item__foot">
+                        <span className={b.available ? 'cart-item__date' : 'cart-status is-cancelled'}>{b.available ? 'Still listed' : 'No longer listed'}</span>
+                        <span className="cart-item__decide">
+                          <button type="button" className="cart-btn cart-btn--ghost" onClick={() => p.onRemoveSaved?.(b.bookId)}>Remove</button>
+                          {b.available && <button type="button" className="cart-btn cart-btn--solid" onClick={() => p.onOpenSaved?.(b.bookId)}>View book</button>}
+                        </span>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
+          {(p.saved || []).length > 0 && <h2 className="cart-order-section__title">Books I asked for <span>{p.wanted.length}</span></h2>}
           <div className="cart-wanted-bar">
-            <p><b>My wishlist</b> — books you want. Readers near you see it and can offer theirs.</p>
+            <p><b>Can’t find a book?</b> Ask for it — readers near you see it and can offer theirs. Tap ♡ on any book in the Library to save it here.</p>
             <button type="button" className="cart-btn cart-btn--solid" onClick={p.onRequestBook}>Add a book</button>
           </div>
           {p.wanted.length ? (

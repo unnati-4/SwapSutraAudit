@@ -192,6 +192,8 @@ import PhotoViewer from './components/PhotoViewer';
 import NewsletterPage from './components/NewsletterPage';
 import ReadingTracker, { type TrackerBook, type TrackerChanges } from './components/ReadingTracker';
 import SupportQr from './components/SupportQr';
+import { WishHeart, WishlistButton } from './components/WishlistButton';
+import { loadWishlist, toggleWishlist as toggleWishlistItem, useWishlist } from './utils/wishlist';
 import ListingUnlockPanel, { fetchListingAllowance, needsListingUnlock, listingPopupAlreadyShown, markListingPopupShown, unlockUntilLabel, type ListingAllowance } from './components/ListingUnlockPanel';
 
 // --- CONFIGURATION ---
@@ -2672,6 +2674,12 @@ const BookCard = memo(({ book, ownerMode = false, userCoords, onShowBookDetail }
               {primaryBadge}
             </span>
           </div>
+          {/* Add to wishlist (9 Oct 2026) — not on your own shelf. */}
+          {!ownerMode && (
+            <div className="absolute top-2.5 right-2.5 z-20">
+              <WishHeart bookId={String(book.id)} title={book.title} />
+            </div>
+          )}
           {ownerMode && (
              <div className="absolute bottom-3 left-4 z-10">
                 <span className="px-2.5 py-1 rounded-sm text-2xs font-bold uppercase tracking-widest backdrop-blur-md bg-brand-brown/70 text-white">
@@ -4033,6 +4041,8 @@ const BookDetailModal = memo(({
                       );
                     })()}
                     
+                    {!isOwner && <WishlistButton bookId={String(book.id)} title={book.title} />}
+
                     <button 
                       onClick={() => onRatingBookId(book.id)}
                       className="btn-outline w-full !py-4 uppercase text-2xs tracking-widest opacity-60 hover:opacity-100 transition-all border-brand-border/30"
@@ -12193,6 +12203,11 @@ export default function App() {
   // cart opens and whenever a chat is closed, so a finished book moves from
   // the cart to My orders.
   const [myOrders, setMyOrders] = useState<CartOrder[]>([]);
+  // Wishlist (9 Oct 2026): saved books, kept on the server per reader.
+  useEffect(() => {
+    void loadWishlist(activeUserEmail || '', () => { setLoginStep('choice'); setShowLoginModal(true); });
+  }, [activeUserEmail]);
+  const wishlistItems = useWishlist();
   useEffect(() => {
     if (activeTab !== 'cart' || !activeUserEmail) return;
     let cancelled = false;
@@ -15988,6 +16003,23 @@ export default function App() {
                   chats={activeChats.filter((c) => isAdmin || c.chatStatus !== 'Archived')}
                   wanted={userBookRequests}
                   orders={myOrders}
+                  saved={wishlistItems.map((w) => {
+                    const b: any = books.find((x: any) => String(x.id) === w.bookId);
+                    return {
+                      bookId: w.bookId,
+                      title: b?.title || w.bookTitle || 'A book',
+                      author: b?.author || '',
+                      available: !!b,
+                      price: b ? (Number(b.sellPrice || 0) || undefined) : undefined,
+                      savedAt: w.savedAt,
+                    };
+                  })}
+                  onOpenSaved={(bookId) => {
+                    const b: any = books.find((x: any) => String(x.id) === bookId);
+                    if (b) setShowBookDetail(b);
+                    else setErrorMessage('This book is no longer listed. You can remove it from your wishlist.');
+                  }}
+                  onRemoveSaved={(bookId) => { void toggleWishlistItem(bookId); }}
                   busy={submitting}
                   coverFor={(bookId, title) => {
                     const b: any = books.find((x: any) => String(x.id) === String(bookId || ''))

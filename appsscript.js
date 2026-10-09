@@ -6424,6 +6424,9 @@ function doPostHandler_(e) {
     // Oct 2026 — the Exchange Room (one place: chat + every step).
     if (action === 'getExchangeRoom') return respondJson(getExchangeRoom(data));
     if (action === 'getMyOrders') return respondJson(getMyOrders(data));
+    // Oct 2026 — wishlist (saved books).
+    if (action === 'getWishlist') return respondJson(getWishlist(data));
+    if (action === 'toggleWishlist') return respondJson(toggleWishlist(data));
     if (action === 'exchangeRoomAction') return respondJson(exchangeRoomAction(data));
     if (action === 'vmsStartUpload') return respondJson(vmsStartUpload(data));
     if (action === 'vmsUploadChunk') return respondJson(vmsUploadChunk(data));
@@ -26216,4 +26219,58 @@ function getMyOrders() {
   } catch (err) {
     return { success: false, message: err.toString() };
   }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   WISHLIST — saved books (9 Oct 2026, owner's request: "books me add to
+   wishlist ka option")
+   ────────────────────────────────────────────────────────────────────────
+   A reader hearts a listed book; it is kept against their account (so it
+   follows them across devices) and shown in Cart → Wishlist, above the
+   books they have asked the community to find. One row per reader + book.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const WISHLIST_SHEET = 'Wishlist';
+const WISHLIST_HEADERS = ['id', 'email', 'bookId', 'bookTitle', 'createdAt'];
+const WISHLIST_MAX = 300;
+
+function getWishlistSheet_() {
+  const s = getOrCreateSheet(WISHLIST_SHEET, WISHLIST_HEADERS);
+  ensureSheetHeaders(s, WISHLIST_HEADERS);
+  return s;
+}
+
+/** Action: getWishlist — the caller's saved book ids, newest first. */
+function getWishlist() {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to see your wishlist.' };
+  const items = readSheetObjects_(getWishlistSheet_()).rows.map(r => r.obj)
+    .filter(o => normalizeEmail(o.email) === caller)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map(o => ({ bookId: String(o.bookId), bookTitle: String(o.bookTitle || ''), savedAt: o.createdAt ? new Date(o.createdAt).toISOString() : '' }));
+  return { success: true, items: items };
+}
+
+/** Action: toggleWishlist { bookId, saved?: true|false } — add or remove one book. */
+function toggleWishlist(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to save books to your wishlist.' };
+  const bookId = String((data && data.bookId) || '').trim().slice(0, 80);
+  if (!bookId) return { success: false, message: 'Which book?' };
+  const sheet = getWishlistSheet_();
+  const t = readSheetObjects_(sheet);
+  const mine = t.rows.filter(r => normalizeEmail(r.obj.email) === caller);
+  const existing = mine.find(r => String(r.obj.bookId) === bookId);
+  const want = data && data.saved !== undefined ? (data.saved === true || data.saved === 'true') : !existing;
+  if (want && !existing) {
+    if (mine.length >= WISHLIST_MAX) return { success: false, message: 'Your wishlist is full (' + WISHLIST_MAX + ' books). Remove a few first.' };
+    let title = String((data && data.bookTitle) || '').slice(0, 200);
+    try { const b = findBookById(bookId); if (b && b.title) title = String(b.title); } catch (e) { /* the title sent is fine */ }
+    const rec = { id: generateId('SS_WISH_'), email: caller, bookId: bookId, bookTitle: title, createdAt: new Date() };
+    sheet.appendRow(t.headers.length ? t.headers.map(h => rec[h] !== undefined ? rec[h] : '') : WISHLIST_HEADERS.map(h => rec[h]));
+  } else if (!want && existing) {
+    sheet.deleteRow(existing.rowIndex + 1);
+  }
+  return { success: true, saved: want, message: want ? 'Saved to your wishlist.' : 'Removed from your wishlist.' };
 }
