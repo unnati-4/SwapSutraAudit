@@ -25399,6 +25399,20 @@ function getExchangeRoom(data) {
     const input = roomInputFor_(swap, caller);
     const room = computeExchangeRoom_(input);
     delete room._raw; delete room._timers;
+    // 9 Oct 2026: on a courier route the addresses come WITH the room (which
+    // refreshes every 20 s), so the sender sees the receiver's address as
+    // soon as it is saved — it used to be fetched once and never again.
+    // Same rule as getDeliveryAddress: a party, payment verified, courier
+    // route for a trip still to happen, room open.
+    let delivery = null;
+    const outDone = room.steps.some(st => st.n === 9 && st.state === 'done');
+    const courierLeft = !room.closed && input.fee.allApproved &&
+      ((room.route.out && room.route.out.method === 'courier' && !outDone) ||
+       (room.route.back && room.route.back.method === 'courier' && !room.exchangeDone));
+    if (courierLeft && (input.viewerRole === 'owner' || input.viewerRole === 'requester')) {
+      const other = caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail;
+      delivery = { theirAddress: readDeliveryAddress(other), myAddress: readDeliveryAddress(caller) };
+    }
     const ret = input.returnState || {};
     const pending = ret.pendingExtension ? { id: ret.pendingExtension.id, days: ret.pendingExtension.days, reason: ret.pendingExtension.reason || '',
       youAsked: normalizeEmail(ret.pendingExtension.requestedBy) === caller } : null;
@@ -25421,6 +25435,7 @@ function getExchangeRoom(data) {
       closedForYou: !!(input.viewerRole && room.rated && room.rated[input.viewerRole]),
       payoutAccount: input.myPayoutAccount,
       myAddressSaved: input.myAddressSaved,
+      delivery: delivery,
       stampCode: vmsStampCode_(swap.obj.id),
       couriers: Object.keys(COURIERS),
       reviewUrl: GOOGLE_REVIEW_URL,

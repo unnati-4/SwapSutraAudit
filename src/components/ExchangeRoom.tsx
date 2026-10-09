@@ -61,6 +61,8 @@ export interface RoomData {
   /** This reader has reflected & rated: the exchange has moved to their My orders. */
   closedForYou?: boolean;
   exchangeDone: boolean; myAddressSaved?: boolean;
+  /** Courier route: both addresses, sent with the room (refreshed every 20 s). */
+  delivery?: { theirAddress: Record<string, string> | null; myAddress: Record<string, string> | null } | null;
   stampCode: string; couriers: string[]; reviewUrl: string;
 }
 
@@ -119,7 +121,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   const [rating, setRating] = useState({ reader: 0, platform: 0, readerComment: '', platformComment: '' });
   const [rated, setRated] = useState<{ reviewUrl: string; message: string } | null>(null);
   const [addr, setAddr] = useState({ line1: '', area: '', city: '', state: '', pincode: '', phone: '' });
-  const [counterAddr, setCounterAddr] = useState<Record<string, string> | null>(null);
+  const [editAddr, setEditAddr] = useState(false);
   const [showReport, setShowReport] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -138,20 +140,11 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
     return () => clearInterval(t);
   }, [refresh]);
 
-  // On a courier route, the sender needs the receiver's address.
-  const courierRoute = room && !room.closed && ((room.route.out?.method === 'courier' && !room.exchangeDone) || room.route.back?.method === 'courier');
-  useEffect(() => {
-    if (!courierRoute) { setCounterAddr(null); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${API_URL}?action=getDeliveryAddress&swapId=${encodeURIComponent(swapId)}`);
-        const d = await res.json();
-        if (!cancelled) setCounterAddr(d?.counterparty || null);
-      } catch { /* shown as "not added yet" */ }
-    })();
-    return () => { cancelled = true; };
-  }, [courierRoute, swapId, room?.myAddressSaved]);
+  // On a courier route the server sends both addresses with the room, so
+  // the sender sees the receiver's address as soon as it is saved (9 Oct
+  // 2026: it used to be fetched once, before the receiver had added it).
+  const counterAddr = room?.delivery?.theirAddress || null;
+  const myAddr = room?.delivery?.myAddress || null;
 
   const after = async (res: any, okText?: string) => {
     setMsg(res?.success ? (okText || res.message || 'Done.') : (res?.message || 'That did not go through. Please try again.'));
@@ -199,7 +192,11 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
 
   const saveAddress = async () => {
     setBusy('addr'); setMsg('');
-    try { await after(await post({ action: 'saveDeliveryAddress', label: 'Home', ...addr }), 'Address saved — only the other reader in this exchange sees it.'); }
+    try {
+      const res = await post({ action: 'saveDeliveryAddress', label: 'Home', ...addr });
+      if (res?.success) setEditAddr(false);
+      await after(res, 'Address saved — only the other reader in this exchange sees it.');
+    }
     finally { setBusy(''); }
   };
 
@@ -450,6 +447,34 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         <p className="text-2xs text-[var(--text-secondary)]">{room.otherName}: ₹{otherPayer.requiredAmount} — {otherPayer.adminStatus === 'ADMIN_APPROVED' ? 'paid ✓' : otherPayer.adminStatus === 'ADMIN_PENDING' ? 'paid, being verified' : 'not paid yet'}</p>
       )}
 
+      {/* Courier: both addresses and phone numbers, for both readers. */}
+      {room.delivery && (
+        <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-4 space-y-3 text-xs" data-testid="delivery-details">
+          <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">📦 Delivery details (courier)</p>
+          <div className="space-y-1">
+            <p className="font-semibold text-[var(--text-primary)]">{room.otherName}'s address</p>
+            {counterAddr ? (
+              <p className="text-[var(--text-secondary)] leading-relaxed select-all">
+                {[counterAddr.line1, counterAddr.line2, counterAddr.landmark, counterAddr.area, counterAddr.city, counterAddr.state, counterAddr.pincode].filter(Boolean).join(', ')}
+                {counterAddr.phone && <><br />📞 <a className="underline" href={`tel:${counterAddr.phone}`}>{counterAddr.phone}</a></>}
+              </p>
+            ) : <p className="italic text-[var(--text-secondary)]">Not added yet — it appears here as soon as {room.otherName} saves it.</p>}
+          </div>
+          <div className="space-y-1 border-t border-brand-border/40 pt-2">
+            <p className="font-semibold text-[var(--text-primary)]">Your address</p>
+            {myAddr && !editAddr ? (
+              <p className="text-[var(--text-secondary)] leading-relaxed">
+                {[myAddr.line1, myAddr.line2, myAddr.landmark, myAddr.area, myAddr.city, myAddr.state, myAddr.pincode].filter(Boolean).join(', ')}
+                {myAddr.phone && <> · 📞 {myAddr.phone}</>}
+                {' '}<button type="button" onClick={() => { setAddr({ line1: myAddr.line1 || '', area: myAddr.area || '', city: myAddr.city || '', state: myAddr.state || '', pincode: String(myAddr.pincode || ''), phone: String(myAddr.phone || '') }); setEditAddr(true); }} className="underline text-brand-gold-text">Change</button>
+              </p>
+            ) : !myAddr && !editAddr ? (
+              <button type="button" onClick={() => setEditAddr(true)} className="underline text-brand-gold-text">Add your address</button>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       {/* Your turn: videos first (one tap each), then the rest. */}
       {videoActions.length > 0 && card('videos', 'Your videos', (
         <ul className="space-y-2">
@@ -469,6 +494,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         </ul>
       ))}
       {otherActions.map(renderAction)}
+      {editAddr && !room.actions.some(a => a.type === 'address') && renderAction({ type: 'address', step: 7 }, -1)}
 
       {msg && <p className="text-xs text-[var(--text-primary)]" role="status">{msg}</p>}
       {rated && rated.reviewUrl && <GoogleReviewCard url={rated.reviewUrl} />}
