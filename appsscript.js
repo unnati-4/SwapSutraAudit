@@ -20596,6 +20596,38 @@ function ensureSecurityFeeRecords(swap) {
   rows.forEach(r => { existingByRole[r.obj.payerRole] = r; });
   const now = new Date();
   let created = false;
+  // 9 Oct 2026: rows written under an older rule (e.g. a sale made before
+  // escrow, when the seller also owed ₹10 and the buyer paid only the fee)
+  // used to keep the exchange stuck at the payment step forever. Bring them
+  // in line with the rule today — but only while nothing has been paid on
+  // them: a payment that was made is never rewritten.
+  const unpaid = st => st === 'NOT_SUBMITTED' || st === 'ADMIN_REJECTED' || !st;
+  const setRowCell = (rowIndex, name, value) => {
+    const idx = headers.indexOf(name);
+    if (idx !== -1) sheet.getRange(rowIndex + 1, idx + 1).setValue(value);
+  };
+  const requiredByRole = {};
+  required.forEach(req => { requiredByRole[req.payerRole] = req; });
+  rows.forEach(r => {
+    const req = requiredByRole[r.obj.payerRole];
+    if (!unpaid(r.obj.adminStatus)) return;
+    if (!req) {
+      // No longer owed by this reader at all.
+      setRowCell(r.rowIndex, 'adminStatus', 'NOT_REQUIRED');
+      setRowCell(r.rowIndex, 'paymentStatus', 'CANCELLED');
+      setRowCell(r.rowIndex, 'updatedAt', now);
+      created = true;
+      return;
+    }
+    const want = { requiredAmount: req.requiredAmount, depositAmount: req.depositAmount === undefined ? req.requiredAmount : req.depositAmount,
+      platformFee: req.platformFee || 0, saleAmount: req.saleAmount || 0 };
+    const differs = Object.keys(want).some(k => Number(r.obj[k] || 0) !== Number(want[k] || 0));
+    if (differs) {
+      Object.keys(want).forEach(k => setRowCell(r.rowIndex, k, want[k]));
+      setRowCell(r.rowIndex, 'updatedAt', now);
+      created = true;
+    }
+  });
   required.forEach(req => {
     if (existingByRole[req.payerRole]) return;
     created = true;
@@ -20627,7 +20659,9 @@ function ensureSecurityFeeRecords(swap) {
  * screenshot but not the counterparty's; admin sees everything.
  */
 function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
-  const records = ensureSecurityFeeRecords(swap);
+  // A row that is no longer owed (see ensureSecurityFeeRecords) is not shown
+  // and never holds the exchange back.
+  const records = ensureSecurityFeeRecords(swap).filter(rec => rec.adminStatus !== 'NOT_REQUIRED');
   const viewer = normalizeEmail(viewerEmail);
   const estimatedByRole = {};
   const payers = records.map(rec => {
@@ -23243,6 +23277,22 @@ function computeExchangePayments_(swap) {
 // Sales made from this moment on go through SwapSutra (escrow). Earlier
 // sales keep their old arrangement (paid directly between readers).
 const SALE_ESCROW_START_ISO = '2026-10-08T00:00:00+05:30';
+/**
+ * Is SwapSutra actually holding the price of this sale? Escrow by date, unless
+ * the buyer's payment was already verified for the fee alone (a sale whose
+ * payment row predates escrow) — then the price was paid between readers and
+ * SwapSutra must not pay the seller from money it never received. (9 Oct 2026)
+ */
+function saleEscrowActive_(swap) {
+  if (!saleEscrowAppliesToSwap_(swap.obj)) return false;
+  try {
+    const buyerRow = loadSecurityFeeRows(swap.obj.id).rows.map(r => r.obj)
+      .find(r => r.payerRole === 'requester' && (r.adminStatus === 'ADMIN_APPROVED' || r.adminStatus === 'ADMIN_PENDING'));
+    if (buyerRow && !(feeRecordBreakdown_(buyerRow).saleAmount > 0)) return false;
+  } catch (e) { /* no rows yet: escrow by date */ }
+  return true;
+}
+
 function saleEscrowAppliesToSwap_(obj) {
   const created = new Date(obj && obj.createdAt);
   if (isNaN(created.getTime())) return true;
@@ -24648,7 +24698,7 @@ function saleStatusFor_(swap) {
   const events = journeyEventsBySwap_()[id] || [];
   const received = events.some(e => e.leg === 'outbound' && e.event === 'received');
   return {
-    escrow: saleEscrowAppliesToSwap_(swap.obj),
+    escrow: saleEscrowActive_(swap),
     price: price,
     buyerPays: price + (isAdminEmail(swap.requesterEmail) ? 0 : fee),
     sellerReceives: Math.max(0, price - sellerFee),
@@ -24753,7 +24803,7 @@ function runSaleAutoRelease_() {
     const ageDays = (Date.now() - Math.min.apply(null, got)) / (24 * 60 * 60 * 1000);
     if (swapHasOpenDispute(id)) return;
     const swap = loadSwapForCirculation(id);
-    if (!swap) return;
+    if (!swap || !saleEscrowActive_(swap)) return;
     if (ageDays >= 5 && ageDays < SALE_AUTO_RELEASE_DAYS) {
       returnNotify_(swap.requesterEmail, 'sale_close_reminder', 'Please close your purchase',
         'You confirmed receiving "' + (o.requestedBookTitle || 'the book') + '". Close the purchase if you are happy, or report a problem — otherwise the payment is released to the seller in ' + Math.ceil(SALE_AUTO_RELEASE_DAYS - ageDays) + ' days.',
@@ -25138,7 +25188,7 @@ function computeExchangeRoom_(input) {
         });
         legs.filter(l => l.youReceive && !l.receivedAt).forEach(l => {
           if (!has(l, 'RECEIVING')) push({ type: 'video', step: isBack ? 14 : 9, leg: l.leg, kind: 'RECEIVING' });
-          else push({ type: 'markReceived', step: isBack ? 14 : 9, leg: l.leg, sale: sale && l.leg === 'outbound' });
+          else push({ type: 'markReceived', step: isBack ? 14 : 9, leg: l.leg, sale: sale && l.leg === 'outbound' && input.saleEscrow !== false });
         });
       };
       legSteps(out, outRoute, 3);
@@ -25177,7 +25227,7 @@ function computeExchangeRoom_(input) {
   }
   // Money owed to the viewer needs somewhere to go.
   if (me && !closedEarly && !input.myPayoutAccount) {
-    const owedSale = sale && me === 'owner';
+    const owedSale = sale && me === 'owner' && input.saleEscrow !== false;
     const owedRefund = exchangeDone && (fee.payers || []).some(p => p.payerRole === me && Number(p.depositAmount || 0) > 0);
     if (owedSale || owedRefund) push({ type: 'payoutAccount', step: sale ? 9 : (needsReturn ? 14 : 9) });
   }
@@ -25255,6 +25305,7 @@ function roomInputFor_(swap, viewerEmail, nowMs) {
     disputeOpen: swapHasOpenDispute(id),
     myAddressSaved: !!(viewer && readDeliveryAddress(viewer)),
     myPayoutAccount: viewer ? readPayoutAccount_(viewer) : null,
+    saleEscrow: String(swap.obj.serviceType || '').toUpperCase() === 'SELL' ? saleEscrowActive_(swap) : false,
     nowMs: nowMs
   };
 }
@@ -25389,14 +25440,14 @@ function exchangeRoomAction(data) {
       if (!allowed('markReceived')) return { success: false, error: 'STEP_LOCKED', message: 'This book is not on its way to you yet.' };
       const isSale = String(swap.obj.serviceType || '').toUpperCase() === 'SELL' && leg === 'outbound';
       const happy = data && (data.happy === true || data.happy === 'true');
-      if (isSale && saleEscrowAppliesToSwap_(swap.obj) && !happy) {
+      if (isSale && saleEscrowActive_(swap) && !happy) {
         return { success: false, error: 'NOT_HAPPY', message: 'If something is wrong with the book, report a problem instead — SwapSutra will review the videos before the seller is paid.' };
       }
       const res = appendJourneyEvent({ swapId: swapId, leg: leg, event: 'received', actorEmail: caller, method: '', note: happy ? 'Received — happy with the book' : 'Received' }, swap);
       if (res && res.success === false) return res;
       roomPost_(swapId, '📗 Step ' + (roomPhaseOfLeg_(leg) === 'back' ? 14 : 9) + ' · ' + name + ' marked ' + (roomPhaseOfLeg_(leg) === 'back' ? 'their book received back' : 'the book received') + (happy ? ' and is happy with it' : '') + '.');
       let saleResult = null;
-      if (isSale && saleEscrowAppliesToSwap_(swap.obj)) saleResult = confirmSaleComplete({ swapId: swapId, happy: true });
+      if (isSale && saleEscrowActive_(swap)) saleResult = confirmSaleComplete({ swapId: swapId, happy: true });
       roomAfterMark_(swap);
       return { success: true, message: isSale ? 'Purchase closed — the seller will be paid. Enjoy the book!' : 'Marked received.', sale: saleResult };
     }
