@@ -98,7 +98,7 @@ export default function PartnerDashboard({ dash, reload, onOpenOrders, onListBoo
               <div><span>Paid to you</span><b>{inr(e?.total.paid || 0)}</b></div>
               <div><span>Coming to you</span><b>{inr(e?.total.due || 0)}</b></div>
             </div>
-            <p className="pp-hint">Paid monthly: a month's orders are paid after the month ends, to {dash.payoutAccount?.upiId || 'your UPI ID (add it under Payouts)'}. No ₹10 platform fee is taken from you.</p>
+            <p className="pp-hint">Paid monthly: a month's orders are paid after the month ends, to {dash.payoutAccount?.upiId || 'your UPI ID (add it under Payouts)'}. No ₹10 platform fee is taken from you on your own books (buyers pay it as usual).</p>
             {e && e.months.length > 0 && (
               <table className="pp-table">
                 <thead><tr><th>Month</th><th>Orders</th><th>Sold</th><th>Commission</th><th>Earned</th><th>Status</th></tr></thead>

@@ -1,6 +1,6 @@
 # SwapSutra Publisher Partner Agreement
 
-**Version:** publisher-2026-10-09
+**Version:** publisher-2026-10-10
 
 > Drafted for SwapSutra. Have an advocate review it before relying on it.
 
@@ -40,7 +40,7 @@ SwapSutra gives the Publisher only what is needed to post an order — the recip
 
 ## 5. Fees, commission and monthly payouts
 
-The Publisher pays no ₹10 platform fee on any exchange. Buyers still pay SwapSutra's ₹10 platform fee on each purchase.
+The Publisher pays no ₹10 platform fee on its own books (when it sells, lends, rents out or swaps them). The buyer, borrower or renter always pays SwapSutra's ₹10 platform fee on each exchange. When the Publisher asks for another reader's book, it pays the ₹10 like any reader.
 
 SwapSutra keeps a commission of 2% of every payout to the Publisher (the sale price of each book sold, and the rent of each book rented). The commission is deducted before payment.
 

@@ -59,7 +59,7 @@ function PartnersIntro({ onPick }: { onPick: (t: PartnerType) => void }) {
         <p className="pp-lead">For bookstores, authors, publishers and promoters. A separate account, verified by SwapSutra.</p>
         <ul className="pp-perks">
           <li><b>No listing limit</b> — list every title, with how many copies you have.</li>
-          <li><b>No ₹10 platform fee</b> for you. SwapSutra keeps <b>2%</b> of your payouts — <b>0% for the first year</b> if SwapSutra approves you commission-free.</li>
+          <li><b>No ₹10 platform fee</b> for you on your own books (buyers pay it as usual). SwapSutra keeps <b>2%</b> of your payouts — <b>0% for the first year</b> if SwapSutra approves you commission-free.</li>
           <li><b>Paid monthly</b> to your UPI, with every order and the commission shown in your dashboard.</li>
           <li><b>Your banner on the Library page</b> (with the SwapSutra logo) and <b>ads between the books</b> — free for 6 months, then ₹100 for every 2 months. Your choice.</li>
           <li>You ship and deliver your orders; SwapSutra keeps buyers' details private and gives you only the shipping address.</li>

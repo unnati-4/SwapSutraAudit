@@ -62,7 +62,7 @@ Lets you list more than 20 books for 3 months (books already listed stay listed 
 
 ## A2a. Partner promotion — ₹100 for every 2 months
 
-A partner's banner and ads are free for the first 6 months after approval, then cost ₹100 for every 2 months, paid by UPI and verified by SwapSutra. Partners pay no ₹10 platform fee; buyers still pay it. SwapSutra keeps a 2% commission on partner payouts (0% in the first year for a partner approved commission-free) and pays partners monthly — see the partner agreements.
+A partner's banner and ads are free for the first 6 months after approval, then cost ₹100 for every 2 months, paid by UPI and verified by SwapSutra. Partners pay no ₹10 platform fee on their own books; the buyer (or borrower, or renter) always pays it. SwapSutra keeps a 2% commission on partner payouts (0% in the first year for a partner approved commission-free) and pays partners monthly — see the partner agreements.
 
 | Situation | Refund |
 |---|---|

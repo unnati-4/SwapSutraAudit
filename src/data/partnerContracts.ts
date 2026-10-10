@@ -10,7 +10,7 @@
  * Owner's rules written into every agreement: separate registration and
  * documents; 2% commission on every payout (0% for the first year when
  * SwapSutra approves a partner commission-free); payouts monthly; no ₹10
- * platform fee for the partner (a buyer still pays it); promotion free for
+ * platform fee for the partner on its own books (a buyer always pays it); promotion free for
  * 6 months, then ₹100 for every 2 months; shipping and delivery are the
  * partner's responsibility; buyer details stay with SwapSutra.
  *
@@ -78,7 +78,7 @@ function sections(type: PartnerType): ContractSection[] {
       `SwapSutra gives ${you} only what is needed to post an order — the recipient's name, delivery address, pincode and phone number. ${you} may use these only to deliver that order and must not keep, share or use them for marketing or any other purpose.`,
     ] },
     { title: '5. Fees, commission and monthly payouts', body: [
-      `${you} pays no ₹10 platform fee on any exchange. Buyers still pay SwapSutra's ₹10 platform fee on each purchase.`,
+      `${you} pays no ₹10 platform fee on its own books (when it sells, lends, rents out or swaps them). The buyer, borrower or renter always pays SwapSutra's ₹10 platform fee on each exchange. When ${you} asks for another reader's book, it pays the ₹10 like any reader.`,
       `SwapSutra keeps a commission of 2% of every payout to ${you} (the sale price of each book sold, and the rent of each book rented). The commission is deducted before payment.`,
       `If SwapSutra approves ${you} "commission-free", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.`,
       `Payouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID ${you} saves in the partner dashboard. The dashboard shows every order, the commission kept and what was paid.`,
@@ -109,7 +109,7 @@ function sections(type: PartnerType): ContractSection[] {
   ];
 }
 
-const VERSION_DATE = '2026-10-09';
+const VERSION_DATE = '2026-10-10';
 export const PARTNER_CONTRACTS: Record<PartnerType, PartnerContract> = (['bookstore', 'author', 'publisher', 'promoter'] as PartnerType[])
   .reduce((acc, type) => {
     acc[type] = {

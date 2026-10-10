@@ -23515,8 +23515,11 @@ function computeExchangePayments_(swap) {
   const feeFromDeposit = serviceType === 'SWAP' && swapFeeFromDeposit_(obj);
   const add = (payerRole, payerEmail, depositAmount) => {
     if (!payerEmail) return;
-    // Partners (9 Oct 2026) pay no platform fee; a buyer always pays it.
-    const platformFee = isAdminEmail(payerEmail) || approvedPartner_(payerEmail) || (feeFromDeposit && depositAmount > 0) ? 0 : baseFee;
+    // Partners (9 Oct 2026) pay no platform fee on their own side (the book's
+    // owner). The buyer / requester always pays it (owner's rule, 10 Oct
+    // 2026: "buyer toh dega platform fee 10 rupees har case me").
+    const partnerSide = payerRole === 'owner' && approvedPartner_(payerEmail);
+    const platformFee = isAdminEmail(payerEmail) || partnerSide || (feeFromDeposit && depositAmount > 0) ? 0 : baseFee;
     const requiredAmount = depositAmount + platformFee;
     if (requiredAmount <= 0) return;
     reqs.push({ payerRole, payerEmail, requiredAmount, depositAmount, platformFee, saleAmount: 0 });
@@ -23539,8 +23542,12 @@ function swapFeeFromDeposit_(obj) {
 }
 
 /** The fee SwapSutra keeps from this reader's swap deposit (0 when it was paid up front). */
-function feeTakenFromDeposit_(swapObj, payerEmail, feeRec) {
-  if (!swapFeeFromDeposit_(swapObj) || isAdminEmail(payerEmail) || approvedPartner_(payerEmail)) return 0;
+function feeTakenFromDeposit_(swapObj, payerEmail, feeRec, payerRole) {
+  if (!swapFeeFromDeposit_(swapObj) || isAdminEmail(payerEmail)) return 0;
+  // A partner who OWNS the book keeps their whole deposit; a partner who is
+  // the requester pays like any buyer (owner's rule, 10 Oct 2026).
+  const role = payerRole || (feeRec && feeRec.payerRole) || '';
+  if (role === 'owner' && approvedPartner_(payerEmail)) return 0;
   // Never charge twice: a reader who already paid the fee up front (e.g. a
   // payment made before this rule went live) has nothing taken.
   if (feeRec && feeRecordBreakdown_(feeRec).platformFee > 0) return 0;
@@ -24446,7 +24453,7 @@ function runReturnDeadlines() {
         if (leg.state === 'OVERDUE' || leg.state === 'RETURNED_LATE') {
           // A swap (9 Oct 2026): SwapSutra's fee comes out of a forfeited deposit too.
           const fullDeposit = Number(o[leg.deposit] || 0);
-          const feeKept = Math.min(fullDeposit, feeTakenFromDeposit_(o, borrowerEmail, myFeeRecord_(id, leg.borrower)));
+          const feeKept = Math.min(fullDeposit, feeTakenFromDeposit_(o, borrowerEmail, myFeeRecord_(id, leg.borrower), leg.borrower));
           const amount = fullDeposit - feeKept;
           const headers = ensureSheetHeaders(forfeitSheet, RETURN_FORFEIT_HEADERS);
           const rec = {
@@ -25707,7 +25714,7 @@ function getExchangeRoom(data) {
       rentCharge: rentChargeFor_(swap.obj),
       // A swap: the ₹10 fee is taken from the deposit refund (9 Oct 2026).
       feeFromDeposit: input.viewerRole === 'owner' || input.viewerRole === 'requester'
-        ? feeTakenFromDeposit_(swap.obj, input.viewerRole === 'owner' ? swap.ownerEmail : swap.requesterEmail, myFeeRecord_(swap.obj.id, input.viewerRole)) : 0,
+        ? feeTakenFromDeposit_(swap.obj, input.viewerRole === 'owner' ? swap.ownerEmail : swap.requesterEmail, myFeeRecord_(swap.obj.id, input.viewerRole), input.viewerRole) : 0,
       // SwapSutra is rated once per reader; and the room closes for a reader
       // as soon as they have reflected & rated.
       platformRated: hasRatedPlatform_(caller),
@@ -25952,7 +25959,7 @@ function roomCreateRefunds_(swap) {
       }
     }
     // A swap (9 Oct 2026): SwapSutra's ₹10 fee comes out of the refund.
-    const feeCut = Math.max(0, Math.min(deposit - rent, feeTakenFromDeposit_(swap.obj, rec.payerEmail, rec)));
+    const feeCut = Math.max(0, Math.min(deposit - rent, feeTakenFromDeposit_(swap.obj, rec.payerEmail, rec, rec.payerRole)));
     if (feeCut > 0 && !existing.some(f => String(f.leg) === 'fee:' + role)) {
       const feeRec = {
         id: generateId('SS_FEE_KEPT_'), swapId: id, leg: 'fee:' + role, bookTitle: title,
@@ -26480,7 +26487,7 @@ function getMyOrders() {
         const rentRow = p.find(x => String(x.leg) === 'rent');
         const rentCut = rentRow ? Number(rentRow.amount || 0) : 0;
         const feeRow = p.find(x => String(x.leg) === 'fee:' + role);
-        const feeCut = feeRow ? Number(feeRow.amount || 0) : (role === 'requester' || role === 'owner' ? feeTakenFromDeposit_(swap.obj, caller, myFee) : 0);
+        const feeCut = feeRow ? Number(feeRow.amount || 0) : (role === 'requester' || role === 'owner' ? feeTakenFromDeposit_(swap.obj, caller, myFee, role) : 0);
         deposit = forfeit ? { amount: paid.deposit, status: 'forfeited', note: 'Forfeited' + (forfeit.amount ? ' (₹' + forfeit.amount + ')' : '') }
           : refund ? { amount: Number(refund.amount || paid.deposit), status: refund.payoutStatus === 'PAID_TO_OWNER' ? 'refunded' : 'refund_due', paidAt: refund.paidAt || '', rent: rentCut, fee: feeCut, of: paid.deposit }
           : rentCut >= paid.deposit ? { amount: 0, status: 'rent_used', rent: rentCut, of: paid.deposit }
@@ -26605,7 +26612,7 @@ function toggleWishlist(data) {
 const PARTNER_TYPES = ['bookstore', 'author', 'publisher', 'promoter'];
 const PARTNER_TYPE_LABEL = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' };
 /** Bump a type's version when its contract text changes; partners sign the current one. */
-const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-09', author: 'author-2026-10-09', publisher: 'publisher-2026-10-09', promoter: 'promoter-2026-10-09' };
+const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-10', author: 'author-2026-10-10', publisher: 'publisher-2026-10-10', promoter: 'promoter-2026-10-10' };
 const PARTNER_HEADERS = [
   'id', 'type', 'email', 'status', 'name', 'contactName', 'phone', 'about', 'website', 'instagram',
   'address', 'city', 'pincode', 'lat', 'lng', 'placeLabel', 'registeredName', 'gstin', 'panNumber', 'aadhaarLast4',

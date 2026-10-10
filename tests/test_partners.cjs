@@ -192,7 +192,7 @@ const app = (o) => Object.assign({
   registeredName: 'Asha Owner', panNumber: 'ABCDE1234F', aadhaarLast4: '1234', showBanner: true, runAds: true,
   typeFields: { storeType: 'New + second-hand', openingHours: '10–8' },
   docs: { aadhaar: PNG, pan: PNG, businessProof: PDF },
-  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-09'
+  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-10'
 }, o || {});
 const P = (env) => env.sheets.Partners;
 const pobj = (env) => { const s = P(env); const h = s._data[0]; const o = {}; h.forEach((k, i) => { o[k] = s._data[1][i]; }); return o; };
@@ -221,7 +221,7 @@ console.log('--- registration ---');
   C('A complete bookstore application is received', ok.success && /^SS_PARTNER_/.test(ok.id), JSON.stringify(ok));
   const p = pobj(env);
   C('...waiting for review, with the contract version, signature and time recorded',
-    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-09' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
+    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-10' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
   C('Documents are saved in a private folder — never shared', env.files.length === 3 && env.files.every(f => /SwapSutra_Partner_Documents/.test(f.folder)) && env.shared.length === 0);
   C('Only the last 4 digits of the Aadhaar are kept as text', p.aadhaarLast4 === '1234' && !JSON.stringify(p).includes('aadhaarNumber'));
   C('The admin is told', env.notifications.some(x => x[0] === ADMIN && x[1] === 'partner_application'));
@@ -282,8 +282,12 @@ console.log('--- fees and commission ---');
   const rent = env.api.computeExchangePayments_({ obj: { serviceType: 'RENT', securityDeposit: 200, createdAt: new Date(T0) }, requesterEmail: 'req@x.com', ownerEmail: 'own@x.com' });
   C('Renting from a partner: the renter pays deposit + ₹10, the partner pays nothing', rent.length === 1 && rent[0].payerRole === 'requester' && rent[0].requiredAmount === 210, JSON.stringify(rent));
   const swapAsReq = env.api.computeExchangePayments_({ obj: { serviceType: 'SWAP', createdAt: new Date(T0) }, requesterEmail: 'own@x.com', ownerEmail: 'req@x.com' });
-  C('A partner never pays the ₹10 platform fee', !swapAsReq.some(r => r.payerEmail === 'own@x.com'), JSON.stringify(swapAsReq));
-  C('...nor has it taken from a swap deposit', env.api.feeTakenFromDeposit_({ serviceType: 'SWAP', createdAt: new Date(T0) }, 'own@x.com') === 0);
+  // 10 Oct 2026 (owner's rule): the buyer / requester always pays ₹10 — even a partner asking for someone else's book.
+  C('A partner asking for a reader\'s book pays ₹10 like any requester', swapAsReq.some(r => r.payerEmail === 'own@x.com' && r.payerRole === 'requester' && r.platformFee === 10), JSON.stringify(swapAsReq));
+  const swapAsOwner = env.api.computeExchangePayments_({ obj: { serviceType: 'SWAP', createdAt: new Date(T0) }, requesterEmail: 'req@x.com', ownerEmail: 'own@x.com' });
+  C('A partner never pays ₹10 on its own book (the requester still does)', !swapAsOwner.some(r => r.payerEmail === 'own@x.com') && swapAsOwner.some(r => r.payerEmail === 'req@x.com' && r.platformFee === 10), JSON.stringify(swapAsOwner));
+  C('A partner owner has nothing taken from its swap deposit; as requester it does', env.api.feeTakenFromDeposit_({ serviceType: 'SWAP', createdAt: new Date(T0) }, 'own@x.com', null, 'owner') === 0
+    && env.api.feeTakenFromDeposit_({ serviceType: 'SWAP', createdAt: new Date(T0) }, 'own@x.com', null, 'requester') === 10);
 
   env.addSwap({ id: 'S1', serviceType: 'SELL', amount: 300, requestedBookId: 'BK1', createdAt: new Date(T0 - H) });
   const swap = env.ctx.loadSwapForCirculation('S1');

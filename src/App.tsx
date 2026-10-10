@@ -5338,7 +5338,7 @@ const ManagementConsole = memo(() => {
             </form>
           </div>
         )}
-        {tab !== 'dashboard' && tab !== 'newsletter' && tab !== 'pricing' && tab !== 'coupons' && tab !== 'events' && (
+        {!['dashboard', 'newsletter', 'pricing', 'events', 'customMugs', 'sponsoredAds', 'partners', 'paymentSettings'].includes(tab) && (
             <AdminTable 
                 columns={getColumns(tab)} 
                 data={['approvals', 'members', 'books', 'support', 'bookRequests', 'bookRequestResponses', 'testimonials', 'hostEnquiries', 'eventSubscribers', 'newsletterSubscribers'].includes(tab) ? items : items.map(i => ({data: JSON.stringify(i)}))}
