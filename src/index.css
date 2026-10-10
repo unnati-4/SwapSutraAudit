@@ -4587,3 +4587,14 @@ body { overflow-x: clip; }
   .ss-mascot__media .ss-adbanner__logo img { width: 20px; height: 20px; }
 }
 .ss-mascot .ss-adbanner__cta { white-space: nowrap; }
+
+/* 10 Oct 2026 (owner's request): the banner lives in the Library window's
+   right-hand panel, in place of the cover wall / logo. */
+.lib-hero__wall--banner { flex-direction: column; justify-content: center; padding: 1.25rem 1rem 1rem; }
+@media (min-width: 900px) { .lib-hero__wall--banner { padding: 2rem 2.5rem; } }
+.lib-hero__wall--banner .ss-mascot { width: 100%; max-width: 46rem; margin: 0 auto; padding: 0; }
+@media (min-width: 900px) {
+  .lib-hero__wall--banner .ss-mascot { --char-w: 128px; }
+  .lib-hero__wall--banner .ss-mascot__stage { height: 300px; }
+}
+.ss-mascot__media img[src="/swapsutra-logo.png"] { object-fit: contain; padding: 14px; }

@@ -104,7 +104,7 @@ function MugMascot() {
   );
 }
 
-export default function MascotBanner({ mascot, slides, label, interval = 7000, startAt = 0, testId }: {
+export default function MascotBanner({ mascot, slides, label, interval = 10000, startAt = 0, testId }: {
   mascot: 'book' | 'mug';
   slides: BannerSlide[];
   label: string;
