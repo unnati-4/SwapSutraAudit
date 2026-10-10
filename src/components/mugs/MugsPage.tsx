@@ -88,7 +88,7 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
     if (loaded.state !== 'ready') return [];
     if (!items.length) return [{
       key: 'soon', eyebrow: 'The mug shelf', title: 'Mugs are coming soon',
-      subtitle: 'Have a mug idea? Tell us and we’ll help figure out how it could be made.',
+      subtitle: 'Got an idea for a mug? Tell us and we’ll help make it.',
       cta: 'Create your mug', onOpen: () => setEnquiryOpen(true),
     }];
     const picks = shuffled<MugProduct>(items, bannerSeed).slice(0, 6);
