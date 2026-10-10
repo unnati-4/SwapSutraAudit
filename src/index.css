@@ -4598,3 +4598,15 @@ body { overflow-x: clip; }
   .lib-hero__wall--banner .ss-mascot__stage { height: 300px; }
 }
 .ss-mascot__media img[src="/swapsutra-logo.png"] { object-fit: contain; padding: 14px; }
+
+/* 10 Oct 2026 (owner's request): the banner takes the whole Library window. */
+.lib-hero.lib-hero--banner { display: block; min-height: 0; background: #EFE7DC; padding: 1.25rem 0 0.75rem; }
+@media (min-width: 900px) { .lib-hero.lib-hero--banner { padding: 2.25rem 0 1.25rem; } }
+.lib-hero--banner .ss-mascot { max-width: 76rem; margin: 0 auto; }
+@media (min-width: 900px) {
+  .lib-hero--banner .ss-mascot { --char-w: 150px; }
+  .lib-hero--banner .ss-mascot__stage { height: 360px; }
+  .lib-hero--banner .ss-mascot__cloth { grid-template-columns: minmax(84px, min(30%, 240px)) minmax(0, 1fr); }
+  .lib-hero--banner .ss-mascot__title { font-size: var(--font-size-4xl); }
+  .lib-hero--banner .ss-mascot__subtitle { font-size: var(--font-size-lg); }
+}

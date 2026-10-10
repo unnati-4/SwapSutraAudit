@@ -40,6 +40,7 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
   adStart?: number;
   onOpenBook: (b: B) => void;
   onBrowse: () => void;
+  /** No longer shown (10 Oct 2026: the banner fills the Library window). */
   onJoin?: () => void;
   showJoin?: boolean;
 }) {
@@ -82,26 +83,15 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
 
   return (
     <section className="lib-front" aria-label="Welcome to the SwapSutra library">
-      <div className="lib-hero ss-bleed">
-        <div className="lib-hero__panel">
-          <h1 className="lib-hero__title">
-            SwapSutra is a reader-first library spread across homes in India.
-          </h1>
-          <p className="lib-hero__sub">Swap, lend and share the books you’ve finished with readers near you.</p>
-          <div className="lib-hero__actions">
-            <button type="button" className="lib-hero__cta" onClick={onBrowse}>Browse the shelves</button>
-            {showJoin && onJoin && (
-              <button type="button" className="lib-hero__cta lib-hero__cta--ghost" onClick={onJoin}>Join</button>
-            )}
-          </div>
-        </div>
-        {/* 10 Oct 2026 (owner's request): the Library window's right side is
-            the banner — the walking book comes forward, walks right and
-            unrolls an ad, or a featured book when no ad is running. */}
-        <div className="lib-hero__wall lib-hero__wall--banner">
-          <MascotBanner mascot="book" slides={bannerSlides} startAt={adStart}
-            label={ads.length ? 'Sponsored' : 'Featured books'} testId="library-banner" />
-        </div>
+      {/* 10 Oct 2026 (owner's request): the whole Library window is now the
+          banner — the heading panel and the cover wall are gone. The walking
+          book comes forward, walks right and unrolls an ad, or a featured
+          book when no ad is running. The heading stays for screen readers
+          and search engines. */}
+      <div className="lib-hero lib-hero--banner ss-bleed">
+        <h1 className="sr-only">SwapSutra is a reader-first library spread across homes in India.</h1>
+        <MascotBanner mascot="book" slides={bannerSlides} startAt={adStart}
+          label={ads.length ? 'Sponsored' : 'Featured books'} testId="library-banner" />
       </div>
 
 
