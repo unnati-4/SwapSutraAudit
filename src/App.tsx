@@ -13003,11 +13003,14 @@ export default function App() {
         onConfirm={quillPromptModal.onConfirm}
       />
 
+      {/* 10 Oct 2026 (owner's request): Quill stays out of every chat — a
+          circle's chat page and the exchange chat — where it covered the
+          chat summary and the message box. */}
       {/* Quill floats at bottom-24, which is exactly where the Café's
           composer now lives — the mascot would sit on top of the emoji
           key. A reader circle already hides him for the same reason; the
           Café hides him below xl, where the bottom nav also exists. */}
-      <div className={`quill-mobile ${footerInView && !isQuillOpen ? 'is-tucked' : ''} fixed bottom-24 left-4 z-[90] flex max-w-[calc(100vw-2rem)] flex-col items-start gap-3 sm:bottom-24 sm:left-7 xl:bottom-5 xl:sm:bottom-7 ${currentReadRouteCircleId ? 'hidden md:flex' : ''} ${activeTab === 'cafe' ? 'quill-cafe' : ''} ${activeTab === 'reader-circle' ? 'quill-readers-circle' : ''} ${activeTab === 'reader-circle' && currentReadFormOpen ? 'quill-form-open' : ''}`}>
+      <div className={`quill-mobile ${footerInView && !isQuillOpen ? 'is-tucked' : ''} fixed bottom-24 left-4 z-[90] flex max-w-[calc(100vw-2rem)] flex-col items-start gap-3 sm:bottom-24 sm:left-7 xl:bottom-5 xl:sm:bottom-7 ${currentReadRouteCircleId || activeChat ? 'hidden' : ''} ${activeTab === 'cafe' ? 'quill-cafe' : ''} ${activeTab === 'reader-circle' ? 'quill-readers-circle' : ''} ${activeTab === 'reader-circle' && currentReadFormOpen ? 'quill-form-open' : ''}`}>
         <AnimatePresence>
           {isQuillOpen && (
             <motion.aside
