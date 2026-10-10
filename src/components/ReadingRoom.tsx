@@ -149,6 +149,10 @@ export const normalizePost = (p: any): ReadingRoomPost => ({
   recognizedReaderIds: (Array.isArray(p?.recognizedReaderIds) ? p.recognizedReaderIds : []).map(txt).filter(Boolean),
 });
 
+/** 10 Oct 2026: a post with nothing to read, see or hear is not shown (blank sheet rows). */
+export const postHasContent = (p: ReadingRoomPost): boolean =>
+  !!p.id.trim() && !!(p.content.trim() || p.bookTitle || p.mediaUrl || p.audioUrl || (p.recognizedNames && p.recognizedNames.length));
+
 /** What each post type is called on screen. */
 export const POST_TYPE_LABEL: Record<string, string> = {
   thought: 'Thought', recommendation: 'Recommendation', review: 'Review',
@@ -352,7 +356,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
         const mapped = data.posts.map((raw: any) => {
           const p = normalizePost(raw);
           return { ...p, isSaved: p.isSaved || savedIds.includes(p.id) };
-        });
+        }).filter(postHasContent);
         setPosts(mapped);
       }
     } catch (err) {

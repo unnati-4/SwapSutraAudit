@@ -14223,12 +14223,24 @@ function getReadingRoomFeed(data) {
         recognizedReaderIds: String(p.recognizedEmails || '').split(',').map(function (e) { return readerPublicId(e); }).filter(Boolean),
         createdAt: p.createdAt
       };
-    });
+    }).filter(readingRoomPostHasContent_);
 
     return { success: true, posts };
   } catch (err) {
     return { success: false, message: "Error loading Reading Room feed: " + err.toString() };
   }
+}
+
+/**
+ * A post worth showing (10 Oct 2026, owner's request): blank rows in the
+ * sheet came through as empty "Reader · Thought" cards with nothing in
+ * them. A post needs an id and something to read, see or hear.
+ */
+function readingRoomPostHasContent_(p) {
+  if (!p || !String(p.id || '').trim()) return false;
+  const has = (v) => String(v === undefined || v === null ? '' : v).trim() !== '';
+  return has(p.content) || has(p.bookTitle) || has(p.mediaUrl) || has(p.audioUrl)
+    || (Array.isArray(p.recognizedNames) && p.recognizedNames.length > 0);
 }
 
 const READING_ROOM_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
