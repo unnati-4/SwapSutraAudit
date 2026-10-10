@@ -69,6 +69,7 @@ function sections(type: PartnerType): ContractSection[] {
     ] },
     { title: '3. Selling, orders and stock', body: [
       `Buyers pay SwapSutra through the site. SwapSutra holds the money until the buyer has received the book and closed the purchase (or 7 days after receipt with no problem reported), as set out in the Refund & Security Deposit Policy.`,
+      `SwapSutra is run by its founder, Unnati Goyal. All money paid to SwapSutra — buyers' payments, security deposits, ${you}'s promotion fees and the money waiting for ${you}'s monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is paid out or refunded under this agreement.`,
       `${you} keeps every listing accurate — title, edition, condition, price and the number of copies in stock — and marks a book out of stock as soon as it is no longer available. An order ${you} cannot fulfil must be cancelled in the exchange room straight away; repeated cancellations may lead to suspension.`,
       'Every order runs in its exchange room: the condition video, packaging video, courier name and tracking ID, and the steps the room asks for must be completed within the times it shows.',
     ] },
@@ -109,7 +110,7 @@ function sections(type: PartnerType): ContractSection[] {
   ];
 }
 
-const VERSION_DATE = '2026-10-10';
+const VERSION_DATE = '2026-10-10b';
 export const PARTNER_CONTRACTS: Record<PartnerType, PartnerContract> = (['bookstore', 'author', 'publisher', 'promoter'] as PartnerType[])
   .reduce((acc, type) => {
     acc[type] = {

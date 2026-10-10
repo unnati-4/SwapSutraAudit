@@ -192,7 +192,7 @@ const app = (o) => Object.assign({
   registeredName: 'Asha Owner', panNumber: 'ABCDE1234F', aadhaarLast4: '1234', showBanner: true, runAds: true,
   typeFields: { storeType: 'New + second-hand', openingHours: '10–8' },
   docs: { aadhaar: PNG, pan: PNG, businessProof: PDF },
-  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-10'
+  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-10b'
 }, o || {});
 const P = (env) => env.sheets.Partners;
 const pobj = (env) => { const s = P(env); const h = s._data[0]; const o = {}; h.forEach((k, i) => { o[k] = s._data[1][i]; }); return o; };
@@ -221,7 +221,7 @@ console.log('--- registration ---');
   C('A complete bookstore application is received', ok.success && /^SS_PARTNER_/.test(ok.id), JSON.stringify(ok));
   const p = pobj(env);
   C('...waiting for review, with the contract version, signature and time recorded',
-    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-10' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
+    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-10b' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
   C('Documents are saved in a private folder — never shared', env.files.length === 3 && env.files.every(f => /SwapSutra_Partner_Documents/.test(f.folder)) && env.shared.length === 0);
   C('Only the last 4 digits of the Aadhaar are kept as text', p.aadhaarLast4 === '1234' && !JSON.stringify(p).includes('aadhaarNumber'));
   C('The admin is told', env.notifications.some(x => x[0] === ADMIN && x[1] === 'partner_application'));

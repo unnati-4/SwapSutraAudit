@@ -148,7 +148,9 @@ Logistics and delivery are governed by our [Exchange & Delivery Policy](/exchang
 
 ## 8. Money between readers
 
-**Rent and purchase money is paid directly between readers.** SwapSutra does not collect, hold or refund it, and is not responsible for its payment or non-payment.
+**Purchases are paid to SwapSutra** and held until the buyer has the book; **rent** is taken from the renter's security deposit and paid to the owner. Courier charges, and any money readers choose to pay each other outside SwapSutra, are between readers — SwapSutra does not collect, hold or refund them.
+
+**Where the money is held.** SwapSutra is run by its founder, **Unnati Goyal** (sole proprietor, trading as SwapSutra). Every amount paid to SwapSutra — platform fees, security deposits, purchase money held until the buyer has the book, rent taken from a deposit, partner promotion fees and money waiting for a partner's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is refunded or paid out as set out here.
 
 **Security deposits for temporary exchanges are handled by SwapSutra**, as set out in our [Refund & Security Deposit Policy](/refund-policy). Please read that policy — it explains how much may be asked for, when a deposit is returned, when part of it may be retained, and the interim arrangement currently in force. **Those rules are binding on you as a term of this agreement.**
 

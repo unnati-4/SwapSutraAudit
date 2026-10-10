@@ -1,6 +1,6 @@
 # SwapSutra Promoter Partner Agreement
 
-**Version:** promoter-2026-10-10
+**Version:** promoter-2026-10-10b
 
 > Drafted for SwapSutra. Have an advocate review it before relying on it.
 
@@ -25,6 +25,8 @@ The Promoter must tell SwapSutra within 7 days if any of these details change. S
 ## 3. Selling, orders and stock
 
 Buyers pay SwapSutra through the site. SwapSutra holds the money until the buyer has received the book and closed the purchase (or 7 days after receipt with no problem reported), as set out in the Refund & Security Deposit Policy.
+
+SwapSutra is run by its founder, Unnati Goyal. All money paid to SwapSutra — buyers' payments, security deposits, the Promoter's promotion fees and the money waiting for the Promoter's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is paid out or refunded under this agreement.
 
 The Promoter keeps every listing accurate — title, edition, condition, price and the number of copies in stock — and marks a book out of stock as soon as it is no longer available. An order the Promoter cannot fulfil must be cancelled in the exchange room straight away; repeated cancellations may lead to suspension.
 

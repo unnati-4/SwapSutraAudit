@@ -26624,7 +26624,7 @@ function toggleWishlist(data) {
 const PARTNER_TYPES = ['bookstore', 'author', 'publisher', 'promoter'];
 const PARTNER_TYPE_LABEL = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' };
 /** Bump a type's version when its contract text changes; partners sign the current one. */
-const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-10', author: 'author-2026-10-10', publisher: 'publisher-2026-10-10', promoter: 'promoter-2026-10-10' };
+const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-10b', author: 'author-2026-10-10b', publisher: 'publisher-2026-10-10b', promoter: 'promoter-2026-10-10b' };
 const PARTNER_HEADERS = [
   'id', 'type', 'email', 'status', 'name', 'contactName', 'phone', 'about', 'website', 'instagram',
   'address', 'city', 'pincode', 'lat', 'lng', 'placeLabel', 'registeredName', 'gstin', 'panNumber', 'aadhaarLast4',

@@ -272,12 +272,12 @@ export const RefundPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
       ]} />
       <p>If a deposit has not come back, raise it in the chat first, then with us within 14 days.</p>
       <Warn>
-        <strong>Please note:</strong> deposits are currently collected and released manually by SwapSutra, not held in a regulated escrow account. We will update this page when escrow is in place. If you would rather not pay a deposit on these terms, please avoid temporary exchanges.
+        <strong>Please note:</strong> deposits are currently collected and released manually by SwapSutra, not held in a regulated escrow account. We will update this page when escrow is in place. If you would rather not pay a deposit on these terms, please avoid temporary exchanges. <strong>Where the money is held:</strong> SwapSutra is run by its founder, Unnati Goyal, and every amount paid to SwapSutra (platform fees, deposits, purchase money, partner fees and payouts) is held in the founder's account — the UPI ID or bank account shown in every payment box — until it is refunded or paid out.
       </Warn>
     </S>
 
     <S title="Money between readers">
-      <p><strong>Purchases</strong> are paid to SwapSutra and held until the buyer has the book: a buyer whose seller cancels or never sends the book is refunded in full; if the buyer reports a problem, SwapSutra decides from the exchange videos. Rent and courier charges are paid directly between readers, and SwapSutra cannot refund them. Nothing here limits your rights under the Consumer Protection Act, 2019.</p>
+      <p><strong>Purchases</strong> are paid to SwapSutra and held until the buyer has the book: a buyer whose seller cancels or never sends the book is refunded in full; if the buyer reports a problem, SwapSutra decides from the exchange videos. Rent is taken from the renter’s deposit and paid to the owner; courier charges are paid directly between readers, and SwapSutra cannot refund them. Nothing here limits your rights under the Consumer Protection Act, 2019.</p>
     </S>
   </Shell>
 );
