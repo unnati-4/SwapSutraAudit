@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
-import { QRCodeCanvas } from 'qrcode.react';
+import UpiPayBox, { type PayDetails } from './UpiPayBox';
 import { apiUrl } from '../config/runtime';
 import { VideoRecorder, uploadExchangeVideo, VMS_TITLES, type VmsKind, type VmsLeg } from './ExchangeVideos';
 import { LocationCard } from './LocationPin';
@@ -49,16 +49,20 @@ export interface RoomData {
   legs: { out: RoomLeg[]; back: RoomLeg[] };
   route: { out: RoomRoute | null; back: RoomRoute | null };
   deadlines: { conditionBy: string; payBy: string };
-  payment: { payers: Payer[]; allApproved: boolean; upi: { vpa: string; payee: string } };
+  payment: { payers: Payer[]; allApproved: boolean; upi: PayDetails };
   returnInfo: { dueAt: string; daysLeft: number; overdue: boolean; extensionDays: number } | null;
   sale: { price: number; sellerReceives: number; payoutStatus: string } | null;
   /** A rental: the rent, taken from the deposit at the end and paid to the owner. */
   rentCharge?: number;
+  /** A swap: SwapSutra's fee is taken from this reader's deposit when it is refunded. */
+  feeFromDeposit?: number;
   /** This reader has rated SwapSutra before — asked once only (9 Oct 2026). */
   platformRated?: boolean;
   /** This reader has reflected & rated: the exchange has moved to their My orders. */
   closedForYou?: boolean;
   exchangeDone: boolean; myAddressSaved?: boolean;
+  /** Courier route: both addresses, sent with the room (refreshed every 20 s). */
+  delivery?: { theirAddress: Record<string, string> | null; myAddress: Record<string, string> | null } | null;
   stampCode: string; couriers: string[]; reviewUrl: string;
 }
 
@@ -117,7 +121,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   const [rating, setRating] = useState({ reader: 0, platform: 0, readerComment: '', platformComment: '' });
   const [rated, setRated] = useState<{ reviewUrl: string; message: string } | null>(null);
   const [addr, setAddr] = useState({ line1: '', area: '', city: '', state: '', pincode: '', phone: '' });
-  const [counterAddr, setCounterAddr] = useState<Record<string, string> | null>(null);
+  const [editAddr, setEditAddr] = useState(false);
   const [showReport, setShowReport] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -136,20 +140,11 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
     return () => clearInterval(t);
   }, [refresh]);
 
-  // On a courier route, the sender needs the receiver's address.
-  const courierRoute = room && !room.closed && ((room.route.out?.method === 'courier' && !room.exchangeDone) || room.route.back?.method === 'courier');
-  useEffect(() => {
-    if (!courierRoute) { setCounterAddr(null); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${API_URL}?action=getDeliveryAddress&swapId=${encodeURIComponent(swapId)}`);
-        const d = await res.json();
-        if (!cancelled) setCounterAddr(d?.counterparty || null);
-      } catch { /* shown as "not added yet" */ }
-    })();
-    return () => { cancelled = true; };
-  }, [courierRoute, swapId, room?.myAddressSaved]);
+  // On a courier route the server sends both addresses with the room, so
+  // the sender sees the receiver's address as soon as it is saved (9 Oct
+  // 2026: it used to be fetched once, before the receiver had added it).
+  const counterAddr = room?.delivery?.theirAddress || null;
+  const myAddr = room?.delivery?.myAddress || null;
 
   const after = async (res: any, okText?: string) => {
     setMsg(res?.success ? (okText || res.message || 'Done.') : (res?.message || 'That did not go through. Please try again.'));
@@ -197,7 +192,11 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
 
   const saveAddress = async () => {
     setBusy('addr'); setMsg('');
-    try { await after(await post({ action: 'saveDeliveryAddress', label: 'Home', ...addr }), 'Address saved — only the other reader in this exchange sees it.'); }
+    try {
+      const res = await post({ action: 'saveDeliveryAddress', label: 'Home', ...addr });
+      if (res?.success) setEditAddr(false);
+      await after(res, 'Address saved — only the other reader in this exchange sees it.');
+    }
     finally { setBusy(''); }
   };
 
@@ -209,7 +208,6 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   const legOf = (leg?: string) => room.legs.out.concat(room.legs.back).find(l => l.leg === leg);
   const myPayer = room.payment.payers.find(p => p.payerRole === room.role);
   const otherPayer = room.payment.payers.find(p => p.payerRole !== room.role);
-  const upiLink = (amount: number) => `upi://pay?pa=${room.payment.upi.vpa}&pn=${encodeURIComponent(room.payment.upi.payee)}&am=${amount}&cu=INR&tn=${encodeURIComponent('SwapSutra exchange ' + room.swapId.slice(-6))}`;
   const videoActions = room.actions.filter(a => a.type === 'video');
   const otherActions = room.actions.filter(a => a.type !== 'video');
 
@@ -230,16 +228,16 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
           ? `₹${p.saleAmount} book price + ₹${p.platformFee ?? 0} platform fee. SwapSutra holds the price and pays the seller only after you have the book and say you're happy.`
           : (p.depositAmount ?? 0) > 0 && (room.rentCharge ?? 0) > 0 && room.role === 'requester'
             ? `₹${p.depositAmount} security deposit + ₹${p.platformFee ?? 0} platform fee. When the book is back, the rent (₹${Math.min(room.rentCharge ?? 0, p.depositAmount ?? 0)}) goes to the owner from the deposit and ₹${Math.max(0, (p.depositAmount ?? 0) - (room.rentCharge ?? 0))} comes back to you.`
+          : (p.depositAmount ?? 0) > 0 && (room.feeFromDeposit ?? 0) > 0 && !(p.platformFee ?? 0)
+            ? `₹${p.depositAmount} security deposit — nothing else to pay now. When the exchange is complete it comes back to you minus SwapSutra's ₹${room.feeFromDeposit} platform fee (₹${(p.depositAmount ?? 0) - (room.feeFromDeposit ?? 0)}).`
           : (p.depositAmount ?? 0) > 0 ? `₹${p.depositAmount} refundable security deposit + ₹${p.platformFee ?? 0} platform fee. The deposit comes back when the exchange is complete.`
           : `₹${p.platformFee ?? p.requiredAmount} platform fee.`;
         return card('pay', `Pay ₹${p.requiredAmount}`, (
           <div className="space-y-3">
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{parts}</p>
             {p.adminStatus === 'ADMIN_REJECTED' && <p className="text-xs text-red-600">Your last payment was not accepted{p.rejectedReason ? `: ${p.rejectedReason}` : ''}. Please pay again.</p>}
-            <a href={upiLink(p.requiredAmount)} className="mx-auto block w-fit rounded-xl bg-white p-2" title="Open in your UPI app">
-              <QRCodeCanvas value={upiLink(p.requiredAmount)} size={156} level="H" includeMargin />
-            </a>
-            <p className="text-center text-2xs text-[var(--text-secondary)]">Scan with any UPI app (or tap it on your phone). Don't change the amount.{room.deadlines.payBy ? ` Pay by ${roomWhen(room.deadlines.payBy)}.` : ''}</p>
+            <UpiPayBox upi={room.payment.upi} amount={p.requiredAmount} note={'SwapSutra exchange ' + room.swapId.slice(-6)} size={156} />
+            <p className="text-center text-2xs text-[var(--text-secondary)]">Scan with any UPI app (or tap it on your phone).{room.deadlines.payBy ? ` Pay by ${roomWhen(room.deadlines.payBy)}.` : ''}</p>
             <input value={utr} onChange={e => setUtr(e.target.value)} placeholder="UTR / transaction reference" className="input-classic !py-2 text-xs w-full bg-[var(--input-bg)]" />
             <input type="file" accept="image/jpeg,image/png,image/webp" onChange={e => setPayFile(e.currentTarget.files?.[0] || null)} className="block w-full text-2xs" aria-label="Payment screenshot" />
             <button type="button" onClick={submitPayment} disabled={busy === 'pay'} className={`w-full ${btnSolid}`}>{busy === 'pay' ? 'Sending…' : 'I have paid — send for verification'}</button>
@@ -296,7 +294,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
           <div className="space-y-2">
             {counterAddr ? (
               <p className="rounded-xl bg-[var(--bg-page)] p-3 text-xs text-[var(--text-secondary)] leading-relaxed">
-                <b className="text-[var(--text-primary)]">Send to {room.otherName}:</b> {[counterAddr.line1, counterAddr.line2, counterAddr.landmark, counterAddr.area, counterAddr.city, counterAddr.state, counterAddr.pincode].filter(Boolean).join(', ')}
+                <b className="text-[var(--text-primary)]">Send to {counterAddr.name || room.otherName}:</b> {[counterAddr.line1, counterAddr.line2, counterAddr.landmark, counterAddr.area, counterAddr.city, counterAddr.state, counterAddr.pincode].filter(Boolean).join(', ')}
                 {counterAddr.phone && <> · <a className="underline" href={`tel:${counterAddr.phone}`}>{counterAddr.phone}</a></>}
               </p>
             ) : <p className="text-xs italic text-[var(--text-secondary)]">{room.otherName} hasn't added their address yet — ask in the chat.</p>}
@@ -446,6 +444,35 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         <p className="text-2xs text-[var(--text-secondary)]">{room.otherName}: ₹{otherPayer.requiredAmount} — {otherPayer.adminStatus === 'ADMIN_APPROVED' ? 'paid ✓' : otherPayer.adminStatus === 'ADMIN_PENDING' ? 'paid, being verified' : 'not paid yet'}</p>
       )}
 
+      {/* Courier: both addresses and phone numbers, for both readers. */}
+      {room.delivery && (
+        <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-4 space-y-3 text-xs" data-testid="delivery-details">
+          <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">📦 Delivery details (courier)</p>
+          <div className="space-y-1">
+            <p className="font-semibold text-[var(--text-primary)]">{room.otherName}'s address</p>
+            {counterAddr ? (
+              <p className="text-[var(--text-secondary)] leading-relaxed select-all">
+                {counterAddr.name && <><b>{counterAddr.name}</b><br /></>}
+                {[counterAddr.line1, counterAddr.line2, counterAddr.landmark, counterAddr.area, counterAddr.city, counterAddr.state, counterAddr.pincode].filter(Boolean).join(', ')}
+                {counterAddr.phone && <><br />📞 <a className="underline" href={`tel:${counterAddr.phone}`}>{counterAddr.phone}</a></>}
+              </p>
+            ) : <p className="italic text-[var(--text-secondary)]">Not added yet — it appears here as soon as {room.otherName} saves it.</p>}
+          </div>
+          <div className="space-y-1 border-t border-brand-border/40 pt-2">
+            <p className="font-semibold text-[var(--text-primary)]">Your address</p>
+            {myAddr && !editAddr ? (
+              <p className="text-[var(--text-secondary)] leading-relaxed">
+                {[myAddr.line1, myAddr.line2, myAddr.landmark, myAddr.area, myAddr.city, myAddr.state, myAddr.pincode].filter(Boolean).join(', ')}
+                {myAddr.phone && <> · 📞 {myAddr.phone}</>}
+                {' '}<button type="button" onClick={() => { setAddr({ line1: myAddr.line1 || '', area: myAddr.area || '', city: myAddr.city || '', state: myAddr.state || '', pincode: String(myAddr.pincode || ''), phone: String(myAddr.phone || '') }); setEditAddr(true); }} className="underline text-brand-gold-text">Change</button>
+              </p>
+            ) : !myAddr && !editAddr ? (
+              <button type="button" onClick={() => setEditAddr(true)} className="underline text-brand-gold-text">Add your address</button>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       {/* Your turn: videos first (one tap each), then the rest. */}
       {videoActions.length > 0 && card('videos', 'Your videos', (
         <ul className="space-y-2">
@@ -465,6 +492,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         </ul>
       ))}
       {otherActions.map(renderAction)}
+      {editAddr && !room.actions.some(a => a.type === 'address') && renderAction({ type: 'address', step: 7 }, -1)}
 
       {msg && <p className="text-xs text-[var(--text-primary)]" role="status">{msg}</p>}
       {rated && rated.reviewUrl && <GoogleReviewCard url={rated.reviewUrl} />}

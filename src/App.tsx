@@ -18,7 +18,7 @@ import {
   Film, Settings, ChevronLeft, LogOut, ExternalLink, Archive,
   Bell, ArrowDownLeft, ArrowUpRight, MessageCircle, Send, Paperclip,
   Instagram, Youtube, Linkedin, Facebook, Loader, ChevronDown, Eye, FileText, CheckCircle, CheckSquare, AlertTriangle, Image as ImageIcon,
-  Feather, Award, Zap, Sparkles, Smile, Trophy, Heart, Compass, Gift,
+  Feather, Award, Zap, Sparkles, Smile, Trophy, Heart, Compass, Gift, Megaphone, Store, Wallet,
   Share2, UserRound, ShoppingBag, ShoppingCart,
 } from 'lucide-react';
 import { } from 'qrcode.react';
@@ -122,6 +122,8 @@ import ReaderProfile, { type ReaderProfileData } from './components/ReaderProfil
 import { track, trackOnce, captureReferralFromUrl, storedReferralCode, clearStoredReferralCode, recordVisit, recordListingFormOpen } from './services/analytics';
 import InviteReaders from './components/InviteReaders';
 import LibraryHero from './components/LibraryHero';
+import { ShelfAdCard, ShelfMugCard } from './components/SponsoredAds';
+import { adShowsOn, loadShelfMugs, loadSponsoredAds, mixShelf, newShelfSeed, type ShelfMug, type SponsoredAd } from './utils/ads';
 import { downscaleImageFile, loadImageElement } from './utils/imageCompress';
 
 // PERF: the admin consoles and the circulation/swap machinery are roughly
@@ -170,6 +172,24 @@ const AdminCustomMugs = lazyScreen<any>(
   () => import('./components/mugs/AdminCustomMugs'),
   'Opening custom mug enquiries'
 );
+// Sponsored ads (9 Oct): the admin's Ads tab loads on demand.
+const AdminSponsoredAds = lazyScreen<any>(
+  () => import('./components/AdminSponsoredAds'),
+  'Opening the ads'
+);
+// 9 Oct: the admin's UPI ID / QR / bank details, and the partner console.
+const AdminPaymentSettings = lazyScreen<any>(
+  () => import('./components/AdminPaymentSettings'),
+  'Opening the payment details'
+);
+const PartnersPage = lazyScreen<any>(
+  () => import('./components/partners/PartnersPage'),
+  'Opening SwapSutra partners'
+);
+const AdminPartners = lazyScreen<any>(
+  () => import('./components/AdminPartners'),
+  'Opening partners'
+);
 const AdminMugProducts = lazyScreen<any>(
   () => import('./components/mugs/AdminMugProducts'),
   'Opening the mug shop listings'
@@ -192,6 +212,8 @@ import PhotoViewer from './components/PhotoViewer';
 import NewsletterPage from './components/NewsletterPage';
 import ReadingTracker, { type TrackerBook, type TrackerChanges } from './components/ReadingTracker';
 import SupportQr from './components/SupportQr';
+import { WishHeart, WishlistButton } from './components/WishlistButton';
+import { loadWishlist, toggleWishlist as toggleWishlistItem, useWishlist } from './utils/wishlist';
 import ListingUnlockPanel, { fetchListingAllowance, needsListingUnlock, listingPopupAlreadyShown, markListingPopupShown, unlockUntilLabel, type ListingAllowance } from './components/ListingUnlockPanel';
 
 // --- CONFIGURATION ---
@@ -1254,8 +1276,11 @@ const bookHasPublicUse = (book: Partial<Book> | any) => {
   return flags.permanentExchange || flags.temporaryExchange || flags.rent || flags.sell;
 };
 
-const bookHasLibraryVisibility = (book: Partial<Book> | any) =>
-  truthyFlag(book?.favourite) || truthyFlag(book?.currently_reading) || truthyFlag(book?.tbr) || truthyFlag(book?.bookshelf) || bookHasPublicUse(book);
+// 9 Oct 2026: a partner's book with no copies left stays off the shelf.
+const bookOutOfStock = (book: Partial<Book> | any) =>
+  book?.stock !== undefined && book?.stock !== null && String(book.stock) !== '' && Number(book.stock) <= 0;
+const bookHasLibraryVisibility = (book: Partial<Book> | any) => !bookOutOfStock(book) && (
+  truthyFlag(book?.favourite) || truthyFlag(book?.currently_reading) || truthyFlag(book?.tbr) || truthyFlag(book?.bookshelf) || bookHasPublicUse(book));
 
 const readingStatusBadgesFromBook = (book: Partial<Book> | any) => {
   const availability = bookAvailabilityFromBook(book);
@@ -2672,6 +2697,12 @@ const BookCard = memo(({ book, ownerMode = false, userCoords, onShowBookDetail }
               {primaryBadge}
             </span>
           </div>
+          {/* Add to wishlist (9 Oct 2026) — not on your own shelf. */}
+          {!ownerMode && (
+            <div className="absolute top-2.5 right-2.5 z-20">
+              <WishHeart bookId={String(book.id)} title={book.title} />
+            </div>
+          )}
           {ownerMode && (
              <div className="absolute bottom-3 left-4 z-10">
                 <span className="px-2.5 py-1 rounded-sm text-2xs font-bold uppercase tracking-widest backdrop-blur-md bg-brand-brown/70 text-white">
@@ -3317,7 +3348,7 @@ export const MembershipGateContent = memo(({
                 'Swap, lend, rent or sell physical books with readers near you',
                 'List up to 20 books free — ₹20 once if you want more',
                 'Reading Space, reading circles and the Café',
-                'When an exchange is accepted, each reader pays a ₹10 platform fee'
+                '₹10 platform fee per exchange — in a swap it comes out of your refundable deposit'
               ].map((item, idx) => (
             <li key={idx} className="flex items-start gap-2.5 text-sm text-[var(--text-secondary)] leading-snug">
               <span className="text-brand-gold-text font-bold mt-0.5">✓</span>
@@ -3759,6 +3790,13 @@ const BookDetailModal = memo(({
                   </div>
                   <h2 className="text-4xl md:text-5xl font-serif text-[var(--text-primary)] leading-tight">{book.title}</h2>
                   <p className="text-sm font-bold text-brand-gold-text uppercase tracking-eyebrow font-serif italic">by {book.author}</p>
+                  {/* 9 Oct 2026: sold by a SwapSutra partner, with the copies left. */}
+                  {(book as any).sellerType && (
+                    <p className="text-xs text-[var(--text-secondary)]" data-testid="partner-seller">
+                      <span className="inline-block rounded-full bg-brand-gold/10 px-2 py-0.5 font-bold text-brand-gold-text">{({ bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' } as Record<string, string>)[(book as any).sellerType] || 'Partner'}</span>
+                      {' '}{(book as any).sellerName}{Number((book as any).stock) > 0 ? ` · ${(book as any).stock} in stock` : ''}
+                    </p>
+                  )}
                   <span className={`inline-block px-3 py-1 rounded-full text-2xs font-bold uppercase tracking-widest border ${book.genre ? 'border-brand-gold/30 bg-brand-gold/10 text-brand-gold-text' : 'border-brand-border/60 text-[var(--text-secondary)] italic'}`}>
                     {book.genre || 'Genre not specified'}
                   </span>
@@ -4033,6 +4071,8 @@ const BookDetailModal = memo(({
                       );
                     })()}
                     
+                    {!isOwner && <WishlistButton bookId={String(book.id)} title={book.title} />}
+
                     <button 
                       onClick={() => onRatingBookId(book.id)}
                       className="btn-outline w-full !py-4 uppercase text-2xs tracking-widest opacity-60 hover:opacity-100 transition-all border-brand-border/30"
@@ -4143,7 +4183,7 @@ const MembershipGate = memo(({
                 'Swap, lend, rent or sell physical books with readers near you',
                 'List up to 20 books free — ₹20 once if you want more',
                 'Reading Space, reading circles and the Café',
-                'When an exchange is accepted, each reader pays a ₹10 platform fee'
+                '₹10 platform fee per exchange — in a swap it comes out of your refundable deposit'
               ].map((item, idx) => (
               <li key={idx} className="flex items-start gap-2.5 text-sm text-[var(--text-secondary)] leading-snug">
                 <span className="text-brand-gold-text font-bold mt-0.5">✓</span>
@@ -4491,11 +4531,10 @@ const ManagementConsole = memo(() => {
       return;
     }
     // Screens that load their own data (no generic fetch, no error banner).
-    if (currentTab === 'customMugs') { setLoading(false); return; }
+    if (['customMugs', 'sponsoredAds', 'paymentSettings', 'partners'].includes(currentTab)) { setLoading(false); return; }
     let apiActions: string[] = [];
     if (currentTab === 'dashboard') apiActions = ['getAdminDashboardMetrics'];
     else if (currentTab === 'approvals') apiActions = ['getPendingMembershipApprovals'];
-    else if (currentTab === 'coupons') apiActions = ['getMembershipCoupons'];
     else if (currentTab === 'events') apiActions = ['getEvents'];
     else if (currentTab === 'eventSubscribers') apiActions = ['getEventSubscribers'];
     else if (currentTab === 'newsletterSubscribers') apiActions = ['getNewsletterSubscribers'];
@@ -4610,6 +4649,9 @@ const ManagementConsole = memo(() => {
     { id: 'bookPricing', label: 'Book Pricing', icon: BookOpen },
     { id: 'readerBadges', label: 'Badges', icon: Star },
     { id: 'customMugs', label: 'Mugs', icon: Gift },
+    { id: 'partners', label: 'Partners', icon: Store },
+    { id: 'sponsoredAds', label: 'Ads', icon: Megaphone },
+    { id: 'paymentSettings', label: 'Payment details', icon: Wallet },
   ];
 
   const normalizeStatus = (status: any) => String(status || '').trim().toLowerCase();
@@ -4652,7 +4694,6 @@ const ManagementConsole = memo(() => {
           {label: 'Activation Type', key: 'activationType', render: (row: any) => row.activationType || row.membershipType || 'paid'},
           {label: 'Status', key: 'adminStatus'}
         ];
-        case 'coupons': return [{label: 'Code', key: 'couponCode'}, {label: 'Discount', key: 'discountValue'}, {label: 'Status', key: 'active'}];
         case 'members': return [
           {label: 'Name', key: 'name'},
           {label: 'Email', key: 'email'},
@@ -4706,11 +4747,6 @@ const ManagementConsole = memo(() => {
             </>
         );
     }
-    if (tabId === 'coupons') {
-        return (
-            <button onClick={() => performAction('manageMembershipCoupon', {id: row.id, subAction: 'delete'})} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-red-800 hover:bg-red-100 transition-colors"><Trash2 size={12} />Delete</button>
-        );
-    }
     if (tabId === 'books') {
         if (isApprovedStatus(row.status)) {
             return (
@@ -4756,51 +4792,7 @@ const ManagementConsole = memo(() => {
     return null;
   };
 
-  const createCoupon = async () => {
-    const couponCode = prompt("Coupon code");
-    if (!couponCode) return;
-    const discountType = prompt("Discount type: free, fixed_amount, percentage, or absolute", "fixed_amount");
-    if (!discountType || !['free', 'fixed_amount', 'absolute', 'percentage', 'fixed'].includes(discountType)) return notify.error("Use free, fixed_amount, percentage, or absolute.");
-    const discountValue = prompt("Discount value");
-    if (!discountValue) return;
-    const expiryDate = prompt("Expiry date (YYYY-MM-DD)", new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().slice(0, 10));
-    if (!expiryDate) return;
-    const maxUsage = prompt("Max usage", "100");
-    if (!maxUsage) return;
 
-    await performAction('manageMembershipCoupon', {
-      subAction: 'create',
-      couponCode,
-      discountType,
-      discountValue: Number(discountValue),
-      expiryDate,
-      maxUsage: Number(maxUsage)
-    });
-  };
-
-  const editCoupon = async (coupon: any) => {
-    const couponCode = prompt("Coupon code", coupon.couponCode || '');
-    if (!couponCode) return;
-    const discountType = prompt("Discount type: free, fixed_amount, percentage, or absolute", coupon.discountType || 'fixed_amount');
-    if (!discountType || !['free', 'fixed_amount', 'absolute', 'percentage', 'fixed'].includes(discountType)) return notify.error("Use free, fixed_amount, percentage, or absolute.");
-    const discountValue = prompt("Discount value", String(coupon.discountValue ?? ''));
-    if (!discountValue) return;
-    const expiryDate = prompt("Expiry date (YYYY-MM-DD)", coupon.expiryDate ? new Date(coupon.expiryDate).toISOString().slice(0, 10) : '');
-    if (!expiryDate) return;
-    const maxUsage = prompt("Max usage", String(coupon.maxUsage ?? 100));
-    if (!maxUsage) return;
-
-    await performAction('manageMembershipCoupon', {
-      subAction: 'update',
-      id: coupon.id,
-      couponCode,
-      discountType,
-      discountValue: Number(discountValue),
-      expiryDate,
-      maxUsage: Number(maxUsage),
-      notes: coupon.notes || ''
-    });
-  };
 
   const savePricing = async () => {
     await performAction('updateAppSettings', {
@@ -4970,7 +4962,6 @@ const ManagementConsole = memo(() => {
             <button onClick={() => fetchData(tab)} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-brand-border bg-[var(--bg-surface)] px-4 py-2 text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)] hover:bg-[var(--bg-page-alt)] transition-colors"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} />Refresh</button>
             <button onClick={() => performAction('repairDatabase', {})} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-2xs font-bold uppercase tracking-widest text-amber-900 hover:bg-amber-100 transition-colors"><RefreshCw size={14} />Repair Database</button>
             {tab === 'events' && <button onClick={openCreateEvent} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-brand-brown px-4 py-2 text-2xs font-bold uppercase tracking-widest text-white shadow-sm hover:bg-brand-dark transition-colors"><Plus size={14} />Create Event</button>}
-            {tab === 'coupons' && <button onClick={createCoupon} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-brand-brown px-4 py-2 text-2xs font-bold uppercase tracking-widest text-white shadow-sm hover:bg-brand-dark transition-colors"><Plus size={14} />Create Coupon</button>}
             </div>
         </div>
         {error && (
@@ -5012,6 +5003,9 @@ const ManagementConsole = memo(() => {
           <AdminReaderBadges />
         )}
 
+        {tab === 'sponsoredAds' && <AdminSponsoredAds />}
+        {tab === 'partners' && <AdminPartners />}
+        {tab === 'paymentSettings' && <AdminPaymentSettings />}
         {tab === 'customMugs' && (
           <AdminCustomMugs />
         )}
@@ -5161,44 +5155,6 @@ const ManagementConsole = memo(() => {
                 Save Pricing
               </button>
             </div>
-          </div>
-        )}
-        {tab === 'coupons' && (
-          <div className="overflow-x-auto rounded-2xl border border-brand-border bg-[var(--bg-surface)] shadow-sm">
-            <table className="w-full min-w-[900px] text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-brand-border bg-[var(--bg-surface-inset)]/45 text-[var(--text-secondary)] uppercase tracking-eyebrow font-bold">
-                  {['couponCode', 'discountType', 'discountValue', 'expiryDate', 'usedCount', 'active', 'actions'].map(h => (
-                    <th key={h} className="px-5 py-4 whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {items.length > 0 ? items.map((coupon) => (
-                  <tr key={coupon.id || coupon.couponCode} className="border-b border-brand-border/70 last:border-0 hover:bg-[var(--bg-page-alt)]/70 transition-colors">
-                    <td className="px-5 py-4 font-bold text-[var(--text-primary)] uppercase">{coupon.couponCode}</td>
-                    <td className="px-5 py-4 text-[var(--text-primary)]">{coupon.discountType}</td>
-                    <td className="px-5 py-4 text-[var(--text-primary)]">{coupon.discountValue}</td>
-                    <td className="px-5 py-4 text-[var(--text-primary)]">{coupon.expiryDate ? new Date(coupon.expiryDate).toLocaleDateString() : ''}</td>
-                    <td className="px-5 py-4 text-[var(--text-primary)]">{coupon.usedCount || 0} / {coupon.maxUsage || 0}</td>
-                    <td className="px-5 py-4">
-                      <span className={`rounded-full px-3 py-1 text-2xs font-bold uppercase tracking-widest ${coupon.active === true || coupon.active === 'TRUE' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                        {coupon.active === true || coupon.active === 'TRUE' ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="flex flex-wrap gap-2">
-                        <button onClick={() => editCoupon(coupon)} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-brand-border bg-[var(--bg-surface)] px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)] hover:bg-[var(--bg-page-alt)] transition-colors"><Edit size={12} />Edit</button>
-                        <button onClick={() => performAction('manageMembershipCoupon', {id: coupon.id, subAction: 'toggle'})} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-brand-gold/30 bg-brand-gold/10 px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-brand-gold-text hover:bg-brand-gold hover:text-[var(--text-primary)] transition-colors"><Power size={12} />Toggle</button>
-                        <button onClick={() => confirm('Delete this coupon?') && performAction('manageMembershipCoupon', {id: coupon.id, subAction: 'delete'})} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-red-800 hover:bg-red-100 transition-colors"><Trash2 size={12} />Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                )) : (
-                  <tr><td colSpan={7} className="px-5 py-12 text-center text-xs italic text-[var(--text-secondary)]">No coupons found.</td></tr>
-                )}
-              </tbody>
-            </table>
           </div>
         )}
         {tab === 'quillInsights' && data && (
@@ -5382,7 +5338,7 @@ const ManagementConsole = memo(() => {
             </form>
           </div>
         )}
-        {tab !== 'dashboard' && tab !== 'newsletter' && tab !== 'pricing' && tab !== 'coupons' && tab !== 'events' && (
+        {!['dashboard', 'newsletter', 'pricing', 'events', 'customMugs', 'sponsoredAds', 'partners', 'paymentSettings'].includes(tab) && (
             <AdminTable 
                 columns={getColumns(tab)} 
                 data={['approvals', 'members', 'books', 'support', 'bookRequests', 'bookRequestResponses', 'testimonials', 'hostEnquiries', 'eventSubscribers', 'newsletterSubscribers'].includes(tab) ? items : items.map(i => ({data: JSON.stringify(i)}))}
@@ -6161,7 +6117,7 @@ const ChatModal = memo(({
     );
   };
 
-type AppTab = 'home' | 'mugs' | 'cart' | 'about' | 'tracker' | 'newsletter' | 'browse' | 'book-requests' | 'notifications' | 'list' | 'info' | 'privacy' | 'profile' | 'reader' | 'reader-circle' | 'reading-room' | 'cafe' | 'events' | 'events-gallery' | 'newsletter-manager' | 'support' | 'management' | 'unsubscribe' | 'ambassador' | 'terms' | 'refund-policy' | 'grievance';
+type AppTab = 'home' | 'mugs' | 'cart' | 'about' | 'tracker' | 'newsletter' | 'browse' | 'book-requests' | 'notifications' | 'list' | 'info' | 'privacy' | 'profile' | 'reader' | 'reader-circle' | 'reading-room' | 'cafe' | 'events' | 'events-gallery' | 'newsletter-manager' | 'support' | 'management' | 'unsubscribe' | 'ambassador' | 'terms' | 'refund-policy' | 'grievance' | 'partners';
 const routeToTab = (path: string): AppTab => {
   const clean = path.replace(/\/+$/, '') || '/';
   if (clean.startsWith('/events-gallery/')) return 'events-gallery';
@@ -6214,6 +6170,9 @@ const routeToTab = (path: string): AppTab => {
     '/terms': 'terms',
     '/refund-policy': 'refund-policy',
     '/grievance': 'grievance',
+    // 9 Oct: bookstores, authors, publishers and promoters.
+    '/partners': 'partners',
+    '/partner': 'partners',
     '/mugs': 'mugs',
     '/coffee-mugs': 'mugs',
     // Older legal URLs, now part of the Terms of Use.
@@ -6244,6 +6203,7 @@ const tabToRoute = (tab: AppTab) => ({
   privacy: '/privacy',
   terms: '/terms',
   'refund-policy': '/refund-policy',
+  partners: '/partners',
   grievance: '/grievance',
   'newsletter-manager': '/management',
   unsubscribe: '/unsubscribe',
@@ -7464,7 +7424,7 @@ export default function App() {
   //                    That read-only welcome is the feature, so the
   //                    route itself must not be gated.
   // 'mugs' is public: anyone may browse the shelf and send a mug idea.
-  const GATE_ALLOWED_TABS: AppTab[] = ['home', 'mugs', 'about', 'browse', 'cafe', 'reader', 'events', 'events-gallery', 'privacy', 'terms', 'refund-policy', 'grievance', 'unsubscribe', 'ambassador', 'newsletter'];
+  const GATE_ALLOWED_TABS: AppTab[] = ['home', 'mugs', 'about', 'browse', 'cafe', 'reader', 'events', 'events-gallery', 'privacy', 'terms', 'refund-policy', 'grievance', 'unsubscribe', 'ambassador', 'newsletter', 'partners'];
   const isAccessGated = !isAdmin && (userTier === 'guest' || userTier === 'pending' || userTier === 'expired');
 
   // Remembers the protected tab a gated visitor originally tried to reach
@@ -7531,10 +7491,8 @@ export default function App() {
   });
 
   // Coupon State
-  const [couponCode, setCouponCode] = useState('');
-  const [isCouponApplied, setIsCouponApplied] = useState(false);
-  const [couponError, setCouponError] = useState<string | null>(null);
-  const [isCouponApplying, setIsCouponApplying] = useState(false);
+  // Coupons were removed on 9 Oct 2026 (owner's request); membership is free.
+  const isCouponApplied = false;
   const [paymentScreenshotName, setPaymentScreenshotName] = useState('');
   const [paymentScreenshotError, setPaymentScreenshotError] = useState<string | null>(null);
 
@@ -7640,7 +7598,7 @@ export default function App() {
   const [appSettings, setAppSettings] = useState<{ standardFee: number }>({
     standardFee: 49
   });
-  const [appliedCouponData, setAppliedCouponData] = useState<any | null>(null);
+  const appliedCouponData: any = null;
   const [notifySuccess, setNotifySuccess] = useState<string | null>(null);
   const [unsubscribeMessage, setUnsubscribeMessage] = useState<string | null>(null);
 
@@ -8169,7 +8127,7 @@ export default function App() {
       payableAmount: finalAmount,
       paymentRequired,
       activationType,
-      couponCode: coupon ? String(coupon.couponCode || coupon.code || couponCode).trim() : '',
+      couponCode: coupon ? String(coupon.couponCode || coupon.code || '').trim() : '',
     };
   };
   const [unreadRequestsCount, setUnreadRequestsCount] = useState(0);
@@ -10376,6 +10334,34 @@ export default function App() {
     return result;
   }, [books, search, pincodeFilter, conditionFilter, genreFilter, libraryCategoryFilter, libraryShelf, userCoords, nearbyRadiusKm]);
 
+  // 9 Oct 2026 (owner's request): the admin's sponsored ads show on the
+  // Library banner and between the books, and every time the Library is
+  // opened the books are shuffled with mugs and ads in between.
+  const [sponsoredAds, setSponsoredAds] = useState<SponsoredAd[]>([]);
+  const [shelfMugs, setShelfMugs] = useState<ShelfMug[]>([]);
+  const [shelfSeed, setShelfSeed] = useState(newShelfSeed);
+  useEffect(() => {
+    if (activeTab !== 'browse') return;
+    setShelfSeed(newShelfSeed());
+    let alive = true;
+    loadSponsoredAds().then((a) => { if (alive) setSponsoredAds(a); });
+    loadShelfMugs().then((m) => { if (alive) setShelfMugs(m); });
+    return () => { alive = false; };
+  }, [activeTab]);
+  const bannerAds = useMemo(() => sponsoredAds.filter((a) => adShowsOn(a, 'banner')), [sponsoredAds]);
+  const shelfItems = useMemo(() => {
+    // While a reader is searching, the shelf shows only the matching books.
+    const quiet = search.trim().length > 0;
+    return mixShelf(filteredBooks, quiet ? [] : shelfMugs, quiet ? [] : sponsoredAds.filter((a) => adShowsOn(a, 'shelf')), shelfSeed,
+      { keepBookOrder: !!userCoords });
+  }, [filteredBooks, shelfMugs, sponsoredAds, shelfSeed, search, userCoords]);
+  const openAdBook = useCallback((bookId: string) => {
+    const b = books.find((x) => String(x.id) === String(bookId));
+    if (!b) return false;
+    setShowBookDetail(b);
+    return true;
+  }, [books]);
+
   // Open a shared listing once the Library has arrived.
   //
   // Waits for `books` rather than firing on mount, because the id in the
@@ -10490,40 +10476,6 @@ export default function App() {
   const getAmount = () => {
     if (subFormTier === 'free') return 0;
     return calculateMembershipPayment().finalAmount;
-  };
-
-  const applyCoupon = async () => {
-    if (!couponCode.trim()) return;
-    setIsCouponApplying(true);
-    setCouponError(null);
-    
-    try {
-      const res = await fetch(`${API_URL}?action=validateMembershipCoupon&code=${encodeURIComponent(couponCode.trim())}`);
-      const data = await res.json();
-      
-      if (data.success) {
-        setIsCouponApplied(true);
-        setAppliedCouponData((() => {
-          const normalizedCode = couponCode.trim().toLowerCase();
-          const coupon = data.coupon || data.data || data.result || {};
-          return {
-            ...coupon,
-            couponCode: coupon.couponCode || coupon.code || normalizedCode,
-            discountType: coupon.discountType || (normalizedCode === 'swapfree2026' ? 'free' : normalizedCode === 'swap12-2026' ? 'absolute' : ''),
-            finalAmount: coupon.finalAmount ?? coupon.payableAmount ?? (normalizedCode === 'swapfree2026' ? 0 : normalizedCode === 'swap12-2026' ? 12 : undefined),
-          };
-        })());
-        setSuccessMessage('Special offer applied successfully! ✨');
-      } else {
-        setCouponError(data.message || 'Invalid or expired code.');
-        setIsCouponApplied(false);
-        setAppliedCouponData(null);
-      }
-    } catch (err) {
-      setCouponError('Network error verifying code.');
-    } finally {
-      setIsCouponApplying(false);
-    }
   };
 
   const handlePaymentScreenshotChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -10977,6 +10929,8 @@ export default function App() {
         noPrintedMrp: formData.get('noPrintedMrp') === 'on',
         // Oct 2026: the owner's own prices, only for what they actually offer.
         sellPrice: listingStatuses.sell && listingSellPrice !== '' ? Number(listingSellPrice) : null,
+        // Partners only (the server ignores it for readers).
+        stock: formData.get('stock') ? Number(formData.get('stock')) : undefined,
         rentPerMonth: listingStatuses.rent && listingRentPrice !== '' ? Number(listingRentPrice) : null,
         // The reader's declaration about the copy itself, kept apart from
         // which printing it is.
@@ -11789,7 +11743,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         trackOnce('first_request_sent', { serviceType: 'SWAP' });
-        setSuccessMessage('Swap request sent. If the owner accepts, you each pay a ₹10 platform fee from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.');
+        setSuccessMessage('Swap request sent. If the owner accepts, you each pay only your refundable deposit from the Stages tab — SwapSutra’s ₹10 platform fee is taken from it when it is refunded — and your chat opens once both are verified. Track it in My Profile → Swap Requests.');
         
         // Dispatch Notification to Book Owner
         if (showSwapModal.ownerEmail) {
@@ -11858,7 +11812,7 @@ export default function App() {
         trackOnce('first_request_sent', { serviceType });
         setSuccessMessage(
           serviceType === 'RENT'
-            ? 'Rent request sent. If the owner accepts, you each pay a ₹10 platform fee (plus your refundable deposit) from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
+            ? 'Rent request sent. If the owner accepts, you each pay a ₹10 platform fee and you also pay a refundable deposit (the rent is paid to the owner from it) from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
             : 'Buy request sent. If the owner accepts, you pay SwapSutra the price + ₹10 from the Stages tab; SwapSutra pays the seller after you have the book. Track it in My Profile → Swap Requests.'
         );
 
@@ -12193,6 +12147,11 @@ export default function App() {
   // cart opens and whenever a chat is closed, so a finished book moves from
   // the cart to My orders.
   const [myOrders, setMyOrders] = useState<CartOrder[]>([]);
+  // Wishlist (9 Oct 2026): saved books, kept on the server per reader.
+  useEffect(() => {
+    void loadWishlist(activeUserEmail || '', () => { setLoginStep('choice'); setShowLoginModal(true); });
+  }, [activeUserEmail]);
+  const wishlistItems = useWishlist();
   useEffect(() => {
     if (activeTab !== 'cart' || !activeUserEmail) return;
     let cancelled = false;
@@ -14149,6 +14108,7 @@ export default function App() {
                     ['privacy', 'Privacy'],
                     ['refund-policy', 'Refunds'],
                     ['grievance', 'Grievances'],
+                    ['partners', 'Bookstores & authors'],
                   ] as const).map(([tab, label]) => (
                     <button key={tab} type="button" onClick={() => { navigateTo(tab); setIsMobileMenuOpen(false); }} className="hover:text-brand-gold-text">
                       {label}
@@ -15464,6 +15424,9 @@ export default function App() {
                     onBrowse={() => document.getElementById('library-search')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
                     onJoin={handleBecomeMemberClick}
                     showJoin={!activeUserEmail}
+                    ads={bannerAds}
+                    onOpenAdBook={openAdBook}
+                    adStart={shelfSeed}
                   />
                   {/* 30 Sep: "Books wanted" moved to Community → Book requests. */}
 
@@ -15788,15 +15751,20 @@ export default function App() {
                                             {!loading && (
                                               <div>
                                                 <div className="ss-shelf">
-                                                  {filteredBooks.map((book) => (
+                                                  {/* 9 Oct: books shuffled each visit, with mugs and sponsored ads between them. */}
+                                                  {shelfItems.map((item) => item.type === 'book' ? (
                                                     <ShelfBook
-                                                      key={book.id}
-                                                      book={book}
+                                                      key={item.key}
+                                                      book={item.book}
                                                       onShowBookDetail={(bk: any) => setShowBookDetail(bk)}
                                                     />
+                                                  ) : item.type === 'ad' ? (
+                                                    <ShelfAdCard key={item.key} ad={item.ad} onOpenBook={openAdBook} />
+                                                  ) : (
+                                                    <ShelfMugCard key={item.key} mug={item.mug} onOpen={() => navigateTo('mugs')} />
                                                   ))}
                                                   {/* Fill out the last shelf so its plank runs the full width. */}
-                                                  {shelfFillers(filteredBooks.length, 'shelf-gap')}
+                                                  {shelfFillers(shelfItems.length, 'shelf-gap')}
                                                 </div>
 
                                               </div>
@@ -15870,7 +15838,7 @@ export default function App() {
                   {[
                     {step: '01', title: 'Curate', desc: 'Join and list up to 20 books from your shelf. ₹20 once lifts the limit.' },
                     {step: '02', title: 'Discover', desc: 'Browse the collective library. Temporary swaps are fixed for 1 month.' },
-                    {step: '03', title: 'Connect', desc: 'Once the owner accepts, you each pay a ₹10 platform fee and your chat opens. Swaps, rentals and loans also need a 65% MRP refundable deposit.' },
+                    {step: '03', title: 'Connect', desc: 'Once the owner accepts, the ₹10 platform fee is settled and your chat opens. Swaps, rentals and loans also need a 65% MRP refundable deposit — in a swap the ₹10 comes out of it.' },
                   ].map(s => (
                     <div key={s.step} className="text-center group">
                       <div className="text-6xl font-serif text-brand-beige group-hover:text-brand-gold-text/20 transition-colors duration-500 mb-6">{s.step}</div>
@@ -15898,7 +15866,7 @@ export default function App() {
                       <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)]">Financial Transparency</p>
                       <ul className="text-xs space-y-2 font-medium">
                         <li>• Joining: free</li>
-                        <li>• Platform fee: ₹10 from each reader when an exchange is accepted (swap, lend, rent or sell)</li>
+                        <li>• Platform fee: ₹10 per reader per exchange. Swap — taken from each reader's deposit when it is refunded (nothing extra to pay). Lend — only the borrower pays it. Rent and sell — each reader pays it.</li>
                         <li>• More than 20 listings: ₹20, once</li>
                         <li>• Security deposit: 65% of MRP for a swap, a rental or a loan — refundable, forfeited to the owner if the book isn't on its way back within 21 days. A purchase has none.</li>
                       </ul>
@@ -15911,13 +15879,13 @@ export default function App() {
                     </p>
                     <p className="flex gap-4">
                       <span className="text-brand-gold-text font-bold">IV.</span>
-                      <span>SwapSutra connects readers. Rent is paid directly between readers. A purchase is paid to SwapSutra and held until the buyer has the book, then paid to the seller. SwapSutra also collects its platform fee and holds refundable deposits.</span>
+                      <span>SwapSutra connects readers. Rent comes out of the renter's deposit and is paid to the owner. A purchase is paid to SwapSutra and held until the buyer has the book, then paid to the seller. SwapSutra also collects its platform fee and holds refundable deposits.</span>
                     </p>
                     <div className="bg-[var(--bg-surface)] p-6 rounded-2xl border border-brand-border shadow-sm space-y-6">
                       <div>
                         <p className="text-xs font-bold uppercase tracking-widest text-brand-gold-text mb-3">FAQ corner</p>
                         <p className="text-xs font-bold text-[var(--text-primary)]">Q: Is there a fee for requesting a swap?</p>
-                        <p className="text-xs opacity-70 mt-1">A: Requesting is free. If the owner accepts, each of you pays a ₹10 platform fee by UPI, and your chat opens once SwapSutra verifies both payments. Temporary swaps also need a refundable deposit.</p>
+                        <p className="text-xs opacity-70 mt-1">A: Requesting is free. If the owner accepts, you pay by UPI and your chat opens once SwapSutra verifies the payments. In a swap you each pay only a refundable deposit — the ₹10 platform fee is taken from it at the refund. In a loan only the borrower pays the ₹10 fee (plus the deposit).</p>
                       </div>
                       <div>
                         <p className="text-xs font-bold text-[var(--text-primary)]">Q: Is there a fee for temporary swaps?</p>
@@ -15988,6 +15956,23 @@ export default function App() {
                   chats={activeChats.filter((c) => isAdmin || c.chatStatus !== 'Archived')}
                   wanted={userBookRequests}
                   orders={myOrders}
+                  saved={wishlistItems.map((w) => {
+                    const b: any = books.find((x: any) => String(x.id) === w.bookId);
+                    return {
+                      bookId: w.bookId,
+                      title: b?.title || w.bookTitle || 'A book',
+                      author: b?.author || '',
+                      available: !!b,
+                      price: b ? (Number(b.sellPrice || 0) || undefined) : undefined,
+                      savedAt: w.savedAt,
+                    };
+                  })}
+                  onOpenSaved={(bookId) => {
+                    const b: any = books.find((x: any) => String(x.id) === bookId);
+                    if (b) setShowBookDetail(b);
+                    else setErrorMessage('This book is no longer listed. You can remove it from your wishlist.');
+                  }}
+                  onRemoveSaved={(bookId) => { void toggleWishlistItem(bookId); }}
                   busy={submitting}
                   coverFor={(bookId, title) => {
                     const b: any = books.find((x: any) => String(x.id) === String(bookId || ''))
@@ -16768,7 +16753,7 @@ export default function App() {
                                 <p className="max-w-xl text-sm leading-relaxed text-[var(--text-secondary)]">
                                   {userTier === 'expired'
                                     ? 'This account is paused. Message SwapSutra on WhatsApp or at swapsutra@gmail.com to restore access.'
-                                    : 'Membership is free and never expires. Swap, lend, rent and sell with readers near you. When an exchange is accepted, each reader pays a ₹10 platform fee before the chat opens.'}
+                                    : 'Membership is free and never expires. Swap, lend, rent and sell with readers near you. A ₹10 platform fee applies per exchange — in a swap it comes out of your refundable deposit, and in a loan only the borrower pays it.'}
                                 </p>
                               </div>
                               <div className="flex shrink-0 flex-col items-center justify-center rounded-3xl border border-brand-border bg-[var(--bg-surface)]/80 p-6 text-center shadow-sm backdrop-blur-md">
@@ -17370,6 +17355,25 @@ export default function App() {
                   Apply Now →
                 </a>
               </section>
+            </motion.div>
+          )}
+
+          {activeTab === 'partners' && (
+            <motion.div key="partners" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <PartnersPage
+                signedInEmail={activeUserEmail || ''}
+                onSession={(sess: { sessionToken: string; email: string; role?: string }) => {
+                  // A partner verifies their email here (9 Oct 2026); the same
+                  // signed session as any login.
+                  setSessionToken(sess.sessionToken);
+                  setActiveUserEmail(sess.email);
+                  try { localStorage.setItem('swapsutraUserEmail', sess.email); } catch { /* private mode */ }
+                  if (sess.role) { setUserRole(sess.role); try { localStorage.setItem('swapsutraUserRole', sess.role); } catch { /* ignore */ } }
+                  setSessionVerified(true);
+                }}
+                onOpenOrders={() => navigateTo('cart')}
+                onListBook={() => navigateTo('list')}
+              />
             </motion.div>
           )}
 
@@ -18048,8 +18052,20 @@ export default function App() {
                         <p className="text-xs text-amber-700">That's more than the printed MRP (₹{listingMrpNumber}). You can still list it, but buyers may pass.</p>
                       )}
                       <p className="text-2xs text-[var(--text-secondary)] opacity-80 leading-relaxed">
-                        You decide the price. The buyer pays SwapSutra, and you receive the price minus the ₹10 platform fee on your UPI once the buyer has the book and closes the purchase. No security deposit on a sale.
+                        {listingAllowance?.unlockedVia === 'PARTNER'
+                          ? 'You decide the price. The buyer pays SwapSutra (plus their ₹10 platform fee); you are paid monthly, minus SwapSutra\'s commission. No security deposit on a sale.'
+                          : 'You decide the price. The buyer pays SwapSutra, and you receive the price minus the ₹10 platform fee on your UPI once the buyer has the book and closes the purchase. No security deposit on a sale.'}
                       </p>
+                    </div>
+                  )}
+
+                  {/* 9 Oct 2026: a partner (bookstore, publisher…) says how many copies it has. */}
+                  {listingAllowance?.unlockedVia === 'PARTNER' && (
+                    <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-4 space-y-2" data-testid="listing-stock">
+                      <label htmlFor="listing-stock" className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text">Copies in stock</label>
+                      <input id="listing-stock" name="stock" type="number" inputMode="numeric" min={1} max={9999} step={1} defaultValue={1}
+                        className="input-classic bg-[var(--bg-surface)] w-32" />
+                      <p className="text-2xs text-[var(--text-secondary)] opacity-80 leading-relaxed">Each sale takes one copy off. Change it any time from your partner dashboard.</p>
                     </div>
                   )}
 
@@ -18597,7 +18613,7 @@ export default function App() {
                       <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] px-4 py-4 text-center space-y-1">
                         <p className="text-2xs font-bold text-[var(--text-primary)] uppercase tracking-widest">No payment yet</p>
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed italic">
-                          If the owner accepts, you each pay a ₹10 platform fee — plus your refundable deposit, if this swap has one — by UPI from the exchange's Stages tab. Your chat opens once SwapSutra verifies both payments.
+                          If the owner accepts, you each pay your refundable deposit by UPI from the exchange's Stages tab — no separate fee. When the exchange is complete the deposit comes back minus SwapSutra's ₹10 platform fee. Your chat opens once SwapSutra verifies both payments.
                         </p>
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book needs three short videos in the app: its condition and its packing (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides the deposit from these videos.</p>
                       </div>

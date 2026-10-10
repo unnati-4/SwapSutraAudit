@@ -88,7 +88,7 @@ export default function AdminReturnForfeits() {
         <details className="text-xs text-[var(--text-secondary)]">
           <summary className="cursor-pointer">Paid / closed ({done.length})</summary>
           <ul className="mt-2 space-y-1">
-            {done.map(f => <li key={f.id}>₹{f.amount} → {f.ownerEmail} · {f.payoutStatus === 'PAID_TO_OWNER' ? `paid ${when(f.paidAt || '')}` : 'no deposit'}</li>)}
+            {done.map(f => <li key={f.id}>₹{f.amount} → {f.ownerEmail} · {f.payoutStatus === 'PAID_TO_OWNER' ? `paid ${when(f.paidAt || '')}` : f.payoutStatus === 'KEPT_AS_FEE' ? 'platform fee kept from the deposit' : 'no deposit'}</li>)}
           </ul>
         </details>
       )}

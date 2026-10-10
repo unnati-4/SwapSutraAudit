@@ -148,8 +148,9 @@ export const TermsOfUsePage = ({ navigateTo }: { navigateTo: Nav }) => (
     <S title="4. Membership and fees">
       <p>Joining SwapSutra is <strong>free</strong>, and membership does not expire.</p>
       <UL items={[
-        <><strong>Platform fee.</strong> When an exchange (swap, lend, rent or sale) is accepted, <strong>each reader pays SwapSutra ₹10</strong> by UPI before the exchange chat opens. It is separate from any security deposit and from any money readers pay each other.</>,
-        <><strong>Listing limit.</strong> Each reader may list up to <strong>20 books</strong> free. To list more, <strong>₹20</strong> covers <strong>3 months</strong> of further listings (books already listed stay); a valid SwapSutra coupon removes the limit for that account.</>,
+        <><strong>Platform fee — ₹10 per reader, per exchange.</strong> <strong>Swap:</strong> nothing extra is paid up front — ₹10 is kept from each reader's security deposit when it is refunded. <strong>Lend:</strong> only the borrower pays ₹10, by UPI with the deposit; the owner pays nothing. <strong>Rent and sale:</strong> each reader pays ₹10 by UPI before the exchange chat opens.</>,
+        <><strong>Listing limit.</strong> Each reader may list up to <strong>20 books</strong> free. To list more, <strong>₹20</strong> covers <strong>3 months</strong> of further listings (books already listed stay). Coupon codes are no longer used.</>,
+        <><strong>Partners.</strong> Bookstores, authors, publishers and promoters register separately at <a href="/partners" className="underline">/partners</a> and sign a partner agreement. Partners list without a limit, pay no ₹10 platform fee on their own books (the buyer always pays it) and pay SwapSutra a <strong>2% commission</strong> on payouts (0% for the first year if approved commission-free), paid monthly; their banner and ads are free for 6 months, then <strong>₹100 per 2 months</strong>. Partners ship and deliver their own orders. <strong>A buyer always pays the ₹10 platform fee</strong>, including when buying from a partner. Ads are always marked “Sponsored”.</>,
       ]} />
       <p>We give 30 days' notice before any change to these amounts. A change never affects a fee you have already paid.</p>
     </S>
@@ -160,7 +161,7 @@ export const TermsOfUsePage = ({ navigateTo }: { navigateTo: Nav }) => (
         'Describe the condition honestly and use real photos of your copy.',
         'Agree the terms (duration, money, delivery, meeting place) in the app before a book changes hands.',
         'Return borrowed books on time and in the condition you received them. Normal reading wear is fine.',
-        'Rent is paid directly between readers. A purchase is paid to SwapSutra, held until the buyer has the book and closes the purchase, then paid to the seller (price minus the ₹10 platform fee). Courier costs and courier losses are between the sender and the courier.',
+        'Rent is taken from the renter’s security deposit and paid to the owner; the rest of the deposit is refunded. A purchase is paid to SwapSutra, held until the buyer has the book and closes the purchase, then paid to the seller (price minus the ₹10 platform fee). Courier costs and courier losses are between the sender and the courier.',
       ]} />
     </S>
 
@@ -255,8 +256,9 @@ export const RefundPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
   >
     <S title="SwapSutra's fees">
       <p>Joining is free. SwapSutra charges two things, both paid by UPI and checked by hand, usually within a day.</p>
-      <p><strong>₹10 platform fee per reader, per exchange.</strong> Refunded in full if the exchange is cancelled before both payments are verified and the chat opens, or if you were charged twice. Once the chat has opened, it is not refundable.</p>
-      <p><strong>₹20 to list more than 20 books</strong> (one time). Refunded in full if we could not verify it, you were charged twice, or you ask within <strong>48 hours</strong> without having listed a 21st book.</p>
+      <p><strong>₹10 platform fee per reader, per exchange.</strong> In a <strong>swap</strong> it is not paid up front — it is kept from your deposit when the deposit is refunded (deposit − ₹10). In a <strong>loan</strong> only the borrower pays it. Refunded in full if the exchange is cancelled before both payments are verified and the chat opens, or if you were charged twice; a swap closed before the exchange keeps nothing from the deposit. Once the chat has opened, it is not refundable.</p>
+      <p><strong>Partner promotion — ₹100 for every 2 months</strong> (after 6 free months). Refunded if we could not verify it or you were charged twice; not once the 2 months have started.</p>
+      <p><strong>₹20 to list more than 20 books</strong> (covers 3 months). Refunded in full if we could not verify it, you were charged twice, or you ask within <strong>48 hours</strong> without having listed a 21st book.</p>
       <p><strong>No refund</strong> after an account is suspended for breaking the <Link to="terms" navigateTo={navigateTo}>Terms</Link>.</p>
       <p>To ask, email <Mail to={L.supportEmail} /> with the subject "Refund request" and your payment reference (UTR). We decide within 7 working days, and approved refunds reach your original payment method within 7–10 working days.</p>
     </S>
@@ -351,7 +353,7 @@ const AboutPage = ({ navigateTo }: { navigateTo: Nav }) => (
     </S>
 
     <S title="What it costs">
-      <p>Joining is free and stays free. When an exchange is accepted, each reader pays a <strong>₹10 platform fee</strong> — that is what keeps the site running. You can list up to 20 books free; listing more costs <strong>₹20 for 3 months</strong>. Every exchange runs in one exchange room: the condition video comes within 48 hours of acceptance and the payment within 48 hours after that, or the request closes and anything paid is refunded.</p>
+      <p>Joining is free and stays free. Each exchange carries a <strong>₹10 platform fee</strong> per reader — in a swap it comes out of your refundable deposit, and in a loan only the borrower pays it. That is what keeps the site running. You can list up to 20 books free; listing more costs <strong>₹20 for 3 months</strong>. Every exchange runs in one exchange room: the condition video comes within 48 hours of acceptance and the payment within 48 hours after that, or the request closes and anything paid is refunded.</p>
       <p>Money for a rented or sold book passes directly between the two readers. The one exception is a refundable security deposit on a temporary exchange — see our <Link to="refund-policy" navigateTo={navigateTo}>Refunds &amp; Deposits</Link> page for exactly how that is handled.</p>
     </S>
 

@@ -131,14 +131,19 @@ console.log('--- platform fee ---');
     s1.requester.requiredAmount === 10 && s1.owner.requiredAmount === 10 && s1.owner.depositAmount === 0);
 
   const s2 = byRole(env.api.computeExchangePayments_(swap('SWAP', NEW, { securityDeposit: 150, ownerDeposit: 90 })));
-  check('11. Temporary swap: deposit + fee each, stored separately',
-    s2.requester.requiredAmount === 160 && s2.requester.depositAmount === 150 && s2.requester.platformFee === 10 &&
-    s2.owner.requiredAmount === 100 && s2.owner.depositAmount === 90);
+  // 9 Oct 2026 (owner's rule): in a swap with a deposit the ₹10 fee is
+  // taken from the deposit at the refund — nothing extra is paid up front.
+  check('11. Temporary swap: each pays only the deposit (fee comes out of it later)',
+    s2.requester.requiredAmount === 150 && s2.requester.depositAmount === 150 && s2.requester.platformFee === 0 &&
+    s2.owner.requiredAmount === 90 && s2.owner.depositAmount === 90);
 
-  for (const t of ['RENT', 'LEND']) {
-    const r = byRole(env.api.computeExchangePayments_(swap(t, NEW, { securityDeposit: 120, ownerDeposit: 999 })));
-    check(`12. ${t}: requester pays deposit + fee, owner pays only the fee (ownerDeposit ignored)`,
+  {
+    const r = byRole(env.api.computeExchangePayments_(swap('RENT', NEW, { securityDeposit: 120, ownerDeposit: 999 })));
+    check('12. RENT: requester pays deposit + fee, owner pays only the fee (ownerDeposit ignored)',
       r.requester.requiredAmount === 130 && r.owner.requiredAmount === 10 && r.owner.depositAmount === 0);
+    const l = byRole(env.api.computeExchangePayments_(swap('LEND', NEW, { securityDeposit: 120, ownerDeposit: 999 })));
+    check('12a. LEND: only the borrower pays (deposit + ₹10); the owner pays nothing',
+      l.requester.requiredAmount === 130 && l.requester.platformFee === 10 && !l.owner);
   }
 
   // Oct 2026: a sale goes through SwapSutra — the buyer pays price + fee,
@@ -162,7 +167,7 @@ console.log('--- platform fee ---');
 
   env.props.PLATFORM_FEE_PER_PARTY = '12';
   const p = byRole(env.api.computeExchangePayments_(swap('LEND', NEW)));
-  check('16. Fee can be changed from Script Properties', p.requester.requiredAmount === 12 && p.owner.requiredAmount === 12);
+  check('16. Fee can be changed from Script Properties', p.requester.requiredAmount === 12 && !p.owner);
 
   const legacy = env.api.feeRecordBreakdown_({ requiredAmount: 150, depositAmount: '', platformFee: '' });
   check('17. A pre-change fee row reads as all deposit, zero fee', legacy.depositAmount === 150 && legacy.platformFee === 0);
@@ -181,14 +186,12 @@ console.log('--- listing allowance ---');
   check('19. 20 listed: blocked', full.canList === false && full.remaining === 0);
   check('20. Message names the ₹20 unlock', /₹20/.test(env.api.listingLimitMessage_(full)));
 
-  const bad = env.api.redeemListingUnlockCoupon({ code: 'BOOKSTORE2026' });
-  check('21. Wrong coupon is refused', bad.success === false && bad.error === 'INVALID_COUPON');
-
-  const ok = env.api.redeemListingUnlockCoupon({ code: ' bookstore2627 ' });
-  check('22. BOOKSTORE2627 (any case, spaces) unlocks immediately', ok.success === true && ok.allowance.unlimited === true);
-  env.setBooks('r@x.com', 300);
-  check('23. Unlimited after coupon', env.api.getListingAllowanceFor_('r@x.com').canList === true);
-  check('24. Redeeming again is harmless', env.api.redeemListingUnlockCoupon({ code: 'BOOKSTORE2627' }).alreadyUnlimited === true);
+  // 9 Oct 2026 (owner's request): coupon codes were removed.
+  const old = env.api.redeemListingUnlockCoupon({ code: 'BOOKSTORE2627' });
+  check('21. Coupon codes are no longer accepted (even the old bookstore code)', old.success === false && old.error === 'COUPONS_REMOVED');
+  check('22. ...and the reply points bookstores to partner registration', /\/partners/.test(old.message));
+  check('23. Still blocked after trying a code', env.api.getListingAllowanceFor_('r@x.com').canList === false);
+  check('24. The limit message no longer mentions coupons', !/coupon/i.test(env.api.listingLimitMessage_(full)));
 }
 
 {

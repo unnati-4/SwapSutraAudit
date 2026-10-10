@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import MascotBanner, { type BannerSlide } from '../MascotBanner';
+import { newShelfSeed, shuffled } from '../../utils/ads';
 import { apiUrl } from '../../config/runtime';
 import { MUG_CATEGORIES } from '../../data/mugCategories';
 import type { MugCategoryId, MugProduct } from '../../types/mugs';
@@ -79,6 +81,24 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
 
   const browse = () => gridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
+  // 10 Oct 2026: the walking mug unrolls a banner featuring a few mugs, a
+  // new pick each visit. Before the shop opens it invites a mug idea.
+  const [bannerSeed] = useState(newShelfSeed);
+  const bannerSlides = useMemo<BannerSlide[]>(() => {
+    if (loaded.state !== 'ready') return [];
+    if (!items.length) return [{
+      key: 'soon', eyebrow: 'The mug shelf', title: 'Mugs are coming soon',
+      subtitle: 'Got an idea for a mug? Tell us and we’ll help make it.',
+      cta: 'Create your mug', onOpen: () => setEnquiryOpen(true),
+    }];
+    const picks = shuffled<MugProduct>(items, bannerSeed).slice(0, 6);
+    return picks.map((p) => ({
+      key: `mug-${p.id}`, eyebrow: 'Featured mug', title: p.title,
+      subtitle: [p.price ? formatInr(p.price) : '', p.sourceMarketplace ? `Sold on ${p.sourceMarketplace}` : ''].filter(Boolean).join(' · ') || undefined,
+      imageUrl: p.imageUrl || undefined, cta: 'View mug', onOpen: () => setViewing(p),
+    }));
+  }, [loaded.state, items, bannerSeed]);
+
   return (
     <div className="mugs" data-testid="mugs-page">
       {/* ── Hero ─────────────────────────────────────────── */}
@@ -103,6 +123,9 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
           <MugPlaceholder />
         </div>
       </section>
+
+      {/* ── The walking mug's banner (10 Oct 2026) ──────────── */}
+      <MascotBanner mascot="mug" slides={bannerSlides} label="Featured mugs" testId="mugs-banner" />
 
       {shopOpen ? (<>
       {/* ── Categories ───────────────────────────────────── */}

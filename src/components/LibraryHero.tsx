@@ -1,5 +1,8 @@
 import React, { useMemo, useRef } from 'react';
 import { shelfCoverUrl } from '../utils/bookCover';
+import { shuffled, type SponsoredAd } from '../utils/ads';
+import { adToSlide } from './SponsoredAds';
+import MascotBanner, { type BannerSlide } from './MascotBanner';
 
 /**
  * The Library's front (30 Sep 2026): a bookshop window.
@@ -23,8 +26,12 @@ export interface HeroBook {
 
 const coverOf = (b: HeroBook) => shelfCoverUrl(b.isbn);
 
-export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onBrowse, onJoin, showJoin }: {
+export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onBrowse, onJoin, showJoin, ads = [], onOpenAdBook, adStart = 0 }: {
   books: B[];
+  /** Sponsored ads for the banner (9 Oct 2026); shown under the window. */
+  ads?: SponsoredAd[];
+  onOpenAdBook?: (bookId: string) => boolean;
+  adStart?: number;
   onOpenBook: (b: B) => void;
   onBrowse: () => void;
   onJoin?: () => void;
@@ -42,6 +49,19 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
       .sort((a, b) => String(b.listedAt || b.createdAt || '').localeCompare(String(a.listedAt || a.createdAt || '')));
   }, [books]);
   const wall = withCovers.slice(0, 8);
+  // The banner: ads first; with no ad running, featured books take turns.
+  const bannerSlides = useMemo<BannerSlide[]>(() => {
+    if (ads.length) return ads.map((a) => adToSlide(a, onOpenAdBook));
+    return shuffled<B>(withCovers.slice(0, 30), adStart || 1).slice(0, 6).map((b) => ({
+      key: `book-${b.id}`,
+      eyebrow: 'Featured book',
+      title: b.title || 'A book on the shelves',
+      subtitle: b.author ? `by ${b.author}` : undefined,
+      imageUrl: coverOf(b),
+      cta: 'See the book',
+      onOpen: () => onOpenBook(b),
+    }));
+  }, [ads, withCovers, adStart, onOpenAdBook, onOpenBook]);
   const row = withCovers.slice(0, 16);
   const rowRef = useRef<HTMLDivElement>(null);
   const scrollRow = (dir: number) => rowRef.current?.scrollBy({ left: dir * rowRef.current.clientWidth * 0.8, behavior: 'smooth' });
@@ -78,6 +98,12 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
           )}
         </div>
       </div>
+
+      {/* 10 Oct 2026: the walking book unrolls the banner — the sponsored ads
+          (a bookstore, an author, a book, partners' banners) or, when no ad
+          is running, a few featured books from the shelves. */}
+      <MascotBanner mascot="book" slides={bannerSlides} startAt={adStart}
+        label={ads.length ? 'Sponsored' : 'Featured books'} testId="library-banner" />
 
       {row.length >= 4 && (
         <div className="lib-row">

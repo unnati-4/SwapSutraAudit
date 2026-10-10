@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { QRCodeCanvas } from 'qrcode.react';
+import UpiPayBox, { type PayDetails } from './UpiPayBox';
 import {apiUrl} from '../config/runtime';
 import { depositLine, DEPOSIT_ESTIMATE_EXPLAINER } from '../utils/deposit';
 
@@ -93,7 +93,7 @@ interface StageEvaluation {
   completed: boolean;
   chatUnlocked: boolean;
   securityFee: { payers: FeePayer[]; required: boolean; allApproved: boolean };
-  upi: { vpa: string; payee: string };
+  upi: PayDetails;
   stages: {
     handover: StageBlock;
     logistics: StageBlock;
@@ -368,13 +368,7 @@ export default function SwapStateMachine({ swapId, isAdmin }: { swapId: string; 
                 {p.payerRole === data.role && p.adminStatus !== 'ADMIN_APPROVED' && p.adminStatus !== 'ADMIN_PENDING' && (
                   <div className="space-y-3 pt-2 border-t border-brand-border/40">
                     <div className="flex flex-col items-center gap-3 bg-[var(--bg-page)] p-4 rounded-xl">
-                      <QRCodeCanvas
-                        value={`upi://pay?pa=${data.upi.vpa}&pn=${encodeURIComponent(data.upi.payee)}&am=${p.requiredAmount}&cu=INR&tn=SwapSutra%20Exchange%20Payment`}
-                        size={160}
-                        level="H"
-                        includeMargin
-                      />
-                      <p className="text-2xs text-red-500 italic">Do not edit the pre-filled amount.</p>
+                      <UpiPayBox upi={data.upi} amount={p.requiredAmount} note="SwapSutra Exchange Payment" size={160} />
                     </div>
                     <input
                       type="text"
