@@ -1,6 +1,6 @@
 import React, { useMemo, useRef } from 'react';
 import { shelfCoverUrl } from '../utils/bookCover';
-import { shuffled, type SponsoredAd } from '../utils/ads';
+import { adImageSrc, shuffled, type SponsoredAd } from '../utils/ads';
 import { adToSlide } from './SponsoredAds';
 import MascotBanner, { type BannerSlide } from './MascotBanner';
 
@@ -25,6 +25,12 @@ export interface HeroBook {
 }
 
 const coverOf = (b: HeroBook) => shelfCoverUrl(b.isbn);
+/** The reader's own first photo of the book (Drive links made viewable). */
+const photoOf = (b: HeroBook) => {
+  const raw = Array.isArray(b.imageUrls) ? b.imageUrls[0] : String(b.imageUrls || '').split(/[|,]/)[0];
+  const u = String(raw || '').trim();
+  return /^https:\/\//i.test(u) ? adImageSrc(u) : '';
+};
 
 export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onBrowse, onJoin, showJoin, ads = [], onOpenAdBook, adStart = 0 }: {
   books: B[];
@@ -34,6 +40,7 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
   adStart?: number;
   onOpenBook: (b: B) => void;
   onBrowse: () => void;
+  /** No longer shown (10 Oct 2026: the banner fills the Library window). */
   onJoin?: () => void;
   showJoin?: boolean;
 }) {
@@ -48,62 +55,45 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
       })
       .sort((a, b) => String(b.listedAt || b.createdAt || '').localeCompare(String(a.listedAt || a.createdAt || '')));
   }, [books]);
-  const wall = withCovers.slice(0, 8);
-  // The banner: ads first; with no ad running, featured books take turns.
+  // The banner (in the Library window, 10 Oct 2026): ads first; with no ad
+  // running, featured books take turns — any listed book with a cover or a
+  // photo; with no books yet, an invitation to browse.
   const bannerSlides = useMemo<BannerSlide[]>(() => {
     if (ads.length) return ads.map((a) => adToSlide(a, onOpenAdBook));
-    return shuffled<B>(withCovers.slice(0, 30), adStart || 1).slice(0, 6).map((b) => ({
+    const pictured = books.filter((b) => b.title && (coverOf(b) || photoOf(b)));
+    const picks = shuffled<B>(pictured.slice(0, 60), adStart || 1).slice(0, 6);
+    if (!picks.length) return [{
+      key: 'welcome', eyebrow: 'SwapSutra library', title: 'Books from readers near you',
+      subtitle: 'Swap, lend, rent or buy — straight from their shelves.', imageUrl: '/swapsutra-logo.png',
+      cta: 'Browse the shelves', onOpen: () => onBrowse(),
+    }];
+    return picks.map((b) => ({
       key: `book-${b.id}`,
       eyebrow: 'Featured book',
       title: b.title || 'A book on the shelves',
       subtitle: b.author ? `by ${b.author}` : undefined,
-      imageUrl: coverOf(b),
+      imageUrl: coverOf(b) || photoOf(b),
       cta: 'See the book',
       onOpen: () => onOpenBook(b),
     }));
-  }, [ads, withCovers, adStart, onOpenAdBook, onOpenBook]);
+  }, [ads, books, adStart, onOpenAdBook, onOpenBook, onBrowse]);
   const row = withCovers.slice(0, 16);
   const rowRef = useRef<HTMLDivElement>(null);
   const scrollRow = (dir: number) => rowRef.current?.scrollBy({ left: dir * rowRef.current.clientWidth * 0.8, behavior: 'smooth' });
 
   return (
     <section className="lib-front" aria-label="Welcome to the SwapSutra library">
-      <div className="lib-hero ss-bleed">
-        <div className="lib-hero__panel">
-          <h1 className="lib-hero__title">
-            SwapSutra is a reader-first library spread across homes in India.
-          </h1>
-          <p className="lib-hero__sub">Swap, lend and share the books you’ve finished with readers near you.</p>
-          <div className="lib-hero__actions">
-            <button type="button" className="lib-hero__cta" onClick={onBrowse}>Browse the shelves</button>
-            {showJoin && onJoin && (
-              <button type="button" className="lib-hero__cta lib-hero__cta--ghost" onClick={onJoin}>Join</button>
-            )}
-          </div>
-        </div>
-        <div className="lib-hero__wall" aria-hidden={wall.length ? undefined : true}>
-          {wall.length >= 4 ? (
-            <div className="lib-hero__covers">
-              {wall.map((b) => (
-                <button key={String(b.id)} type="button" className="lib-hero__cover" onClick={() => onOpenBook(b)} aria-label={`Open ${b.title || 'this book'}`}>
-                  <img src={coverOf(b)} alt="" loading="lazy" decoding="async"
-                    onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none'; }} />
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="lib-hero__wall-empty">
-              <img src="/swapsutra-logo.png" alt="" />
-            </div>
-          )}
-        </div>
+      {/* 10 Oct 2026 (owner's request): the whole Library window is now the
+          banner — the heading panel and the cover wall are gone. The walking
+          book comes forward, walks right and unrolls an ad, or a featured
+          book when no ad is running. The heading stays for screen readers
+          and search engines. */}
+      <div className="lib-hero lib-hero--banner ss-bleed">
+        <h1 className="sr-only">SwapSutra is a reader-first library spread across homes in India.</h1>
+        <MascotBanner mascot="book" slides={bannerSlides} startAt={adStart}
+          label={ads.length ? 'Sponsored' : 'Featured books'} testId="library-banner" />
       </div>
 
-      {/* 10 Oct 2026: the walking book unrolls the banner — the sponsored ads
-          (a bookstore, an author, a book, partners' banners) or, when no ad
-          is running, a few featured books from the shelves. */}
-      <MascotBanner mascot="book" slides={bannerSlides} startAt={adStart}
-        label={ads.length ? 'Sponsored' : 'Featured books'} testId="library-banner" />
 
       {row.length >= 4 && (
         <div className="lib-row">
