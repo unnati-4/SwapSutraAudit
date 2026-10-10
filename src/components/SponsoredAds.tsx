@@ -1,13 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React from 'react';
 import type { MugProduct } from '../types/mugs';
 import { AD_KIND_LABEL, adCta, adImageSrc, recordAdClick, type SponsoredAd } from '../utils/ads';
+import type { BannerSlide } from './MascotBanner';
 
 /**
  * Sponsored ads in the Library (9 Oct 2026).
  *
- * SponsoredBanner — the Library banner's ad strip: one ad at a time,
- *   moving on every few seconds (paused while hovered or focused, and not
- *   at all for readers who ask for reduced motion).
+ * adToSlide       — an ad as a slide of the animated Library banner
+ *   (MascotBanner: the walking book unrolls it).
  * ShelfAdCard     — an ad standing on the shelf between the books.
  * ShelfMugCard    — a mug from the mug shop, standing between the books.
  *
@@ -45,52 +45,22 @@ function AdLink({ ad, onOpenBook, className, children, label }: {
   );
 }
 
-export function SponsoredBanner({ ads, onOpenBook, startAt = 0 }: { ads: SponsoredAd[]; onOpenBook?: OpenBook; startAt?: number }) {
-  const [i, setI] = useState(() => (ads.length ? startAt % ads.length : 0));
-  const [paused, setPaused] = useState(false);
-  const reduce = useMemo(() => {
-    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
-  }, []);
-  useEffect(() => { if (i >= ads.length) setI(0); }, [ads.length, i]);
-  useEffect(() => {
-    if (ads.length < 2 || paused || reduce) return;
-    const t = window.setInterval(() => setI((n) => (n + 1) % ads.length), 7000);
-    return () => window.clearInterval(t);
-  }, [ads.length, paused, reduce]);
-  if (!ads.length) return null;
-  const ad = ads[Math.min(i, ads.length - 1)];
-  return (
-    <section
-      className="ss-adbanner"
-      aria-label="Sponsored"
-      aria-roledescription="carousel"
-      onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
-      onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}
-      data-testid="sponsored-banner"
-    >
-      <AdLink ad={ad} onOpenBook={onOpenBook} className="ss-adbanner__card"
-        label={`Sponsored by ${ad.sponsor}: ${ad.headline} — ${adCta(ad)}`}>
-        <span className="ss-adbanner__media">
-          {ad.imageUrl && <img key={ad.id} src={adImageSrc(ad.imageUrl)} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" />}
-          {ad.partner && <span className="ss-adbanner__logo"><img src="/swapsutra-logo.png" alt="" />SwapSutra partner</span>}
-        </span>
-        <span className="ss-adbanner__body">
-          <span className="ss-ad__eyebrow"><span className="ss-ad__chip">Sponsored</span>{AD_KIND_LABEL[ad.kind]} · {ad.sponsor}</span>
-          <span className="ss-adbanner__headline">{ad.headline}</span>
-          {ad.tagline && <span className="ss-adbanner__tagline">{ad.tagline}</span>}
-          <span className="ss-adbanner__cta">{adCta(ad)} {ad.linkUrl && !ad.bookId ? '↗' : '→'}</span>
-        </span>
-      </AdLink>
-      {ads.length > 1 && (
-        <div className="ss-adbanner__dots">
-          {ads.map((a, n) => (
-            <button key={a.id} type="button" aria-label={`Show sponsored ad ${n + 1} of ${ads.length}`} aria-current={n === i}
-              className={n === i ? 'is-on' : ''} onClick={() => setI(n)} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
+/** An ad as a slide of the animated banner (10 Oct 2026). */
+export function adToSlide(ad: SponsoredAd, onOpenBook?: OpenBook): BannerSlide {
+  return {
+    key: `ad-${ad.id}`,
+    eyebrow: `${AD_KIND_LABEL[ad.kind]} · ${ad.sponsor}`,
+    title: ad.headline,
+    subtitle: ad.tagline || undefined,
+    imageUrl: ad.imageUrl ? adImageSrc(ad.imageUrl) : undefined,
+    sponsored: true,
+    partner: !!ad.partner,
+    cta: adCta(ad),
+    href: ad.linkUrl || (ad.bookId ? `/book/${encodeURIComponent(ad.bookId)}` : '#'),
+    external: !!ad.linkUrl,
+    onOpen: makeAdOpen(ad, onOpenBook),
+    ariaLabel: `Sponsored by ${ad.sponsor}: ${ad.headline} — ${adCta(ad)}`,
+  };
 }
 
 export const ShelfAdCard: React.FC<{ ad: SponsoredAd; onOpenBook?: OpenBook }> = ({ ad, onOpenBook }) => {

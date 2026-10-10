@@ -84,7 +84,7 @@ with sync_playwright() as p:
     pg.on('pageerror', lambda e: errs.append(str(e) + ' @ ' + pg.url + ' ' + str(getattr(e, 'stack', ''))[:400]))
     pg.route("**/api/swapsutra**", api); pg.route("https://drive.google.com/**", drive)
     pg.goto(BASE + '/library'); pg.wait_for_timeout(2500)
-    banner = pg.locator('[data-testid="sponsored-banner"]')
+    banner = pg.locator('[data-testid="library-banner"]')
     ck('Library: the partner banner shows', banner.count() == 1 and 'Bookworms, Hazratganj' in banner.inner_text())
     ck('...marked Sponsored, with the SwapSutra logo', 'sponsored' in banner.inner_text().lower() and pg.locator('.ss-adbanner__logo').count() == 1)
     ck('Shelf: an ad stands between the books', pg.locator('.ss-shelf [data-testid="sponsored-ad"]').count() >= 1)
