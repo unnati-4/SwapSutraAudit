@@ -251,7 +251,7 @@ function PromoTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: stri
         <h2 className="pp-h2">Your banner</h2>
         <PartnerBannerPreview imageUrl={p.bannerImageUrl} headline={head.bannerHeadline} tagline={head.bannerTagline} name={p.name} />
         <p className="pp-hint">
-          {p.bannerStatus === 'APPROVED' ? '✓ Approved — it shows on the Library page while promotion is on.'
+          {p.bannerStatus === 'APPROVED' ? `✓ Approved — it shows on the Library page while promotion is on. ${p.bannerClicks || 0} click${p.bannerClicks === 1 ? '' : 's'} so far.`
             : p.bannerStatus === 'PENDING' ? 'Waiting for SwapSutra to check it.'
             : p.bannerStatus === 'REJECTED' ? `Needs a change: ${p.bannerNote}` : 'Upload a wide picture (about 1600 × 700). The SwapSutra logo is added on top.'}
         </p>

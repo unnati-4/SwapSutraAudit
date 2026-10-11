@@ -434,6 +434,56 @@ console.log('--- the buyer stays private ---');
   C('A partner verifies their email without a reader account (purpose "partner")', /const isPartnerSignup = String\(purpose \|\| ''\) === 'partner';/.test(gs) && /sendOTP\(data\.email, data\.purpose\)/.test(gs));
 }
 
+console.log('--- launch check (11 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  // A brand-new bookstore verifies its email code on /partners (no reader account).
+  env.ctx.logActivity = () => {};
+  env.ctx.Utilities.base64EncodeWebSafe = (v) => Buffer.from(typeof v === 'string' ? v : Buffer.from(v)).toString('base64url');
+  env.ctx.Utilities.computeHmacSha256Signature = (v, k) => Array.from(crypto.createHmac('sha256', String(k)).update(String(v)).digest());
+  const otp = env.ctx.getOrCreateSheet('OTP', ['id', 'email', 'otp', 'expiresAt', 'verified', 'createdAt']);
+  otp.appendRow(['O1', 'newstore@x.com', '482913', new Date(T0 + 60 * 60 * 1000), 'No', new Date(T0)]);
+  let v; try { v = env.api.verifyOTP('newstore@x.com', '482913', 'partner'); } catch (e) { v = { error: String(e) }; }
+  C('A new partner can verify the email code (purpose "partner") and gets a session', v && v.success === true && !!v.sessionToken, JSON.stringify(v));
+  otp.appendRow(['O2', 'stranger@x.com', '111222', new Date(T0 + 60 * 60 * 1000), 'No', new Date(T0)]);
+  let w; try { w = env.api.verifyOTP('stranger@x.com', '111222'); } catch (e) { w = { error: String(e) }; }
+  C('...an ordinary login code for an unknown email is still refused', w && w.code === 'EMAIL_NOT_REGISTERED', JSON.stringify(w));
+  const route = fs.readFileSync(path.join(root, 'src/components/partners/PartnersPage.tsx'), 'utf8');
+  C('The partner page sends purpose "partner" with the code', /partnerPost\('verifyOTP', \{[^}]*purpose: 'partner'/.test(route));
+  const srv = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
+  C('server.ts lets an applicant (no membership yet) see and send the application', /'getMyPartner', 'submitPartnerApplication', 'updatePartnerProfile'/.test(srv));
+  const reg = fs.readFileSync(path.join(root, 'src/components/partners/PartnerRegister.tsx'), 'utf8');
+  C('Documents fit in one request: PDFs under 1 MB, and the whole set is checked before sending', /fileForUpload\(file, \{ allowPdf: true, maxMb: 1 \}\)/.test(reg) && /totalBytes > 3\.6 \* 1024 \* 1024/.test(reg));
+
+  // A pending applicant cannot put a public banner up.
+  env.as('own@x.com');
+  env.api.submitPartnerApplication(app());
+  C('A partner that is not approved cannot upload a banner', env.api.uploadPartnerBanner({ dataUrl: PNG }).error === 'NOT_APPROVED');
+  env.as(ADMIN);
+  env.api.adminReviewPartner({ id: pobj(env).id, decision: 'approve' }); env.ctx.resetPartnerCache_();
+
+  // The buyer stays private in requests and chats.
+  env.addSwap({ id: 'Q1', serviceType: 'SELL', amount: 300, status: 'Pending', requesterName: 'Ravi Reader', requesterPhone: '9811122233', createdAt: new Date(T0 - H) });
+  const reqs = (() => { env.as('own@x.com'); return JSON.parse(JSON.stringify(vm.runInContext('maskBuyerForPartner_', env.ctx)({ ownerEmail: 'own@x.com', requesterEmail: 'req@x.com', senderEmail: 'req@x.com', requesterName: 'Ravi Reader', requesterPhone: '98111', requestedBookId: 'BK1', requestedBookTitle: 'Dune' }, 'own@x.com'))); })();
+  C('Requests and chats hide the buyer from a partner (email, name, phone), keeping the book', reqs.requesterEmail === 'buyer' && reqs.senderEmail === 'buyer' && reqs.requesterName === 'Buyer' && reqs.requesterPhone === '' && reqs.requestedBookId === 'BK1' && reqs.requestedBookTitle === 'Dune', JSON.stringify(reqs));
+  C('...applied to getSwapRequests and getUserChats', /requests\.map\(r => maskBuyerForPartner_\(r, email\)\)/.test(gs) && /visibleChats\.map\(c => maskBuyerForPartner_\(c, email\)\)/.test(gs));
+  const dash = env.api.getMyPartner();
+  C('A new request shows on the partner dashboard as the next step', dash.orders.some(o => o.swapId === 'Q1' && /accept or decline/.test(o.nextStep)) && dash.nextSteps.some(s => s.key === 'order_Q1'), JSON.stringify(dash.orders));
+
+  // Banner clicks are counted on the partner.
+  env.as('');
+  const pid = pobj(env).id;
+  C('A click on a partner banner is counted', env.api.recordAdClick({ id: 'PB-' + pid }).success === true && Number(pobj(env).bannerClicks) === 1);
+
+  // Ad dates: Sheets keeps "2026-10-15" as a Date at India midnight.
+  env.as(ADMIN);
+  const id = env.api.saveSponsoredAd({ kind: 'bookstore', sponsor: 'X', headline: 'H', imageUrl: 'https://i/x.jpg', linkUrl: 'https://x', placement: 'both', status: 'live', startDate: '2026-10-12', endDate: '2026-10-15' }).id;
+  const as = env.sheets.SponsoredAds; const ah = as._data[0]; const row = as._data.find(r => r[0] === id);
+  row[ah.indexOf('startDate')] = vm.runInContext('new Date("2026-10-11T18:30:00Z")', env.ctx); row[ah.indexOf('endDate')] = vm.runInContext('new Date("2026-10-14T18:30:00Z")', env.ctx);
+  const it = env.api.getAdminSponsoredAds().items.find(i => i.id === id);
+  C('Ad dates read back as the same India day (12 → 15 Oct)', it.startDate === '2026-10-12' && it.endDate === '2026-10-15', JSON.stringify([it.startDate, it.endDate]));
+}
+
 console.log('--- payment details (admin) ---');
 {
   const env = partnerEnv();

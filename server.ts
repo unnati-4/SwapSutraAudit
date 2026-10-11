@@ -718,7 +718,11 @@ async function startServer() {
       // whose membership lapsed must still be able to do it. It still
       // needs a signed-in session (userActions above), and Apps Script
       // acts only on the session's own address.
-      const MEMBERSHIP_EXEMPT_ACTIONS = new Set(['getAccountDeletionCheck', 'deleteMyAccount', 'getMyNewsletterSubscription', 'setMyNewsletterSubscription']);
+      // A partner applicant (11 Oct 2026) has a verified session but no reader
+      // membership until SwapSutra approves them: they must still be able to
+      // see and send their application. Apps Script checks the session.
+      const MEMBERSHIP_EXEMPT_ACTIONS = new Set(['getAccountDeletionCheck', 'deleteMyAccount', 'getMyNewsletterSubscription', 'setMyNewsletterSubscription',
+        'getMyPartner', 'submitPartnerApplication', 'updatePartnerProfile']);
       if (!isAdmin && !PUBLIC_ACTIONS.has(action) && !MEMBERSHIP_EXEMPT_ACTIONS.has(action)) {
         const userEmail = normalizeEmail(authenticatedEmail || req.body.email || req.body.ownerEmail || req.body.requesterEmail || req.body.senderEmail);
         if (!userEmail) {

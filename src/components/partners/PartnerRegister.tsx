@@ -103,7 +103,9 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
 
   const pickDoc = async (key: string, file?: File | null) => {
     if (!file) return;
-    const r = await fileForUpload(file, { allowPdf: true, maxMb: 4 });
+    // 11 Oct 2026 (launch check): everything is sent in one request, which
+    // the host caps at ~4.5 MB. Photos are shrunk; a PDF must be small.
+    const r = await fileForUpload(file, { allowPdf: true, maxMb: 1 });
     if (r.error) { setErrors((e) => ({ ...e, ['doc_' + key]: r.error! })); return; }
     setErrors((e) => ({ ...e, ['doc_' + key]: '' }));
     setDocs((d) => ({ ...d, [key]: { dataUrl: r.dataUrl!, name: file.name } }));
@@ -117,6 +119,11 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!type || !contract) return;
+    const totalBytes = Object.keys(docs).reduce((n, k) => n + String(docs[k]?.dataUrl || "").length, 0);
+    if (totalBytes > 3.6 * 1024 * 1024) {
+      setNote('Your documents are too large to send together. Upload photos instead of PDFs (photos are shrunk automatically), or smaller PDFs.');
+      return;
+    }
     setBusy(true); setErrors({}); setNote('');
     try {
       const d = await partnerPost('submitPartnerApplication', {
@@ -224,7 +231,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
           <div className="pp-field" key={d.key}>
             <span className="pp-label">{d.label}{d.required ? ' *' : ''}</span>
             <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => pickDoc(d.key, e.target.files?.[0])} aria-label={d.label} />
-            <span className="pp-hint">{docs[d.key] ? `✓ ${docs[d.key].name}` : sameType && onFile.has(d.key) ? '✓ Already on file — upload again only to replace it' : 'JPG, PNG, WebP or PDF, under 4 MB'}</span>
+            <span className="pp-hint">{docs[d.key] ? `✓ ${docs[d.key].name}` : sameType && onFile.has(d.key) ? '✓ Already on file — upload again only to replace it' : 'A photo (any size — it is shrunk) or a PDF under 1 MB'}</span>
             {errors['doc_' + d.key] && <span className="pp-error" role="alert">{errors['doc_' + d.key]}</span>}
           </div>
         ))}

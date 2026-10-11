@@ -95,7 +95,7 @@ function VerifyEmail({ onSession }: { onSession: (s: { sessionToken: string; ema
     e.preventDefault();
     setBusy(true); setMsg('');
     try {
-      const d = await partnerPost('verifyOTP', { email: email.trim().toLowerCase(), otp: otp.trim() });
+      const d = await partnerPost('verifyOTP', { email: email.trim().toLowerCase(), otp: otp.trim(), purpose: 'partner' });
       if (d?.success && d.sessionToken) onSession({ sessionToken: d.sessionToken, email: email.trim().toLowerCase(), role: d.role });
       else setMsg(d?.message || 'That code did not work.');
     } catch { setMsg('Could not reach SwapSutra.'); }

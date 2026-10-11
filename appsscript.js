@@ -2894,7 +2894,8 @@ function doGetHandler_(e) {
         obj.receiverBookId = parties.requestedBookId;
         return obj;
       }).filter(r => normalizeEmail(r.requesterEmail) === email || normalizeEmail(r.ownerEmail) === email);
-      return respondJson(requests);
+      // A partner never learns who the buyer is (launch check, 11 Oct 2026).
+      return respondJson(approvedPartner_(email) ? requests.map(r => maskBuyerForPartner_(r, email)) : requests);
     }
 
     if (action === 'previewNewsletter') {
@@ -2958,7 +2959,7 @@ function doGetHandler_(e) {
         (c.chatStatus !== 'Archived' || email === 'swapsutra@gmail.com') &&
         !ratedByUser[String(c.swapId || '')]
       );
-      return respondJson(visibleChats);
+      return respondJson(approvedPartner_(email) ? visibleChats.map(c => maskBuyerForPartner_(c, email)) : visibleChats);
     }
 
     if (action === 'getChatMessages') {
@@ -7001,7 +7002,7 @@ function doPostHandler_(e) {
     if (action === 'subscribeEventNotify' || action === 'notifyEvent') result = subscribeEventNotify(data);
     if (action === 'unsubscribeEventNotify') result = unsubscribeEventNotify(data);
     if (action === 'sendOTP') result = sendOTP(data.email, data.purpose);
-    if (action === 'verifyOTP') result = verifyOTP(data.email, data.otp);
+    if (action === 'verifyOTP') result = verifyOTP(data.email, data.otp, data.purpose);
     if (action === 'resolveSession') result = resolveSessionForProxy(data);
     if (action === 'sendChatMessage') result = sendChatMessage(data);
     if (action === 'uploadSwapProof') result = uploadSwapProof(data);
@@ -11465,7 +11466,7 @@ function buildLoginSuccessResponse(normEmail, extras) {
   return response;
 }
 
-function verifyOTP(email, otp) {
+function verifyOTP(email, otp, purpose) {
   const normEmail = normalizeEmail(email);
   if (!normEmail) return { success: false, message: "Email is required." };
 
@@ -11504,7 +11505,11 @@ function verifyOTP(email, otp) {
   // Data predicate for the same reason as sendOTP above — no session
   // exists until this call succeeds.
   const isExemptAuthEmail = isAdminEmail(normEmail);
-  if (!isExemptAuthEmail && !emailExistsInUsersSheet(normEmail)) {
+  // A partner (bookstore, author, publisher, promoter, library) verifies on
+  // /partners before it has an account — the code was sent with purpose
+  // "partner" for the same reason (launch check, 11 Oct 2026).
+  const isPartnerSignup = String(purpose || '') === 'partner';
+  if (!isExemptAuthEmail && !isPartnerSignup && !emailExistsInUsersSheet(normEmail)) {
     logActivity(normEmail, "OTP Verify Blocked", "No registered SwapSutra account for this email", "Failed", "Auth");
     return {
       success: false,
@@ -23050,7 +23055,12 @@ function adRows_() {
   const rows = [];
   for (let i = 1; i < values.length; i++) {
     const o = {};
-    headers.forEach(function (h, j) { o[h] = values[i][j] instanceof Date ? values[i][j].toISOString() : values[i][j]; });
+    headers.forEach(function (h, j) {
+      const v = values[i][j];
+      // Sheets turns "2026-10-15" into a Date at midnight of the sheet's
+      // time zone (India); read it back as the same India day (launch check).
+      o[h] = v instanceof Date ? ((h === 'startDate' || h === 'endDate') ? adDate_(v) : v.toISOString()) : v;
+    });
     if (String(o.id || '').trim()) rows.push({ rowIndex: i, obj: o });
   }
   return { headers: headers, rows: rows };
@@ -23113,6 +23123,15 @@ function recordAdClick(data) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(3000)) return { success: false };
   try {
+    // A partner's Library banner (id "PB-<partnerId>") counts on its partner row.
+    if (id.indexOf('PB-') === 0) {
+      const pr = partnerRows_();
+      const ph = pr.rows.find(function (r) { return String(r.obj.id) === id.slice(3); });
+      if (!ph || String(ph.obj.status) !== 'APPROVED') return { success: false };
+      const headers = ensureSheetHeaders(partnerSheet_(), PARTNER_HEADERS);
+      partnerSheet_().getRange(ph.rowIndex + 1, headers.indexOf('bannerClicks') + 1).setValue((Number(ph.obj.bannerClicks) || 0) + 1);
+      return { success: true };
+    }
     const sheet = adSheet_();
     const all = adRows_();
     const hit = all.rows.find(function (r) { return String(r.obj.id) === id; });
@@ -26633,7 +26652,7 @@ const PARTNER_HEADERS = [
   'contractVersion', 'contractSignedName', 'contractSignedAt', 'commissionPlan', 'commissionFreeUntil', 'approvedAt', 'approvedBy',
   'adsFreeUntil', 'reviewNote', 'createdAt', 'updatedAt', 'submittedAt',
   // 11 Oct 2026 (owner's request): an alternative mobile number and email.
-  'altPhone', 'altEmail'
+  'altPhone', 'altEmail', 'bannerClicks'
 ];
 const PARTNER_STATUSES = ['PENDING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUSPENDED'];
 const PARTNER_AD_PAYMENT_HEADERS = ['id', 'partnerId', 'email', 'amount', 'months', 'utr', 'screenshotUrl', 'status', 'periodFrom', 'periodTo', 'reviewedBy', 'reviewedAt', 'reason', 'createdAt'];
@@ -26681,6 +26700,24 @@ function partnerByEmail_(email) {
 }
 /** The approved (not suspended) partner record for an email, or null. Cached per run. */
 let __SS_PARTNER_CACHE__ = null;
+/**
+ * A row as a partner may see it (launch check, 11 Oct 2026): when the
+ * partner owns the book, every field about the requester (email, name,
+ * phone, address…) is replaced — the buyer stays with SwapSutra. Book ids
+ * and titles stay, so the request still works.
+ */
+function maskBuyerForPartner_(row, partnerEmail) {
+  if (!row || normalizeEmail(row.ownerEmail || row.receiverEmail || '') !== normalizeEmail(partnerEmail)) return row;
+  const out = Object.assign({}, row);
+  Object.keys(out).forEach(function (k) {
+    if (!/^(requester|sender)/i.test(k) || /(BookId|BookTitle|BookAuthor|Book)$/i.test(k)) return;
+    if (/email/i.test(k)) out[k] = 'buyer';
+    else if (/name/i.test(k)) out[k] = 'Buyer';
+    else out[k] = '';
+  });
+  return out;
+}
+
 function approvedPartner_(email) {
   const e = normalizeEmail(email);
   if (!e) return null;
@@ -26926,11 +26963,18 @@ function partnerNextSteps_(p, promo, ctx) {
 /** A partner's orders: book, amount, status, the step they must do — never who the buyer is. */
 function partnerOrders_(email) {
   const swaps = readSheetObjects_(getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests)).rows.map(r => r.obj)
-    .filter(o => normalizeEmail(o.ownerEmail) === email && ['pending', 'declined', 'rejected'].indexOf(String(o.status || '').toLowerCase()) === -1);
+    .filter(o => normalizeEmail(o.ownerEmail) === email && ['declined', 'rejected', 'cancelled'].indexOf(String(o.status || '').toLowerCase()) === -1);
   const out = [];
   swaps.slice(-60).forEach(o => {
     const item = { swapId: String(o.id), bookTitle: String(o.requestedBookTitle || 'A book'), serviceType: String(o.serviceType || '').toUpperCase(),
       amount: Number(o.amount || 0), status: String(o.status || ''), createdAt: o.createdAt ? new Date(o.createdAt).toISOString() : '', nextStep: '', step: 0 };
+    // A new request waits for the partner to accept it (launch check, 11 Oct 2026).
+    if (String(o.status || '').toLowerCase() === 'pending') {
+      item.nextStep = 'new request — accept or decline it in Cart → My orders → Requests';
+      item.urgent = true;
+      out.push(item);
+      return;
+    }
     try {
       const swap = loadSwapForCirculation(String(o.id));
       if (swap) {
@@ -26988,7 +27032,7 @@ function partnerPublicView_(p, forAdmin) {
     panMasked: p.panNumber ? String(p.panNumber).slice(0, 2) + '•••••' + String(p.panNumber).slice(-3) : '', aadhaarLast4: p.aadhaarLast4,
     typeFields: parseJson_(p.typeFieldsJson, {}),
     showBanner: truthy_(p.showBanner), runAds: truthy_(p.runAds), bannerImageUrl: p.bannerImageUrl, bannerHeadline: p.bannerHeadline,
-    bannerTagline: p.bannerTagline, bannerStatus: p.bannerStatus || '', bannerNote: p.bannerNote || '',
+    bannerTagline: p.bannerTagline, bannerStatus: p.bannerStatus || '', bannerNote: p.bannerNote || '', bannerClicks: Number(p.bannerClicks) || 0,
     contractVersion: p.contractVersion, contractSignedName: p.contractSignedName,
     contractSignedAt: p.contractSignedAt ? new Date(p.contractSignedAt).toISOString() : '',
     currentContractVersion: PARTNER_CONTRACT_VERSIONS[p.type] || '',
@@ -27100,6 +27144,8 @@ function uploadPartnerBanner(data) {
   const caller = normalizeEmail(getAuthenticatedEmail());
   const hit = partnerByEmail_(caller);
   if (!hit) return { success: false, error: 'NOT_PARTNER', message: 'Register as a partner first.' };
+  // Only an approved partner may put a public picture up (launch check, 11 Oct 2026).
+  if (String(hit.obj.status) !== 'APPROVED') return { success: false, error: 'NOT_APPROVED', message: 'You can add your banner once SwapSutra has approved your application.' };
   const saved = savePublicImage_(data, 'SwapSutra_Partner_Banners', 'banner_' + hit.obj.id + '_');
   if (!saved.success) return saved;
   setPartnerFields_(hit.rowIndex, partnerRows_().headers, { bannerImageUrl: saved.url, bannerStatus: 'PENDING', bannerNote: '', updatedAt: new Date() });
