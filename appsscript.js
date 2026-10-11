@@ -2896,6 +2896,15 @@ function doGetHandler_(e) {
         obj.receiverBookId = parties.requestedBookId;
         return obj;
       }).filter(r => normalizeEmail(r.requesterEmail) === email || normalizeEmail(r.ownerEmail) === email);
+      // Names for the screens (final check, 11 Oct 2026): the owner's public
+      // name (a partner's business name) and the requester's own name.
+      requests.forEach(r => {
+        try {
+          const partner = approvedPartner_(r.ownerEmail);
+          r.ownerName = partner && partner.name ? String(partner.name) : roomName_(r.ownerEmail);
+          r.requesterName = roomName_(r.requesterEmail);
+        } catch (err) { /* names are cosmetic */ }
+      });
       // A partner never learns who the buyer is (launch check, 11 Oct 2026).
       return respondJson(approvedPartner_(email) ? requests.map(r => maskBuyerForPartner_(r, email)) : requests);
     }
@@ -2961,7 +2970,22 @@ function doGetHandler_(e) {
         (c.chatStatus !== 'Archived' || email === 'swapsutra@gmail.com') &&
         !ratedByUser[String(c.swapId || '')]
       );
-      return respondJson(approvedPartner_(email) ? visibleChats.map(c => maskBuyerForPartner_(c, email)) : visibleChats);
+      // Final check (11 Oct 2026): each chat carries the other reader's name
+      // (a partner's business name), so screens never fall back to the
+      // front of someone's email address.
+      const named = visibleChats.map(c => {
+        if (email === 'swapsutra@gmail.com') return c;
+        const other = normalizeEmail(c.ownerEmail) === email ? c.requesterEmail : c.ownerEmail;
+        let otherName = '';
+        try {
+          const partner = approvedPartner_(other);
+          otherName = partner && partner.name ? String(partner.name) : roomName_(other);
+        } catch (err) { otherName = ''; }
+        return Object.assign({}, c, { otherName: otherName });
+      });
+      return respondJson(approvedPartner_(email)
+        ? named.map(c => normalizeEmail(c.ownerEmail) === email ? Object.assign(maskBuyerForPartner_(c, email), { otherName: 'Buyer' }) : c)
+        : named);
     }
 
     if (action === 'getChatMessages') {
@@ -3147,12 +3171,13 @@ function doGetHandler_(e) {
     }
 
     if (action === 'repairDatabase') {
-        if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: "Unauthorized" });
+        if (!isAuthorizedAdminEmail()) return respondJson({ success: false, message: "Unauthorized" });
         return respondJson(repairDatabase());
     }
 
 
     if (action === 'cleanupDuplicates') {
+      if (!isAuthorizedAdminEmail()) return respondJson({ success: false, message: "Unauthorized" });
       const results = removeDuplicateUsers();
       return respondJson(results);
     }
@@ -3240,6 +3265,9 @@ function doGetHandler_(e) {
           // The id is what the directory should navigate by. The email
           // field below it is legacy and should follow it out.
           entry.readerId = readerPublicId(email);
+          // Final check (11 Oct 2026): the directory is public, so it never
+          // carries anyone's email address (only the admin sees it).
+          if (!isAuthenticatedAdmin()) delete entry.email;
           return entry;
         });
 
@@ -3840,6 +3868,7 @@ function doGetHandler_(e) {
       }
     }
     if (action === 'listSheets') {
+      if (!isAuthorizedAdminEmail()) return respondJson({ success: false, message: "Unauthorized" });
       try {
         const ss = getSpreadsheet();
         const sheets = ss.getSheets();
@@ -4312,6 +4341,11 @@ function updateUserProfile(data) {
   };
 
   for (let key in updates) {
+    // Final check (11 Oct 2026): a field the request did not send is left as
+    // it is — saving one thing never blanks the others — and a name is never
+    // wiped to nothing.
+    if (updates[key] === undefined || updates[key] === null) continue;
+    if (key === 'name' && !String(updates[key]).trim()) continue;
     const colIdx = headers.indexOf(key);
     if (colIdx !== -1) {
       sheet.getRange(rowIndex + 1, colIdx + 1).setValue(updates[key]);
@@ -6978,7 +7012,10 @@ function doPostHandler_(e) {
     if (action === 'approveBook') result = approveBook(data);
     if (action === 'sendBookApprovalEmailOnce') result = sendBookApprovalEmailOnceForBook(data);
     if (action === 'updateSubscriptionDates') result = updateSubscriptionDates(data);
-    if (action === 'checkExpiredSubscriptions') result = checkExpiredSubscriptions();
+    if (action === 'checkExpiredSubscriptions') {
+      if (!isAuthorizedAdminEmail()) return respondJson({ success: false, message: "Unauthorized" });
+      result = checkExpiredSubscriptions() || { success: true, message: 'Memberships do not expire on the free plan.' };
+    }
     if (action === 'sendExpiryReminders') {
       if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: "Unauthorized" });
       result = sendMembershipExpiryReminders();
@@ -8876,7 +8913,7 @@ function respondToBookRequest(data) {
       });
     }
 
-    createNotification(requesterEmail, 'book_request_response', 'Someone responded to your book request', `${responderEmail.split('@')[0]} can help with "${request.title || 'your requested book'}".`, requestId);
+    createNotification(requesterEmail, 'book_request_response', 'Someone responded to your book request', `${publicReaderName('', responderEmail) || 'A reader'} can help with "${request.title || 'your requested book'}".`, requestId);
     try {
       const subject = "Someone responded to your SwapSutra book request";
       const content = `
@@ -9240,7 +9277,7 @@ function createSwapRequest(data) {
   headers.forEach((h, i) => {
     if (h === 'id') row[i] = id;
     else if (h === 'serviceType') row[i] = serviceType;
-    else if (h === 'requesterName') row[i] = data.requesterName || normalizedEmail.split('@')[0];
+    else if (h === 'requesterName') row[i] = publicReaderName('', normalizedEmail) || normalizedEmail.split('@')[0]; // the reader's own name, never one the request claims
     else if (h === 'requesterEmail') row[i] = normalizedEmail;
     else if (h === 'requesterPhone') row[i] = data.requesterPhone || '';
     else if (h === 'ownerEmail') row[i] = normalizeEmail(requestedBook.ownerEmail || data.receiverEmail || data.ownerEmail || '');
@@ -11707,7 +11744,8 @@ function verifyOTP(email, otp, purpose) {
 
 // REMOVED DUPLICATE logActivity function here
 
-const BASE_APP_URL = "https://ais-pre-dpzamjialbdsyvt3j6wets-457022929234.asia-southeast1.run.app";
+// Launch check (11 Oct 2026): the live site, not an old preview address.
+const BASE_APP_URL = "https://swapsutra.in";
 
 function subscribeEventNotify(data) {
   const headers = ["Timestamp", "FullName", "Email", "Mobile", "City", "SourcePage", "SubscriptionStatus", "Consent", "LastNotifiedAt", "LastNotificationEventID", "LastNotificationEventName", "NotificationCount", "UnsubscribeToken", "UnsubscribeStatus", "LastAttemptAt", "Notes"];
@@ -13470,7 +13508,12 @@ function formatNewsletterBody(text) {
 
 function findHeaderIndex(headers, candidates) {
   const normalized = headers.map(h => normalizeHeader(h));
-  return normalized.findIndex(h => candidates.includes(h));
+  // Final check (11 Oct 2026): the candidates are normalised the same way.
+  // Callers pass 'requesterEmail' / 'createdAt', which never matched the
+  // lower-cased headers — so, for one, a reader whose request expired was
+  // never told.
+  const wanted = (candidates || []).map(c => normalizeHeader(c));
+  return normalized.findIndex(h => wanted.includes(h));
 }
 
 function isTruthyValue(value) {
@@ -13755,8 +13798,8 @@ function sendTrustEmail(email) {
 
             <div class="card">
               <div class="card-num">1</div>
-              <div class="card-title">Verified Souls Only</div>
-              <p class="card-text">Every reader on SwapSutra is manually vetted. We verify profiles to ensure only genuine book-lovers join our circle.</p>
+              <div class="card-title">Verified Readers</div>
+              <p class="card-text">Every reader signs in with a verified email, and the SwapSutra team is part of every exchange chat.</p>
             </div>
 
             <div class="card">
@@ -13768,7 +13811,7 @@ function sendTrustEmail(email) {
             <div class="card">
                 <div class="card-num">3</div>
               <div class="card-title">The Condition Guarantee</div>
-              <p class="card-text">Condition proofs are uploaded before and after every swap. Your books are returned exactly as they left.</p>
+              <p class="card-text">Condition videos are recorded before and after every exchange, and refundable deposits protect your books while they travel.</p>
             </div>
 
             <div class="highlight">Your shelf. Your decision. Your books won’t travel alone.</div>
@@ -14437,6 +14480,12 @@ function createReadingRoomPost(data) {
     const content = String(data.content || '').trim();
     const bookTitle = String(data.bookTitle || '').trim();
     const bookAuthor = String(data.bookAuthor || '').trim();
+    // Final check (11 Oct 2026): the Reading Room is public, so the same
+    // contact-details gate as the chats and the Café.
+    if (content && !isAdminEmail(authorEmail)) {
+      const pii = scanMessageForPII(content);
+      if (pii.blocked) return { success: false, blocked: true, reason: 'PERSONAL_INFORMATION', message: piiWarningForCategory(pii.category) };
+    }
 
     // Photo posts. The browser sends the picture as a data URL (already
     // shrunk to ~1600px JPEG); it is stored in Drive and only the Drive link
@@ -14575,7 +14624,7 @@ function togglePostReaction(data) {
               authorEmail,
               'post_reaction',
               'New reaction in Reading Room',
-              `${userEmail.split('@')[0]} reacted to your post.`,
+              `${publicReaderName('', userEmail) || 'A reader'} reacted to your post.`,
               postId,
               { link: `/reading-room#post-${postId}` }
             );
@@ -14598,6 +14647,10 @@ function addPostComment(data) {
     const audioUrl = data.audioUrl || '';
     if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
     if (!comment && !audioUrl) return { success: false, message: "Comment or voice message required" };
+    if (comment && !isAdminEmail(userEmail)) {
+      const pii = scanMessageForPII(comment);
+      if (pii.blocked) return { success: false, blocked: true, reason: 'PERSONAL_INFORMATION', message: piiWarningForCategory(pii.category) };
+    }
     // Launch check (11 Oct 2026): only on a post that exists.
     {
       const pv = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts).getDataRange().getValues();
@@ -16610,6 +16663,10 @@ function runTrialConversionSequence() {
       else if (dayOfTrial >= 10) stage = 2;
       else if (dayOfTrial >= 3) stage = 1;
 
+      // Final check (11 Oct 2026): SwapSutra is free to join and nothing
+      // expires, so the "your free month ends / continue for ₹49" letters
+      // (stages 3 and 4) are never sent while registration is free.
+      if (freeRegistrationMode_() && stage > 2) stage = 2;
       if (stage === 0 || stage <= stageSent) continue;
 
       try {
@@ -16717,7 +16774,9 @@ function sendTrialSequenceEmail(email, stage) {
       + '<div class="benefit-item"><strong>' + stats.booksListed + '</strong> book' + (stats.booksListed === 1 ? '' : 's') + ' offered to the community</div>'
       + '<div class="benefit-item"><strong>' + stats.requestsSent + '</strong> request' + (stats.requestsSent === 1 ? '' : 's') + ' sent to other readers</div>'
       + '<div class="benefit-item"><strong>' + stats.swapsCompleted + '</strong> swap' + (stats.swapsCompleted === 1 ? '' : 's') + ' completed</div>'
-      + '<p>Twenty days of your free month remain. If there is a book you have been meaning to ask for, this is a good week for it.</p>';
+      + (freeRegistrationMode_()
+        ? '<p>If there is a book you have been meaning to ask for, this is a good week for it.</p>'
+        : '<p>Twenty days of your free month remain. If there is a book you have been meaning to ask for, this is a good week for it.</p>');
     ctaLink = site + '/browse';
     ctaText = 'Browse the Library';
   } else if (stage === 3) {
@@ -17495,6 +17554,10 @@ function buildLibraryPayload() {
       if (emailIdx !== -1 && ownerEmailIdx !== -1) {
         const ownerEmail = normalizeEmail(b.ownerEmail);
         if (isAdminEmail(ownerEmail)) return true;
+        // Final check (11 Oct 2026): an approved partner (bookstore, author,
+        // publisher, promoter, library) has no reader membership — its
+        // books are shown while the partnership is approved.
+        if (!subscriptionByEmail[ownerEmail]) return !!approvedPartner_(ownerEmail);
         const sub = subscriptionByEmail[ownerEmail];
         if (sub) {
           const computed = computeSubscriptionStatus(sub);
@@ -18986,7 +19049,8 @@ function runCirculationSla() {
       const when = new Date(obj.createdAt);
       if (isNaN(when.getTime())) continue;
       const key = String(obj.swapId);
-      if (!latest[key] || when > new Date(latest[key].createdAt)) latest[key] = obj;
+      // >= so that, at the same moment, the later row (the newer event) wins.
+      if (!latest[key] || when >= new Date(latest[key].createdAt)) latest[key] = obj;
     }
 
     const now = Date.now();
@@ -24486,7 +24550,10 @@ function returnNotify_(email, type, title, body, swapId, dedupeKey, opts) {
     // createNotification de-duplicates on dedupeKey, which is what stops the
     // daily job repeating a reminder. Its result tells us whether it was new.
     const res = createNotification(email, type, title, body, swapId, { link: '/profile', dedupeKey: dedupeKey });
-    if (res && (res.duplicate || res.deduped || res.skipped)) isNew = false;
+    // Final check (11 Oct 2026): createNotification returns the new id, or
+    // null when this notice was already sent — so the email (and WhatsApp)
+    // go out once, not again on every run of the hourly job.
+    if (!res) isNew = false;
   } catch (e) { Logger.log('returnNotify_ in-app failed: ' + e); }
   if (!isNew) return;
   try {
@@ -25057,15 +25124,42 @@ function adminDecideDeposits(data) {
     if (existing.some(f => String(f.swapId) === String(swap.obj.id) && String(f.leg) === leg)) {
       return { success: false, message: 'The ' + payerRole + ' deposit on this exchange has already been decided.' };
     }
+    // Final check (11 Oct 2026): on a rental the rent is the owner's whatever
+    // the dispute decides — it comes out of the renter's deposit first, and
+    // only the rest is refunded or forfeited.
+    let rentTaken = 0;
+    if (payerRole === 'requester' && String(swap.obj.serviceType || '').toUpperCase() === 'RENT') {
+      const rentFee = myFeeRecord_(swap.obj.id, 'requester');
+      if (rentFee && rentFee.adminStatus === 'ADMIN_APPROVED' && feeRecordBreakdown_(rentFee).depositAmount > 0) {
+        const prior = existing.find(f => String(f.swapId) === String(swap.obj.id) && String(f.leg) === 'rent');
+        rentTaken = prior ? Number(prior.grossAmount || prior.amount || 0) : Math.min(held, rentChargeFor_(swap.obj));
+      }
+    }
+    const available = held - rentTaken;
     let forfeit = 0;
     if (outcome === 'FORFEIT') {
-      forfeit = d.amount === undefined || d.amount === '' || d.amount === null ? held : Math.round(Number(d.amount));
-      if (!(forfeit > 0) || forfeit > held) return { success: false, message: 'The amount to forfeit must be between ₹1 and ₹' + held + '.' };
+      forfeit = d.amount === undefined || d.amount === '' || d.amount === null ? available : Math.round(Number(d.amount));
+      if (!(forfeit > 0) || forfeit > available) return { success: false, message: 'The amount to forfeit must be between ₹1 and ₹' + available + (rentTaken > 0 ? ' (the ₹' + rentTaken + ' rent goes to the owner first)' : '') + '.' };
     } else if (outcome !== 'REFUND') {
       return { success: false, message: 'Each deposit is either refunded or forfeited.' };
     }
     const payer = emailOf[payerRole];
     const other = emailOf[payerRole === 'owner' ? 'requester' : 'owner'];
+    if (rentTaken > 0 && !existing.some(f => String(f.swapId) === String(swap.obj.id) && String(f.leg) === 'rent')) {
+      const rentRec = {
+        id: generateId('SS_RENT_'), swapId: swap.obj.id, leg: 'rent', bookTitle: title,
+        defaulterEmail: payer, ownerEmail: swap.ownerEmail, amount: rentTaken, dueAt: '', forfeitedAt: new Date(),
+        payoutStatus: 'TO_PAY_OWNER', note: 'Rent for "' + title + '", taken from the renter\'s ₹' + held + ' deposit (dispute decision).'
+      };
+      const rentParts = partnerPayoutParts_(swap.ownerEmail, rentTaken, rentRec.forfeitedAt);
+      if (rentParts) {
+        rentRec.amount = rentParts.net; rentRec.grossAmount = rentTaken; rentRec.payoutCycle = rentParts.cycle;
+        rentRec.note += rentParts.commission ? ' Partner: − ₹' + rentParts.commission + ' commission.' : ' Partner: no commission.';
+        appendCommissionRow_(sheet, headers, String(swap.obj.id), title, swap.ownerEmail, rentParts.commission, rentParts.cycle, Math.round(rentParts.rate * 100) + '% commission on ₹' + rentTaken + ' rent.');
+      }
+      sheet.appendRow(headers.map(k => rentRec[k] !== undefined ? rentRec[k] : ''));
+      existing.push(rentRec);
+    }
     if (forfeit > 0) {
       const rec = {
         id: generateId('SS_FORFEIT_'), swapId: swap.obj.id, leg: leg, bookTitle: title,
@@ -25083,7 +25177,7 @@ function adminDecideDeposits(data) {
       sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
       existing.push(rec);
     }
-    let refund = held - forfeit;
+    let refund = available - forfeit;
     // Launch check (11 Oct 2026): the part of a paid deposit that is not
     // forfeited is actually refunded — queued for the admin to pay — minus
     // SwapSutra's ₹10 where the swap rule takes it from the deposit.
@@ -25111,12 +25205,13 @@ function adminDecideDeposits(data) {
       // A deposit that was never verified as paid has nothing to refund.
       refund = 0;
     }
+    const rentNote = rentTaken > 0 ? '₹' + rentTaken + ' of it is the rent, paid to the owner. ' : '';
     const message = forfeit > 0
-      ? '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
-      : (refund > 0 ? 'The deposit is refunded' + (refund < held ? ' (₹' + refund + ' after the ₹' + (held - refund) + ' platform fee)' : ' in full (₹' + refund + ')') : 'No deposit is kept') + '. Reason: ' + reason;
+      ? rentNote + '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
+      : rentNote + (refund > 0 ? 'The deposit is refunded' + (refund < available ? ' (₹' + refund + ' after the ₹' + (available - refund) + ' platform fee)' : rentTaken > 0 ? ' (₹' + refund + ')' : ' in full (₹' + refund + ')') : 'No deposit is kept') + '. Reason: ' + reason;
     [payer, other].forEach(email => returnNotify_(email, 'deposit_decided', 'Decision on the security deposit',
       'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + leg));
-    results.push({ payerRole: payerRole, held: held, forfeit: forfeit, refund: refund });
+    results.push({ payerRole: payerRole, held: held, rent: rentTaken, forfeit: forfeit, refund: refund });
   }
   try {
     appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'system', actionType: 'deposit_decided',
@@ -25316,6 +25411,16 @@ function adminDecideSale(data) {
     appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'system', actionType: 'sale_decided',
       actorEmail: normalizeEmail(getAuthenticatedEmail()), note: outcome + ' — ' + reason });
   } catch (e) { /* the payout record is the source of truth */ }
+  // Final check (11 Oct 2026): SwapSutra's decision ends the purchase, so the
+  // room closes with the decision in it — no "received"/"delivered" steps are
+  // left open afterwards.
+  try {
+    const closing = outcome === 'REFUND_BUYER'
+      ? 'SwapSutra has refunded the buyer for this purchase. Reason: ' + reason
+      : 'SwapSutra has released the payment to the seller. Reason: ' + reason;
+    appendStageEvent({ swapId: swap.obj.id, stage: 'ROOM', party: 'system', actionType: 'room_closed', actorEmail: 'swapsutra@gmail.com', note: closing.slice(0, 300) });
+    roomArchive_(swap, '🏁 ' + closing + ' This room is now closed — SwapSutra keeps the full record.', closing);
+  } catch (e) { Logger.log('adminDecideSale: room close failed ' + e); }
   return { success: true, outcome: outcome, message: outcome === 'REFUND_BUYER' ? 'The buyer\'s refund is queued in Payouts.' : 'The seller\'s payout is queued in Payouts.' };
 }
 
@@ -25813,7 +25918,10 @@ function computeExchangeRoom_(input) {
             push({ type: 'markDelivered', step: isBack ? 14 : 9, leg: l.leg, method: route.method });
           }
         });
-        legs.filter(l => l.youReceive && !l.receivedAt).forEach(l => {
+        // Final check (11 Oct 2026): the receiver is asked for the unboxing
+        // video only once the sender has handed the book over (or to the
+        // courier) — never while it is still on the sender's shelf.
+        legs.filter(l => l.youReceive && !l.receivedAt && has(l, 'HANDOVER')).forEach(l => {
           if (!has(l, 'RECEIVING')) push({ type: 'video', step: isBack ? 14 : 9, leg: l.leg, kind: 'RECEIVING' });
           else push({ type: 'markReceived', step: isBack ? 14 : 9, leg: l.leg, sale: sale && l.leg === 'outbound' && input.saleEscrow !== false });
         });
@@ -25844,7 +25952,7 @@ function computeExchangeRoom_(input) {
             push({ type: 'markDelivered', step: 14, leg: l.leg, method: backRoute.method });
           }
         });
-        legsB.filter(l => l.youReceive && !l.receivedAt).forEach(l => {
+        legsB.filter(l => l.youReceive && !l.receivedAt && has(l, 'HANDOVER')).forEach(l => {
           if (!has(l, 'RECEIVING')) push({ type: 'video', step: 14, leg: l.leg, kind: 'RECEIVING' });
           else push({ type: 'markReceived', step: 14, leg: l.leg, sale: false });
         });
@@ -26730,7 +26838,12 @@ function getMyOrders() {
       // stays in the cart, where the reader rates; then it is an order.
       const roomClosed = String((chats[id] || {}).chatStatus || '') === 'Archived' || evs.some(e => e.actionType === 'room_closed') || !!ratedByMe[id];
       let inReturn = null;
-      if (!done) {
+      // Final check (11 Oct 2026): an exchange SwapSutra closed with a decision
+      // (a disputed purchase refunded or released) is an order too, with the
+      // decision on it — it must not vanish from both the cart and My orders.
+      const decided = evs.filter(e => e.actionType === 'room_closed' && /^SwapSutra has /.test(String(e.note || ''))).pop() || null;
+      if (decided && !done) { /* listed below with its decision */ }
+      else if (!done) {
         // Not finished — but a book that has reached the reader and has to
         // come back is listed under "In return process".
         const swapR = loadSwapForCirculation(id);
@@ -26765,7 +26878,9 @@ function getMyOrders() {
         const rentCut = rentRow ? Number(rentRow.amount || 0) : 0;
         const feeRow = p.find(x => String(x.leg) === 'fee:' + role);
         const feeCut = feeRow ? Number(feeRow.amount || 0) : (role === 'requester' || role === 'owner' ? feeTakenFromDeposit_(swap.obj, caller, myFee, role) : 0);
-        deposit = forfeit ? { amount: paid.deposit, status: 'forfeited', note: 'Forfeited' + (forfeit.amount ? ' (₹' + forfeit.amount + ')' : '') }
+        deposit = forfeit ? { amount: paid.deposit, status: 'forfeited', note: 'Forfeited' + (forfeit.amount ? ' (₹' + forfeit.amount + ')' : '') +
+            (rentCut ? ' · ₹' + rentCut + ' rent to the owner' : '') +
+            (refund ? ' · ₹' + Number(refund.amount || 0) + (refund.payoutStatus === 'PAID_TO_OWNER' ? ' refunded to you' : ' coming back to you') : '') }
           : refund ? { amount: Number(refund.amount || paid.deposit), status: refund.payoutStatus === 'PAID_TO_OWNER' ? 'refunded' : 'refund_due', paidAt: refund.paidAt || '', rent: rentCut, fee: feeCut, of: paid.deposit }
           : rentCut >= paid.deposit ? { amount: 0, status: 'rent_used', rent: rentCut, of: paid.deposit }
           : { amount: paid.deposit, status: 'held', rent: role === 'requester' ? rentChargeFor_(swap.obj) : 0, fee: feeCut, of: paid.deposit };
@@ -26775,6 +26890,16 @@ function getMyOrders() {
       if (role === 'owner' && (type === 'SELL' || type === 'RENT')) {
         const p = (payouts[id] || []).find(x => String(x.leg) === (type === 'SELL' ? 'sale' : 'rent'));
         if (p) payout = { amount: Number(p.amount || 0), status: p.payoutStatus === 'PAID_TO_OWNER' ? 'paid' : 'due', paidAt: p.paidAt || '', kind: type === 'SELL' ? 'sale' : 'rent' };
+      }
+      // A deposit SwapSutra's decision (or a late return) awarded to this reader.
+      let awarded = null;
+      const won = (payouts[id] || []).filter(x => normalizeEmail(x.ownerEmail) === caller && Number(x.amount) > 0 &&
+        (/^dispute:/.test(String(x.leg)) || String(x.leg) === 'return' || String(x.leg) === 'counter_return'));
+      if (won.length) awarded = { amount: won.reduce((t, x) => t + Number(x.amount || 0), 0), status: won.every(x => x.payoutStatus === 'PAID_TO_OWNER') ? 'paid' : 'due' };
+      // A buyer refunded by SwapSutra's decision.
+      if (role === 'requester' && type === 'SELL') {
+        const p = (payouts[id] || []).find(x => String(x.leg) === 'sale_refund');
+        if (p) payout = { amount: Number(p.amount || 0), status: p.payoutStatus === 'PAID_TO_OWNER' ? 'paid' : 'due', paidAt: p.paidAt || '', kind: 'refund' };
       }
       const other = role === 'owner' ? swap.requesterEmail : swap.ownerEmail;
       orders.push({
@@ -26794,7 +26919,9 @@ function getMyOrders() {
         paid: paid,
         deposit: deposit,
         payout: payout,
-        completedAt: done && done.createdAt ? new Date(done.createdAt).toISOString() : '',
+        completedAt: done && done.createdAt ? new Date(done.createdAt).toISOString() : (decided && decided.createdAt ? new Date(decided.createdAt).toISOString() : ''),
+        decision: decided && !done ? String(decided.note || '') : '',
+        awarded: awarded,
         roomClosed: true
       });
     });

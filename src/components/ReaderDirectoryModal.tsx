@@ -9,7 +9,7 @@ import { X } from 'lucide-react';
 // component just renders whatever list it's handed.
 
 export interface ReaderDirectoryEntry {
-  email: string;
+  email?: string;
   readerId?: string;
   name?: string;
   area?: string;
@@ -69,7 +69,7 @@ export const ReaderDirectoryModal = memo(({ isOpen, onClose, readers, loading, q
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {readers.map((r) => (
                 <button
-                  key={r.email}
+                  key={r.readerId || r.email || r.name}
                   onClick={() => onSelectReader(r.readerId || '')}
                   className="text-left p-5 rounded-2xl border border-brand-border/60 hover:border-brand-gold/60 hover:bg-brand-gold/5 transition-all flex items-center gap-4"
                 >

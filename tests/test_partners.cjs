@@ -466,7 +466,7 @@ console.log('--- launch check (11 Oct 2026) ---');
   env.addSwap({ id: 'Q1', serviceType: 'SELL', amount: 300, status: 'Pending', requesterName: 'Ravi Reader', requesterPhone: '9811122233', createdAt: new Date(T0 - H) });
   const reqs = (() => { env.as('own@x.com'); return JSON.parse(JSON.stringify(vm.runInContext('maskBuyerForPartner_', env.ctx)({ ownerEmail: 'own@x.com', requesterEmail: 'req@x.com', senderEmail: 'req@x.com', requesterName: 'Ravi Reader', requesterPhone: '98111', requestedBookId: 'BK1', requestedBookTitle: 'Dune' }, 'own@x.com'))); })();
   C('Requests and chats hide the buyer from a partner (email, name, phone), keeping the book', reqs.requesterEmail === 'buyer' && reqs.senderEmail === 'buyer' && reqs.requesterName === 'Buyer' && reqs.requesterPhone === '' && reqs.requestedBookId === 'BK1' && reqs.requestedBookTitle === 'Dune', JSON.stringify(reqs));
-  C('...applied to getSwapRequests and getUserChats', /requests\.map\(r => maskBuyerForPartner_\(r, email\)\)/.test(gs) && /visibleChats\.map\(c => maskBuyerForPartner_\(c, email\)\)/.test(gs));
+  C('...applied to getSwapRequests and getUserChats', /requests\.map\(r => maskBuyerForPartner_\(r, email\)\)/.test(gs) && /named\.map\(c => normalizeEmail\(c\.ownerEmail\) === email \? Object\.assign\(maskBuyerForPartner_\(c, email\), \{ otherName: 'Buyer' \}\) : c\)/.test(gs));
   const dash = env.api.getMyPartner();
   C('A new request shows on the partner dashboard as the next step', dash.orders.some(o => o.swapId === 'Q1' && /accept or decline/.test(o.nextStep)) && dash.nextSteps.some(s => s.key === 'order_Q1'), JSON.stringify(dash.orders));
 
