@@ -63,6 +63,7 @@ function makeSpreadsheet() {
       appendRow: (row) => { data.push(row.map(v => (v === undefined || v === null ? '' : v))); return sheet; },
       deleteRow: (r) => { data.splice(r - 1, 1); return sheet; },
       deleteRows: (r, n) => { data.splice(r - 1, n); return sheet; },
+      deleteColumn: (c) => { data.forEach(row => { if (row.length >= c) row.splice(c - 1, 1); }); return sheet; },
       insertRowAfter: (r) => { data.splice(r, 0, []); return sheet; },
       insertRowsAfter: (r, n) => { for (let i = 0; i < n; i++) data.splice(r, 0, []); return sheet; },
       clear: () => { data.length = 0; return sheet; },

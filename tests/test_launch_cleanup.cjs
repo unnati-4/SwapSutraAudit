@@ -23,6 +23,20 @@ C('Preview lists the unused sheets and changes nothing', ['MembershipCoupons', '
 C('...and never offers to delete a sheet the site uses', !plan.remove.some(n => ['Users', 'Books', 'Subscriptions', 'Chats', 'Messages', 'Partners', 'PayoutAccounts'].includes(n)));
 const rm = run('launchRemoveUnusedSheets');
 C('Unused sheets are removed after a backup', rm.success && /backup/.test(rm.backupUrl) && !rt.sheets.MembershipCoupons && !rt.sheets.Sheet1 && rt.sheets.Users && rt.sheets.Books);
+// Columns: old junk in Subscriptions and Users, a nameless empty column, and a used one.
+const subs = rt.sheets.Subscriptions;
+subs._data[0].push('oldPremiumBadgeFlag', '', 'trialStartDate');
+subs._data.slice(1).forEach(r => { while (r.length < subs._data[0].length - 3) r.push(''); r.push('yes', '', r[subs._data[0].indexOf('trialStartDate')] || ''); });
+const otp = rt.sheets.OTP; const otpWidth = otp._data[0].length;
+const cp = run('launchColumnsPreview');
+const subPlan = (cp.find(p => p.sheet === 'Subscriptions') || { columns: [] }).columns.map(c => c.header);
+C('Column preview finds the unused columns (and only those)', subPlan.includes('oldPremiumBadgeFlag') && subPlan.includes('(no name)') && !subPlan.includes('trialStartDate') && !subPlan.includes('email'), JSON.stringify(subPlan));
+C('...never a column of a sheet written by position', !cp.some(p => p.sheet === 'OTP' && p.columns.some(c => c.col <= otpWidth)));
+const before2 = JSON.stringify(rt.rows('Subscriptions').map(r => [r.email, r.name]));
+const rc = run('launchRemoveUnusedColumns');
+C('Unused columns are removed after a backup; the data in the others stays put', rc.success && !rt.sheets.Subscriptions._data[0].includes('oldPremiumBadgeFlag') && JSON.stringify(rt.rows('Subscriptions').map(r => [r.email, r.name])) === before2);
+const t2 = H.login(rt, 'meera@gmail.com').token;
+C('...and the site still works on the trimmed sheets (sign in, list a book)', !!t2 && H.listBook(rt, t2, 'meera@gmail.com', { title: 'After cleanup' }).success);
 const r0 = run('launchResetAllData');
 C('The full reset refuses without the typed confirmation', r0.success === false && rt.rows('Users').length === 1);
 rt.props.CONFIRM_LAUNCH_RESET = 'DELETE-ALL';
