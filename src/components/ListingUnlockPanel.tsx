@@ -7,7 +7,7 @@ import { apiUrl } from '../config/runtime';
  * (20 books); after that it opens only from the profile's "list more
  * books" button (Oct 2026, owner's rule). Two ways past the limit:
  *   • pay ₹20 by UPI QR — SwapSutra verifies the UTR; it covers 3 months
- *   • a bookstore, author, publisher or promoter registers as a SwapSutra
+ *   • a bookstore, author, publisher, promoter or library registers as a SwapSutra
  *     partner (/partners) instead — partners list without a limit.
  * Coupon codes were removed on 9 Oct 2026 (owner's request).
  *
@@ -241,7 +241,7 @@ export default function ListingUnlockPanel({ open, onClose, onChange }: Props) {
 function PartnerHint() {
   return (
     <p className="text-xs text-[var(--text-secondary)] text-center leading-relaxed" data-testid="partner-hint">
-      A bookstore, author, publisher or promoter? <a href="/partners" className="font-semibold text-brand-gold-text underline">Register as a SwapSutra partner</a> — partners list without a limit.
+      A bookstore, author, publisher, promoter or library? <a href="/partners" className="font-semibold text-brand-gold-text underline">Register as a SwapSutra partner</a> — partners list without a limit.
     </p>
   );
 }

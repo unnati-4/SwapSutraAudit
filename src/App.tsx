@@ -3796,7 +3796,7 @@ const BookDetailModal = memo(({
                   {/* 9 Oct 2026: sold by a SwapSutra partner, with the copies left. */}
                   {(book as any).sellerType && (
                     <p className="text-xs text-[var(--text-secondary)]" data-testid="partner-seller">
-                      <span className="inline-block rounded-full bg-brand-gold/10 px-2 py-0.5 font-bold text-brand-gold-text">{({ bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' } as Record<string, string>)[(book as any).sellerType] || 'Partner'}</span>
+                      <span className="inline-block rounded-full bg-brand-gold/10 px-2 py-0.5 font-bold text-brand-gold-text">{({ bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter', library: 'Library' } as Record<string, string>)[(book as any).sellerType] || 'Partner'}</span>
                       {' '}{(book as any).sellerName}{Number((book as any).stock) > 0 ? ` · ${(book as any).stock} in stock` : ''}
                     </p>
                   )}
@@ -6180,7 +6180,7 @@ const routeToTab = (path: string): AppTab => {
     '/terms': 'terms',
     '/refund-policy': 'refund-policy',
     '/grievance': 'grievance',
-    // 9 Oct: bookstores, authors, publishers and promoters.
+    // 9 Oct: bookstores, authors, publishers, promoters and libraries.
     '/partners': 'partners',
     '/partner': 'partners',
     '/mugs': 'mugs',

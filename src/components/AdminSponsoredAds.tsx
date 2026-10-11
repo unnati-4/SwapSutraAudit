@@ -22,7 +22,7 @@ type Form = typeof EMPTY;
 
 const SPONSOR_LABEL: Record<string, string> = {
   bookstore: 'Bookstore name *', author: 'Author name *', publisher: 'Publisher name *',
-  promoter: 'Promoter / agency name *', book: 'Publisher / seller / author *',
+  promoter: 'Promoter / agency name *', library: 'Library name *', book: 'Publisher / seller / author *',
 };
 
 const PLACEMENT_LABEL: Record<string, string> = {
@@ -129,7 +129,7 @@ export default function AdminSponsoredAds() {
         <button type="button" className="mug-btn mug-btn--quiet" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
       </div>
       <p className="type-caption">
-        Advertise a bookstore, an author, a publisher, a promoter or a particular book. The ad shows on the Library banner and/or between the books on the shelf,
+        Advertise a bookstore, an author, a publisher, a promoter, a library or a particular book. The ad shows on the Library banner and/or between the books on the shelf,
         always marked “Sponsored”. The shelf is shuffled every time someone opens the Library, so ads and mugs land in new places.
       </p>
       {error && <p className="mug-field__error" role="alert">{error}</p>}
@@ -145,6 +145,7 @@ export default function AdminSponsoredAds() {
                 <option value="author">An author</option>
                 <option value="publisher">A publisher</option>
                 <option value="promoter">A promoter</option>
+                <option value="library">A library</option>
                 <option value="book">A particular book</option>
               </select>
               {errors.kind && <span className="mug-field__error" role="alert">{errors.kind}</span>}

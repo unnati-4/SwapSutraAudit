@@ -23175,7 +23175,7 @@ const AD_HEADERS = [
   'partnerId', 'reviewNote'
 ];
 // 11 Oct 2026 (owner's request): publishers and promoters too.
-const AD_KINDS = ['bookstore', 'author', 'publisher', 'promoter', 'book'];
+const AD_KINDS = ['bookstore', 'author', 'publisher', 'promoter', 'library', 'book'];
 const AD_PLACEMENTS = ['both', 'banner', 'shelf'];
 const AD_STATUSES = ['live', 'paused', 'removed', 'pending', 'rejected'];
 const AD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
@@ -23311,7 +23311,7 @@ function validateSponsoredAd_(data) {
   if (AD_STATUSES.indexOf(status) === -1) errors.status = 'Unknown status.';
   if (status === 'removed') return { errors: errors, clean: clean };
   if (status === 'rejected') { clean.status = 'rejected'; }
-  if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author, publisher, promoter or book.';
+  if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author, publisher, promoter, library or book.';
   if (AD_PLACEMENTS.indexOf(clean.placement) === -1) errors.placement = 'Choose where the ad shows.';
   if (!clean.sponsor) errors.sponsor = 'Who is the ad for? (the bookstore, author or publisher)';
   if (!clean.headline) errors.headline = 'Write a short headline.';
@@ -26886,10 +26886,11 @@ function toggleWishlist(data) {
      responsibility (see their contract).
    ════════════════════════════════════════════════════════════════════════ */
 
-const PARTNER_TYPES = ['bookstore', 'author', 'publisher', 'promoter'];
-const PARTNER_TYPE_LABEL = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' };
+// 11 Oct 2026 (owner's request): libraries register as partners too.
+const PARTNER_TYPES = ['bookstore', 'author', 'publisher', 'promoter', 'library'];
+const PARTNER_TYPE_LABEL = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter', library: 'Library' };
 /** Bump a type's version when its contract text changes; partners sign the current one. */
-const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-10b', author: 'author-2026-10-10b', publisher: 'publisher-2026-10-10b', promoter: 'promoter-2026-10-10b' };
+const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-11', author: 'author-2026-10-11', publisher: 'publisher-2026-10-11', promoter: 'promoter-2026-10-11', library: 'library-2026-10-11' };
 const PARTNER_HEADERS = [
   'id', 'type', 'email', 'status', 'name', 'contactName', 'phone', 'about', 'website', 'instagram',
   'address', 'city', 'pincode', 'lat', 'lng', 'placeLabel', 'registeredName', 'gstin', 'panNumber', 'aadhaarLast4',
@@ -26907,7 +26908,8 @@ const PARTNER_DOCS = {
   bookstore: { aadhaar: "Owner's Aadhaar (masked)", pan: "Owner's PAN card", businessProof: 'Shop registration / GST / Udyam / trade licence' },
   author: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' },
   publisher: { aadhaar: "Signatory's Aadhaar (masked)", pan: 'PAN card (business or signatory)', businessProof: 'Company / GST / Udyam registration' },
-  promoter: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' }
+  promoter: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' },
+  library: { aadhaar: "Librarian's / authorised person's Aadhaar (masked)", pan: 'PAN card (library, trust or authorised person)', businessProof: 'Library registration — trust / society / shop registration, or the school or college letter' }
 };
 const PARTNER_OPTIONAL_DOCS = { businessProof: 'Business proof (optional)', other: 'Any other document (optional)' };
 
@@ -27076,7 +27078,7 @@ function validatePartnerApplication_(d, existingDocs) {
   d = d || {};
   const errors = {};
   const type = String(d.type || '').toLowerCase();
-  if (PARTNER_TYPES.indexOf(type) === -1) errors.type = 'Choose bookstore, author, publisher or promoter.';
+  if (PARTNER_TYPES.indexOf(type) === -1) errors.type = 'Choose bookstore, author, publisher, promoter or library.';
   const clean = {
     type: type,
     name: cleanPartnerText_(d.name, 100), contactName: cleanPartnerText_(d.contactName, 80),
@@ -27108,12 +27110,12 @@ function validatePartnerApplication_(d, existingDocs) {
   }
   if (!/^\d{6}$/.test(clean.pincode)) errors.pincode = 'Enter a 6-digit pincode.';
   if (clean.city.length < 2) errors.city = 'City is required.';
-  if (type === 'bookstore' || type === 'publisher') {
+  if (type === 'bookstore' || type === 'publisher' || type === 'library') {
     if (clean.address.length < 8) errors.address = 'Enter the full address.';
     if (!(isFinite(clean.lat) && isFinite(clean.lng) && Math.abs(clean.lat) <= 90 && Math.abs(clean.lng) <= 180 && (clean.lat || clean.lng))) errors.location = 'Pin your location on Google Maps.';
   }
   if (!(isFinite(clean.lat) && isFinite(clean.lng)) || (!clean.lat && !clean.lng)) { clean.lat = ''; clean.lng = ''; }
-  if (clean.registeredName.length < 2) errors.registeredName = type === 'bookstore' || type === 'publisher'
+  if (clean.registeredName.length < 2) errors.registeredName = type === 'bookstore' || type === 'publisher' || type === 'library'
     ? 'Whose name is the business registered in?' : 'Your name as on your PAN card.';
   if (!validPan_(clean.panNumber)) errors.panNumber = 'Enter the PAN number (like ABCDE1234F).';
   if (!/^\d{4}$/.test(clean.aadhaarLast4)) errors.aadhaarLast4 = 'Enter the last 4 digits of the Aadhaar.';
@@ -27125,6 +27127,7 @@ function validatePartnerApplication_(d, existingDocs) {
   if (type === 'author') { pick('penName', 80); if (!pick('booksPublished', 400)) errors.booksPublished = 'Name at least one of your books.'; pick('genres', 200); }
   if (type === 'publisher') { pick('imprints', 200); pick('yearEstablished', 4); pick('genres', 200); }
   if (type === 'promoter') { if (!pick('promotes', 300)) errors.promotes = 'What do you promote (books, authors, events)?'; pick('clients', 300); }
+  if (type === 'library') { if (!pick('libraryType', 60)) errors.libraryType = 'What kind of library is it (public, private, school, college, community)?'; pick('openingHours', 120); pick('membership', 200); pick('collectionSize', 40); }
   // Documents: new uploads (data URLs) or ones already on file.
   const have = existingDocs || {};
   const docs = d.docs || {};

@@ -6,7 +6,7 @@ import { PartnerBannerPreview } from './partners/PartnerDashboard';
 /**
  * Admin → Partners (9 Oct 2026, owner's request).
  *
- * Bookstores, authors, publishers and promoters: applications with their
+ * Bookstores, authors, publishers, promoters and libraries: applications with their
  * documents (private Drive links), approve (2% commission) or approve
  * commission-free for the first year, ask for changes, reject, pause;
  * banners to check; ₹100 promotion payments to verify; and the monthly
@@ -113,7 +113,7 @@ export default function AdminPartners() {
         <button type="button" className="mug-btn mug-btn--quiet" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
       </div>
       <p className="type-caption">
-        Bookstores, authors, publishers and promoters. Approved partners list without a limit, pay no ₹10 fee, and SwapSutra keeps {data?.commissionPercent ?? 2}% of their payouts
+        Bookstores, authors, publishers, promoters and libraries. Approved partners list without a limit, pay no ₹10 fee, and SwapSutra keeps {data?.commissionPercent ?? 2}% of their payouts
         (0% for the first year if approved commission-free). Promotion: 6 months free, then ₹{data?.adFee ?? 100} per {data?.adMonths ?? 2} months. Partner ads are approved in the Ads tab.
       </p>
       <div className="admin-mugs__bar" role="tablist">

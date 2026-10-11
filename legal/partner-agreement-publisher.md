@@ -1,6 +1,6 @@
 # SwapSutra Publisher Partner Agreement
 
-**Version:** publisher-2026-10-10b
+**Version:** publisher-2026-10-11
 
 > Drafted for SwapSutra. Have an advocate review it before relying on it.
 

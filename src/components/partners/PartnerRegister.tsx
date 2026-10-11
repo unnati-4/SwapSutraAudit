@@ -5,18 +5,18 @@ import { fileForUpload, partnerPost, type PartnerView } from './partnerApi';
 
 /**
  * Partner registration (9 Oct 2026) — a separate form for each type:
- * bookstore, author, publisher, promoter. Google location, documents,
+ * bookstore, author, publisher, promoter, library. Google location, documents,
  * banner / ads choice, and the type's own agreement signed by typing the
  * full name. Used for a first application and for "changes requested".
  */
 
 const NAME_LABEL: Record<PartnerType, string> = {
-  bookstore: 'Bookstore name', author: 'Author name (as printed on your books)', publisher: 'Publisher / imprint name', promoter: 'Agency or promoter name',
+  bookstore: 'Bookstore name', author: 'Author name (as printed on your books)', publisher: 'Publisher / imprint name', promoter: 'Agency or promoter name', library: 'Library name',
 };
 const REGISTERED_LABEL: Record<PartnerType, string> = {
-  bookstore: 'Registered in the name of (owner / firm)', author: 'Your name as on your PAN card', publisher: 'Registered company / firm name', promoter: 'Your name (or firm) as on the PAN card',
+  bookstore: 'Registered in the name of (owner / firm)', author: 'Your name as on your PAN card', publisher: 'Registered company / firm name', promoter: 'Your name (or firm) as on the PAN card', library: 'Registered in the name of (trust / society / school / owner)',
 };
-const NEEDS_LOCATION: Record<PartnerType, boolean> = { bookstore: true, author: false, publisher: true, promoter: false };
+const NEEDS_LOCATION: Record<PartnerType, boolean> = { bookstore: true, author: false, publisher: true, promoter: false, library: true };
 const DOCS: Record<PartnerType, { key: string; label: string; required: boolean }[]> = {
   bookstore: [
     { key: 'aadhaar', label: "Owner's Aadhaar — masked (only the last 4 digits visible)", required: true },
@@ -41,6 +41,12 @@ const DOCS: Record<PartnerType, { key: string; label: string; required: boolean 
     { key: 'businessProof', label: 'Business registration (optional)', required: false },
     { key: 'other', label: 'Any other document (optional)', required: false },
   ],
+  library: [
+    { key: 'aadhaar', label: "Librarian's / authorised person's Aadhaar — masked (only the last 4 digits visible)", required: true },
+    { key: 'pan', label: 'PAN card (library, trust or authorised person)', required: true },
+    { key: 'businessProof', label: 'Library registration — trust / society / shop registration, or the school or college letter', required: true },
+    { key: 'other', label: 'Any other document (optional)', required: false },
+  ],
 };
 const TYPE_FIELDS: Record<PartnerType, { key: string; label: string; required?: boolean; placeholder?: string; long?: boolean }[]> = {
   bookstore: [
@@ -61,6 +67,12 @@ const TYPE_FIELDS: Record<PartnerType, { key: string; label: string; required?: 
   promoter: [
     { key: 'promotes', label: 'What do you promote?', required: true, placeholder: 'Books, authors, launches, literary events…', long: true },
     { key: 'clients', label: 'Authors / publishers / stores you work with', long: true },
+  ],
+  library: [
+    { key: 'libraryType', label: 'What kind of library?', required: true, placeholder: 'Public, private, school, college, community…' },
+    { key: 'openingHours', label: 'Opening hours', placeholder: 'e.g. 9 am – 7 pm, closed Sunday' },
+    { key: 'membership', label: 'Membership (if any)', placeholder: 'e.g. ₹200 a month, or free for students' },
+    { key: 'collectionSize', label: 'About how many books?', placeholder: 'e.g. 5,000' },
   ],
 };
 
@@ -171,7 +183,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
       <fieldset className="pp-fieldset">
         <legend>About you</legend>
         {text('name', NAME_LABEL[type] + ' *', { maxLength: 100 })}
-        {text('contactName', (type === 'bookstore' || type === 'publisher' ? 'Owner / authorised person — full name' : 'Your full name') + ' *', { maxLength: 80, autoComplete: 'name' })}
+        {text('contactName', (type === 'bookstore' || type === 'publisher' || type === 'library' ? 'Owner / librarian / authorised person — full name' : 'Your full name') + ' *', { maxLength: 80, autoComplete: 'name' })}
         {text('phone', 'Mobile number *', { inputMode: 'tel', autoComplete: 'tel', placeholder: '98xxxxxxxx' })}
         {/* 11 Oct 2026 (owner's request): a second way to reach the partner. */}
         {text('altPhone', 'Alternative mobile number (optional)', { inputMode: 'tel', autoComplete: 'off', placeholder: 'Another number we can call' })}
@@ -226,7 +238,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
           {text('panNumber', 'PAN number *', { maxLength: 10, autoComplete: 'off', placeholder: existing?.panMasked ? `On file: ${existing.panMasked} — type it again` : 'ABCDE1234F', style: { textTransform: 'uppercase' } })}
           {text('aadhaarLast4', 'Aadhaar — last 4 digits only *', { inputMode: 'numeric', maxLength: 4, autoComplete: 'off' })}
         </div>
-        {(type === 'bookstore' || type === 'publisher') && text('gstin', 'GSTIN (if registered)', { maxLength: 15, style: { textTransform: 'uppercase' } })}
+        {(type === 'bookstore' || type === 'publisher' || type === 'library') && text('gstin', 'GSTIN (if registered)', { maxLength: 15, style: { textTransform: 'uppercase' } })}
         {DOCS[type].map((d) => (
           <div className="pp-field" key={d.key}>
             <span className="pp-label">{d.label}{d.required ? ' *' : ''}</span>

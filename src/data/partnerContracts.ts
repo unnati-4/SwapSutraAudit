@@ -17,22 +17,23 @@
  * Drafted for SwapSutra — have an advocate review it before relying on it.
  */
 
-export type PartnerType = 'bookstore' | 'author' | 'publisher' | 'promoter';
+export type PartnerType = 'bookstore' | 'author' | 'publisher' | 'promoter' | 'library';
 
 export interface ContractSection { title: string; body: string[] }
 export interface PartnerContract { type: PartnerType; version: string; title: string; party: string; sections: ContractSection[] }
 
 const OPERATOR = 'Unnati Goyal, sole proprietor, trading as SwapSutra (Saharanpur, Uttar Pradesh, India; swapsutra@gmail.com)';
 
-export const PARTNER_LABEL: Record<PartnerType, string> = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' };
+export const PARTNER_LABEL: Record<PartnerType, string> = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter', library: 'Library' };
 
 const PARTY: Record<PartnerType, string> = {
   bookstore: 'the bookstore named in the registration, acting through its owner or authorised person ("the Bookstore")',
   author: 'the author named in the registration ("the Author")',
   publisher: 'the publisher or imprint named in the registration, acting through its authorised signatory ("the Publisher")',
   promoter: 'the promoter or agency named in the registration ("the Promoter")',
+  library: 'the library named in the registration, acting through its librarian or authorised person ("the Library")',
 };
-const YOU: Record<PartnerType, string> = { bookstore: 'the Bookstore', author: 'the Author', publisher: 'the Publisher', promoter: 'the Promoter' };
+const YOU: Record<PartnerType, string> = { bookstore: 'the Bookstore', author: 'the Author', publisher: 'the Publisher', promoter: 'the Promoter', library: 'the Library' };
 
 /** What each type does on SwapSutra (clause 1). */
 const SCOPE: Record<PartnerType, string[]> = {
@@ -52,6 +53,11 @@ const SCOPE: Record<PartnerType, string[]> = {
     'The Promoter may run ads and banners on SwapSutra for books, authors, bookstores or literary events it is authorised to promote, and may list books it is entitled to sell.',
     'The Promoter confirms it has the written permission of every author, publisher or business it promotes, and will produce that permission if SwapSutra asks.',
   ],
+  library: [
+    'The Library may lend, rent or sell books from its collection on SwapSutra without the 20-book limit that applies to readers, and must keep the number of copies available correct for every listing.',
+    'The Library confirms it owns, or is authorised to lend or sell, every book it lists, and that its own membership rules do not stop it from doing so.',
+    'The Library may show its banner on the SwapSutra Library page and run ads, as set out in clause 6.',
+  ],
 };
 
 function sections(type: PartnerType): ContractSection[] {
@@ -63,7 +69,7 @@ function sections(type: PartnerType): ContractSection[] {
       `${you} uses a partner account that is separate from any reader account, and is also bound by SwapSutra's Terms of Use, Privacy Policy, Community Guidelines and Refund & Security Deposit Policy. Where they differ, this agreement applies to ${you}'s partner activity.`,
     ] },
     { title: '2. Registration, documents and verification', body: [
-      `${you} gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), ${type === 'bookstore' || type === 'publisher' ? 'a business proof (GST certificate, shop & establishment registration, Udyam or trade licence), ' : ''}contact details and${type === 'bookstore' || type === 'publisher' ? ' the business location' : ' location (optional)'}.`,
+      `${you} gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), ${type === 'bookstore' || type === 'publisher' ? 'a business proof (GST certificate, shop & establishment registration, Udyam or trade licence), ' : type === 'library' ? 'a proof of the library (trust, society or shop registration, or a letter from the school or college), ' : ''}contact details and${type === 'bookstore' || type === 'publisher' || type === 'library' ? ' the business location' : ' location (optional)'}.`,
       'SwapSutra keeps these documents in private storage, uses them only to verify the partner, to pay them and to meet legal requirements, and does not show them to readers. Only the last 4 digits of the Aadhaar number are kept as text.',
       `${you} must tell SwapSutra within 7 days if any of these details change. SwapSutra may ask for fresh documents at any time and may pause the account until they are given.`,
     ] },
@@ -105,13 +111,13 @@ function sections(type: PartnerType): ContractSection[] {
       'This agreement is governed by the laws of India. Disputes are first raised with SwapSutra\'s grievance officer (swapsutra@gmail.com); if not resolved in 30 days, the courts at Saharanpur, Uttar Pradesh have jurisdiction.',
     ] },
     { title: '10. Signature', body: [
-      `By typing ${type === 'bookstore' || type === 'publisher' ? 'the owner\'s or authorised person\'s' : 'their'} full name and submitting the registration, ${you} signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and ${you} can see them in the partner dashboard.`,
+      `By typing ${type === 'bookstore' || type === 'publisher' || type === 'library' ? 'the owner\'s or authorised person\'s' : 'their'} full name and submitting the registration, ${you} signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and ${you} can see them in the partner dashboard.`,
     ] },
   ];
 }
 
-const VERSION_DATE = '2026-10-10b';
-export const PARTNER_CONTRACTS: Record<PartnerType, PartnerContract> = (['bookstore', 'author', 'publisher', 'promoter'] as PartnerType[])
+const VERSION_DATE = '2026-10-11';
+export const PARTNER_CONTRACTS: Record<PartnerType, PartnerContract> = (['bookstore', 'author', 'publisher', 'promoter', 'library'] as PartnerType[])
   .reduce((acc, type) => {
     acc[type] = {
       type,
@@ -119,7 +125,7 @@ export const PARTNER_CONTRACTS: Record<PartnerType, PartnerContract> = (['bookst
       title: `SwapSutra ${PARTNER_LABEL[type]} Partner Agreement`,
       party: PARTY[type],
       // "the Bookstore" opens many sentences: capitalise it there.
-      sections: sections(type).map((sec) => ({ ...sec, body: sec.body.map((p) => p.replace(/(^|[.;:] )the (Bookstore|Author|Publisher|Promoter)/g, '$1The $2')) })),
+      sections: sections(type).map((sec) => ({ ...sec, body: sec.body.map((p) => p.replace(/(^|[.;:] )the (Bookstore|Author|Publisher|Promoter|Library)/g, '$1The $2')) })),
     };
     return acc;
   }, {} as Record<PartnerType, PartnerContract>);

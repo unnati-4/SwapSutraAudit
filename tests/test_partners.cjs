@@ -192,7 +192,7 @@ const app = (o) => Object.assign({
   registeredName: 'Asha Owner', panNumber: 'ABCDE1234F', aadhaarLast4: '1234', showBanner: true, runAds: true,
   typeFields: { storeType: 'New + second-hand', openingHours: '10–8' },
   docs: { aadhaar: PNG, pan: PNG, businessProof: PDF },
-  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-10b'
+  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-11'
 }, o || {});
 const P = (env) => env.sheets.Partners;
 const pobj = (env) => { const s = P(env); const h = s._data[0]; const o = {}; h.forEach((k, i) => { o[k] = s._data[1][i]; }); return o; };
@@ -227,7 +227,7 @@ console.log('--- registration ---');
   const p = pobj(env);
   C('The alternative mobile and email are saved', p.altPhone === '9123456780' && p.altEmail === 'shop.alt@x.com', JSON.stringify([p.altPhone, p.altEmail]));
   C('...waiting for review, with the contract version, signature and time recorded',
-    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-10b' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
+    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-11' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
   C('Documents are saved in a private folder — never shared', env.files.length === 3 && env.files.every(f => /SwapSutra_Partner_Documents/.test(f.folder)) && env.shared.length === 0);
   C('Only the last 4 digits of the Aadhaar are kept as text', p.aadhaarLast4 === '1234' && !JSON.stringify(p).includes('aadhaarNumber'));
   C('The admin is told', env.notifications.some(x => x[0] === ADMIN && x[1] === 'partner_application'));
@@ -505,6 +505,29 @@ console.log('--- payment details (admin) ---');
   env.as(ADMIN);
   const up = env.api.uploadPaymentQrImage({ dataUrl: PNG });
   C('The admin can upload their own QR picture', up.success && /thumbnail/.test(up.url));
+}
+
+console.log('--- library partners (11 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  env.as('lib@x.com');
+  const lib = (o) => app(Object.assign({ type: 'library', name: 'Gomti Reading Library', contractVersion: 'library-2026-10-11',
+    typeFields: { libraryType: 'Community', openingHours: '9–7', membership: '₹200 a month', collectionSize: '5000' } }, o || {}));
+  const noKind = env.api.submitPartnerApplication(lib({ typeFields: {} }));
+  C('A library must say what kind of library it is', noKind.errors && noKind.errors.libraryType, JSON.stringify(noKind.errors));
+  const noLoc = env.api.submitPartnerApplication(lib({ lat: '', lng: '', docs: { aadhaar: PNG, pan: PNG } }));
+  C('...needs its Google location and its registration proof, like a bookstore', noLoc.errors && noLoc.errors.location && noLoc.errors.doc_businessProof, JSON.stringify(noLoc.errors));
+  C('...and signs the library agreement, not another type\'s', env.api.submitPartnerApplication(lib({ contractVersion: 'bookstore-2026-10-11' })).errors.contract);
+  const ok = env.api.submitPartnerApplication(lib());
+  const p = pobj(env);
+  C('A complete library application is received', ok.success && p.type === 'library' && p.contractVersion === 'library-2026-10-11' && /Community/.test(p.typeFieldsJson), JSON.stringify(ok));
+  C('The library agreement is published', fs.existsSync(path.join(root, 'legal/partner-agreement-library.md')) && /Library/.test(fs.readFileSync(path.join(root, 'src/data/partnerContracts.ts'), 'utf8')));
+  env.as(ADMIN);
+  const ad = env.api.saveSponsoredAd({ kind: 'library', sponsor: 'Gomti Reading Library', headline: 'Join for ₹200', tagline: 'Quiet seats, 5000 books',
+    imageUrl: 'https://drive.google.com/thumbnail?id=L', linkUrl: 'https://example.com', startDate: '2026-10-11', endDate: '2026-10-30', active: true });
+  C('The admin can run a library ad', ad.success, JSON.stringify(ad));
+  const ui = fs.readFileSync(path.join(root, 'src/components/AdminSponsoredAds.tsx'), 'utf8') + fs.readFileSync(path.join(root, 'src/utils/ads.ts'), 'utf8');
+  C('...and the console and the shelf know the library kind', /'library'/.test(ui) && /Visit the library/.test(ui));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
