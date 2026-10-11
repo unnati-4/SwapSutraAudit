@@ -60,7 +60,7 @@ export default function InviteReaders({ activeUserEmail }: { activeUserEmail?: s
   }, [activeUserEmail]);
 
   const shareMessage = state
-    ? `I've been swapping books with readers near me on SwapSutra. Join with my invite and we both get ${state.rewardDays} extra days: ${state.link}`
+    ? `I've been swapping books with readers near me on SwapSutra. It's free to join — come share your shelf: ${state.link}`
     : '';
 
   const shareOnWhatsApp = useCallback(() => {
@@ -116,7 +116,9 @@ export default function InviteReaders({ activeUserEmail }: { activeUserEmail?: s
 
       <p className="text-sm text-[var(--text-primary)] font-serif leading-relaxed">
         A shelf is only as good as the readers around it. Invite someone who reads —
-        when they list their first book, <strong>you both get {state.rewardDays} extra days</strong>.
+        {state.rewardDays > 0
+          ? <>when they list their first book, <strong>you both get {state.rewardDays} extra days</strong>.</>
+          : <>every book they list is one more you can ask for.</>}
       </p>
 
       <div className="space-y-2">

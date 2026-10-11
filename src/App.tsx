@@ -935,6 +935,7 @@ interface Subscription {
   booksListedCount: number;
   pincode?: string;
   area?: string;
+  createdAt?: string;
 }
 
 interface Book {
@@ -4712,8 +4713,7 @@ const ManagementConsole = memo(() => {
           {label: 'Area', key: 'area'},
           {label: 'Pincode', key: 'pincode'},
           {label: 'Membership Status', key: 'membershipStatus'},
-          {label: 'Payment/Admin Status', key: 'paymentStatus', render: (row: any) => row.paymentStatus || row.adminStatus},
-          {label: 'Expiry', key: 'subscriptionExpiry'},
+          {label: 'Joined', key: 'createdAt'},
           {label: 'Updated', key: 'updatedAt'}
         ];
         case 'books': return [{label: 'Title', key: 'title'}, {label: 'Owner Email', key: 'ownerEmail'}, statusColumn, {label: 'Created Date', key: 'createdAt'}];
@@ -16484,17 +16484,15 @@ export default function App() {
                                 </div>
                               )}
                               <div className="flex justify-between items-center text-2xs border-b border-brand-border/10 pb-3">
-                                <span className="text-[var(--text-secondary)] font-bold uppercase tracking-widest">Started On</span>
+                                <span className="text-[var(--text-secondary)] font-bold uppercase tracking-widest">Member Since</span>
                                 <span className="font-serif text-[var(--text-primary)] italic">
-                                  {profileData.subscription.adminStatus === 'Pending' ? 'Not started yet' : 
-                                   formatSubscriptionDate(getSubStart(profileData.subscription))}
+                                  {formatSubscriptionDate(getSubStart(profileData.subscription) || profileData.subscription.createdAt)}
                                 </span>
                               </div>
                               <div className="flex justify-between items-center text-2xs border-b border-brand-border/10 pb-3">
                                 <span className="text-[var(--text-secondary)] font-bold uppercase tracking-widest">Expires On</span>
                                 <span className="font-serif text-[var(--text-primary)] italic">
-                                  {profileData.subscription.adminStatus === 'Pending' ? 'TBD' : 
-                                   formatSubscriptionDate(getSubExpiry(profileData.subscription))}
+                                  {getSubExpiry(profileData.subscription) ? formatSubscriptionDate(getSubExpiry(profileData.subscription)) : 'Never — membership is free'}
                                 </span>
                               </div>
                             </div>
