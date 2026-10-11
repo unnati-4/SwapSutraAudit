@@ -59,8 +59,8 @@ check('5. Rent starts at a 10%-of-MRP suggestion', /Math\.round\(listingMrpNumbe
 check('6. Owners can change their prices when editing', /sellPrice: \(book as any\)\.ownerSellPrice/.test(app) && /placeholder="Your rent per month/.test(app));
 check('7. Book detail shows the owner\'s prices', /Owner's price · no deposit/.test(app) && /return in 21 days/.test(app));
 check('8. Swap form greys out books that don\'t match', /disabled=\{!m\.ok\}/.test(app) && /swapMatch\(showSwapModal as any, b as any\)/.test(app));
-check('9. Return rule shown before a rental or temporary swap is requested',
-  /\{showServiceModal\.serviceType === 'RENT' && <ReturnRuleNotice \/>\}/.test(app) && /\{swapFormPreference === 'Temporary' && <ReturnRuleNotice \/>\}/.test(app));
+check('9. Return rule shown before a rental, a loan or a temporary swap is requested',
+  /\{\(showServiceModal\.serviceType === 'RENT' \|\| showServiceModal\.serviceType === 'LEND'\) && <ReturnRuleNotice \/>\}/.test(app) && /\{swapFormPreference === 'Temporary' && <ReturnRuleNotice \/>\}/.test(app));
 check('10. Nearby radius is the reader\'s choice', /dist <= nearbyRadiusKm/.test(app) && /NEARBY_RADIUS_CHOICES = \[2, 5, 10, 25, 50, 100\]/.test(app) && !/dist <= 25\b/.test(app));
 check('11. Chat can send a map pin, and shows pins as maps', /action: 'shareChatLocation'/.test(app) && /m\.mediaType === 'location' && parseGeoUrl/.test(app));
 check('12. Delivery panel: route first, either reader, pin or courier', /action: 'setSwapRoute'/.test(tracker) && /meetingLat: pin\?\.lat/.test(tracker) && /Agree the route first/.test(tracker));

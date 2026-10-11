@@ -192,7 +192,8 @@ const app = (o) => Object.assign({
   registeredName: 'Asha Owner', panNumber: 'ABCDE1234F', aadhaarLast4: '1234', showBanner: true, runAds: true,
   typeFields: { storeType: 'New + second-hand', openingHours: '10–8' },
   docs: { aadhaar: PNG, pan: PNG, businessProof: PDF },
-  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-10'
+  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-11',
+  payout: { upiId: 'bookworms@okhdfcbank', payeeName: 'Asha Owner' }
 }, o || {});
 const P = (env) => env.sheets.Partners;
 const pobj = (env) => { const s = P(env); const h = s._data[0]; const o = {}; h.forEach((k, i) => { o[k] = s._data[1][i]; }); return o; };
@@ -217,22 +218,33 @@ console.log('--- registration ---');
   C('An old contract version is refused (they must read the current one)', env.api.submitPartnerApplication(app({ contractVersion: 'bookstore-2020' })).errors.contract);
   C('Not accepting the agreement is refused', env.api.submitPartnerApplication(app({ agree: false })).errors.agree);
   C('A document must be an image or a PDF', env.api.submitPartnerApplication(app({ docs: { aadhaar: 'data:text/html;base64,PGI+', pan: PNG, businessProof: PNG } })).errors.doc_aadhaar);
-  const ok = env.api.submitPartnerApplication(app());
+  // 11 Oct 2026 (owner's request): an alternative mobile and email, optional.
+  const alt = env.api.submitPartnerApplication(app({ altPhone: '12345', altEmail: 'not-an-email' }));
+  C('Alternative mobile and email: a wrong number or address is caught', alt.errors && alt.errors.altPhone && alt.errors.altEmail, JSON.stringify(alt.errors));
+  const same = env.api.submitPartnerApplication(app({ altPhone: '+919876543210', altEmail: 'OWN@x.com', mainEmail: 'someone@else.com' }));
+  C('...and must differ from the main mobile and the verified email (the email comes from the session, not the form)', same.errors && same.errors.altPhone && same.errors.altEmail, JSON.stringify(same.errors));
+  const ok = env.api.submitPartnerApplication(app({ altPhone: '91234 56780', altEmail: 'Shop.Alt@x.com' }));
   C('A complete bookstore application is received', ok.success && /^SS_PARTNER_/.test(ok.id), JSON.stringify(ok));
   const p = pobj(env);
+  C('The alternative mobile and email are saved', p.altPhone === '9123456780' && p.altEmail === 'shop.alt@x.com', JSON.stringify([p.altPhone, p.altEmail]));
   C('...waiting for review, with the contract version, signature and time recorded',
-    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-10' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
+    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-11' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
   C('Documents are saved in a private folder — never shared', env.files.length === 3 && env.files.every(f => /SwapSutra_Partner_Documents/.test(f.folder)) && env.shared.length === 0);
   C('Only the last 4 digits of the Aadhaar are kept as text', p.aadhaarLast4 === '1234' && !JSON.stringify(p).includes('aadhaarNumber'));
   C('The admin is told', env.notifications.some(x => x[0] === ADMIN && x[1] === 'partner_application'));
   C('Applying again while under review is refused', env.api.submitPartnerApplication(app()).error === 'UNDER_REVIEW');
   const mine = env.api.getMyPartner();
+  C('The partner sees their alternative contact on the dashboard', mine.partner.altPhone === '9123456780' && mine.partner.altEmail === 'shop.alt@x.com');
   C('The partner sees their status and what happens next (no documents links)', mine.partner.status === 'PENDING' && mine.nextSteps[0].key === 'wait' && !JSON.stringify(mine).includes('drive.google.com/file'));
   C('...and their PAN only masked', mine.partner.panMasked === 'AB•••••34F' && mine.partner.panNumber === undefined);
 
   env.as('req@x.com');
   C('A reader cannot review partners', env.api.adminReviewPartner({ id: ok.id, decision: 'approve' }).error === 'ADMIN_ONLY');
   C('A reader cannot list partners', env.api.adminListPartners().error === 'ADMIN_ONLY');
+  env.as('own@x.com');
+  C('The partner can change the alternative contact later', env.api.updatePartnerProfile({ altPhone: '9000011111', altEmail: 'second@x.com' }).success === true
+    && pobj(env).altPhone === '9000011111' && pobj(env).altEmail === 'second@x.com');
+  C('...but not to their main number or sign-in email', (() => { const r = env.api.updatePartnerProfile({ altPhone: '9876543210', altEmail: 'own@x.com' }); return r.success === false && r.errors.altPhone && r.errors.altEmail; })());
   env.as(ADMIN);
   const list = env.api.adminListPartners();
   C('The admin sees the application with links to its documents', list.items.length === 1 && list.items[0].docs.length === 3 && list.items[0].docs.every(d => /drive\.google\.com\/file\/d\//.test(d.url)) && list.items[0].panNumber === 'ABCDE1234F');
@@ -423,6 +435,56 @@ console.log('--- the buyer stays private ---');
   C('A partner verifies their email without a reader account (purpose "partner")', /const isPartnerSignup = String\(purpose \|\| ''\) === 'partner';/.test(gs) && /sendOTP\(data\.email, data\.purpose\)/.test(gs));
 }
 
+console.log('--- launch check (11 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  // A brand-new bookstore verifies its email code on /partners (no reader account).
+  env.ctx.logActivity = () => {};
+  env.ctx.Utilities.base64EncodeWebSafe = (v) => Buffer.from(typeof v === 'string' ? v : Buffer.from(v)).toString('base64url');
+  env.ctx.Utilities.computeHmacSha256Signature = (v, k) => Array.from(crypto.createHmac('sha256', String(k)).update(String(v)).digest());
+  const otp = env.ctx.getOrCreateSheet('OTP', ['id', 'email', 'otp', 'expiresAt', 'verified', 'createdAt']);
+  otp.appendRow(['O1', 'newstore@x.com', '482913', new Date(T0 + 60 * 60 * 1000), 'No', new Date(T0)]);
+  let v; try { v = env.api.verifyOTP('newstore@x.com', '482913', 'partner'); } catch (e) { v = { error: String(e) }; }
+  C('A new partner can verify the email code (purpose "partner") and gets a session', v && v.success === true && !!v.sessionToken, JSON.stringify(v));
+  otp.appendRow(['O2', 'stranger@x.com', '111222', new Date(T0 + 60 * 60 * 1000), 'No', new Date(T0)]);
+  let w; try { w = env.api.verifyOTP('stranger@x.com', '111222'); } catch (e) { w = { error: String(e) }; }
+  C('...an ordinary login code for an unknown email is still refused', w && w.code === 'EMAIL_NOT_REGISTERED', JSON.stringify(w));
+  const route = fs.readFileSync(path.join(root, 'src/components/partners/PartnersPage.tsx'), 'utf8');
+  C('The partner page sends purpose "partner" with the code', /partnerPost\('verifyOTP', \{[^}]*purpose: 'partner'/.test(route));
+  const srv = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
+  C('server.ts lets an applicant (no membership yet) see and send the application', /'getMyPartner', 'submitPartnerApplication', 'updatePartnerProfile'/.test(srv));
+  const reg = fs.readFileSync(path.join(root, 'src/components/partners/PartnerRegister.tsx'), 'utf8');
+  C('Documents fit in one request: PDFs under 1 MB, and the whole set is checked before sending', /fileForUpload\(file, \{ allowPdf: true, maxMb: 1 \}\)/.test(reg) && /totalBytes > 3\.6 \* 1024 \* 1024/.test(reg));
+
+  // A pending applicant cannot put a public banner up.
+  env.as('own@x.com');
+  env.api.submitPartnerApplication(app());
+  C('A partner that is not approved cannot upload a banner', env.api.uploadPartnerBanner({ dataUrl: PNG }).error === 'NOT_APPROVED');
+  env.as(ADMIN);
+  env.api.adminReviewPartner({ id: pobj(env).id, decision: 'approve' }); env.ctx.resetPartnerCache_();
+
+  // The buyer stays private in requests and chats.
+  env.addSwap({ id: 'Q1', serviceType: 'SELL', amount: 300, status: 'Pending', requesterName: 'Ravi Reader', requesterPhone: '9811122233', createdAt: new Date(T0 - H) });
+  const reqs = (() => { env.as('own@x.com'); return JSON.parse(JSON.stringify(vm.runInContext('maskBuyerForPartner_', env.ctx)({ ownerEmail: 'own@x.com', requesterEmail: 'req@x.com', senderEmail: 'req@x.com', requesterName: 'Ravi Reader', requesterPhone: '98111', requestedBookId: 'BK1', requestedBookTitle: 'Dune' }, 'own@x.com'))); })();
+  C('Requests and chats hide the buyer from a partner (email, name, phone), keeping the book', reqs.requesterEmail === 'buyer' && reqs.senderEmail === 'buyer' && reqs.requesterName === 'Buyer' && reqs.requesterPhone === '' && reqs.requestedBookId === 'BK1' && reqs.requestedBookTitle === 'Dune', JSON.stringify(reqs));
+  C('...applied to getSwapRequests and getUserChats', /requests\.map\(r => maskBuyerForPartner_\(r, email\)\)/.test(gs) && /named\.map\(c => normalizeEmail\(c\.ownerEmail\) === email \? Object\.assign\(maskBuyerForPartner_\(c, email\), \{ otherName: 'Buyer' \}\) : c\)/.test(gs));
+  const dash = env.api.getMyPartner();
+  C('A new request shows on the partner dashboard as the next step', dash.orders.some(o => o.swapId === 'Q1' && /accept or decline/.test(o.nextStep)) && dash.nextSteps.some(s => s.key === 'order_Q1'), JSON.stringify(dash.orders));
+
+  // Banner clicks are counted on the partner.
+  env.as('');
+  const pid = pobj(env).id;
+  C('A click on a partner banner is counted', env.api.recordAdClick({ id: 'PB-' + pid }).success === true && Number(pobj(env).bannerClicks) === 1);
+
+  // Ad dates: Sheets keeps "2026-10-15" as a Date at India midnight.
+  env.as(ADMIN);
+  const id = env.api.saveSponsoredAd({ kind: 'bookstore', sponsor: 'X', headline: 'H', imageUrl: 'https://i/x.jpg', linkUrl: 'https://x', placement: 'both', status: 'live', startDate: '2026-10-12', endDate: '2026-10-15' }).id;
+  const as = env.sheets.SponsoredAds; const ah = as._data[0]; const row = as._data.find(r => r[0] === id);
+  row[ah.indexOf('startDate')] = vm.runInContext('new Date("2026-10-11T18:30:00Z")', env.ctx); row[ah.indexOf('endDate')] = vm.runInContext('new Date("2026-10-14T18:30:00Z")', env.ctx);
+  const it = env.api.getAdminSponsoredAds().items.find(i => i.id === id);
+  C('Ad dates read back as the same India day (12 → 15 Oct)', it.startDate === '2026-10-12' && it.endDate === '2026-10-15', JSON.stringify([it.startDate, it.endDate]));
+}
+
 console.log('--- payment details (admin) ---');
 {
   const env = partnerEnv();
@@ -444,6 +506,47 @@ console.log('--- payment details (admin) ---');
   env.as(ADMIN);
   const up = env.api.uploadPaymentQrImage({ dataUrl: PNG });
   C('The admin can upload their own QR picture', up.success && /thumbnail/.test(up.url));
+}
+
+console.log('--- library partners (11 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  env.as('lib@x.com');
+  const lib = (o) => app(Object.assign({ type: 'library', name: 'Gomti Reading Library', contractVersion: 'library-2026-10-11',
+    typeFields: { libraryType: 'Community', openingHours: '9–7', membership: '₹200 a month', collectionSize: '5000' } }, o || {}));
+  const noKind = env.api.submitPartnerApplication(lib({ typeFields: {} }));
+  C('A library must say what kind of library it is', noKind.errors && noKind.errors.libraryType, JSON.stringify(noKind.errors));
+  const noLoc = env.api.submitPartnerApplication(lib({ lat: '', lng: '', docs: { aadhaar: PNG, pan: PNG } }));
+  C('...needs its Google location and its registration proof, like a bookstore', noLoc.errors && noLoc.errors.location && noLoc.errors.doc_businessProof, JSON.stringify(noLoc.errors));
+  C('...and signs the library agreement, not another type\'s', env.api.submitPartnerApplication(lib({ contractVersion: 'bookstore-2026-10-11' })).errors.contract);
+  const ok = env.api.submitPartnerApplication(lib());
+  const p = pobj(env);
+  C('A complete library application is received', ok.success && p.type === 'library' && p.contractVersion === 'library-2026-10-11' && /Community/.test(p.typeFieldsJson), JSON.stringify(ok));
+  C('The library agreement is published', fs.existsSync(path.join(root, 'legal/partner-agreement-library.md')) && /Library/.test(fs.readFileSync(path.join(root, 'src/data/partnerContracts.ts'), 'utf8')));
+  env.as(ADMIN);
+  const ad = env.api.saveSponsoredAd({ kind: 'library', sponsor: 'Gomti Reading Library', headline: 'Join for ₹200', tagline: 'Quiet seats, 5000 books',
+    imageUrl: 'https://drive.google.com/thumbnail?id=L', linkUrl: 'https://example.com', startDate: '2026-10-11', endDate: '2026-10-30', active: true });
+  C('The admin can run a library ad', ad.success, JSON.stringify(ad));
+  const ui = fs.readFileSync(path.join(root, 'src/components/AdminSponsoredAds.tsx'), 'utf8') + fs.readFileSync(path.join(root, 'src/utils/ads.ts'), 'utf8');
+  C('...and the console and the shelf know the library kind', /'library'/.test(ui) && /Visit the library/.test(ui));
+}
+
+console.log('--- payout details at registration (11 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  env.as('own@x.com');
+  const none = env.api.submitPartnerApplication(app({ payout: {} }));
+  C('A partner must say where to be paid (UPI or bank)', none.errors && none.errors.payout_upiId, JSON.stringify(none.errors));
+  const badBank = env.api.submitPartnerApplication(app({ payout: { accountName: 'Asha Owner', accountNumber: '12ab', ifsc: 'HDFC1234' } }));
+  C('A wrong account number or IFSC is caught', badBank.errors && badBank.errors.payout_accountNumber && badBank.errors.payout_ifsc, JSON.stringify(badBank.errors));
+  const ok = env.api.submitPartnerApplication(app({ payout: { accountName: 'Bookworms Pvt Ltd', accountNumber: '1234 5678 9012', ifsc: 'hdfc0001234', bankName: 'HDFC Bank' } }));
+  const acct = env.api.getPayoutAccount();
+  C('A bank account alone is enough, and is saved for the payouts', ok.success && acct.account && acct.account.bank && acct.account.bank.accountNumber === '123456789012' && acct.account.bank.ifsc === 'HDFC0001234' && !acct.account.upiId, JSON.stringify(acct));
+  env.as('req@x.com');
+  const r1 = env.api.savePayoutAccount({ accountName: 'Ravi Reader', accountNumber: '998877665544', ifsc: 'SBIN0001234' });
+  const r2 = env.api.savePayoutAccount({ upiId: 'ravi@okaxis', payeeName: 'Ravi Reader', accountName: 'Ravi Reader', accountNumber: '998877665544', ifsc: 'SBIN0001234' });
+  C('Readers can be paid to a bank account too, or both', r1.success && r2.success && r2.account.upiId === 'ravi@okaxis' && r2.account.bank.accountNumber === '998877665544' && /okaxis or a\/c ••••5544/.test(r2.message), JSON.stringify(r2));
+  C('Without either, nothing is saved', env.api.savePayoutAccount({}).success === false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

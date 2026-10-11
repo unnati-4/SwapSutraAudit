@@ -150,7 +150,7 @@ export const TermsOfUsePage = ({ navigateTo }: { navigateTo: Nav }) => (
       <UL items={[
         <><strong>Platform fee — ₹10 per reader, per exchange.</strong> <strong>Swap:</strong> nothing extra is paid up front — ₹10 is kept from each reader's security deposit when it is refunded. <strong>Lend:</strong> only the borrower pays ₹10, by UPI with the deposit; the owner pays nothing. <strong>Rent and sale:</strong> each reader pays ₹10 by UPI before the exchange chat opens.</>,
         <><strong>Listing limit.</strong> Each reader may list up to <strong>20 books</strong> free. To list more, <strong>₹20</strong> covers <strong>3 months</strong> of further listings (books already listed stay). Coupon codes are no longer used.</>,
-        <><strong>Partners.</strong> Bookstores, authors, publishers and promoters register separately at <a href="/partners" className="underline">/partners</a> and sign a partner agreement. Partners list without a limit, pay no ₹10 platform fee on their own books (the buyer always pays it) and pay SwapSutra a <strong>2% commission</strong> on payouts (0% for the first year if approved commission-free), paid monthly; their banner and ads are free for 6 months, then <strong>₹100 per 2 months</strong>. Partners ship and deliver their own orders. <strong>A buyer always pays the ₹10 platform fee</strong>, including when buying from a partner. Ads are always marked “Sponsored”.</>,
+        <><strong>Partners.</strong> Bookstores, authors, publishers, promoters and libraries register separately at <a href="/partners" className="underline">/partners</a> and sign a partner agreement. Partners list without a limit, pay no ₹10 platform fee on their own books (the buyer always pays it) and pay SwapSutra a <strong>2% commission</strong> on payouts (0% for the first year if approved commission-free), paid monthly; their banner and ads are free for 6 months, then <strong>₹100 per 2 months</strong>. Partners ship and deliver their own orders. <strong>A buyer always pays the ₹10 platform fee</strong>, including when buying from a partner. Ads are always marked “Sponsored”.</>,
       ]} />
       <p>We give 30 days' notice before any change to these amounts. A change never affects a fee you have already paid.</p>
     </S>
@@ -209,7 +209,7 @@ export const PrivacyPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
         <><strong>Optional profile:</strong> photo, short bio and favourite genres.</>,
         <><strong>Listings and exchanges:</strong> book details and photos, an approximate location, agreed terms, condition photos and handover confirmations.</>,
         <><strong>Messages:</strong> exchange chats and voice notes. Admins can read exchange chats to keep readers safe and settle disputes.</>,
-        <><strong>Payments:</strong> payment reference, amount and date. We never see your UPI PIN, card or bank details.</>,
+        <><strong>Payments:</strong> payment reference, amount and date. We never see your UPI PIN, card or net-banking password. <strong>Payouts:</strong> the UPI ID and/or bank account (holder's name, account number, IFSC) you give so SwapSutra can pay you — used only for that, and visible only to you and the SwapSutra admin.</>,
         <><strong>Technical:</strong> IP address and device type, for security.</>,
       ]} />
     </S>
@@ -272,12 +272,12 @@ export const RefundPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
       ]} />
       <p>If a deposit has not come back, raise it in the chat first, then with us within 14 days.</p>
       <Warn>
-        <strong>Please note:</strong> deposits are currently collected and released manually by SwapSutra, not held in a regulated escrow account. We will update this page when escrow is in place. If you would rather not pay a deposit on these terms, please avoid temporary exchanges.
+        <strong>Please note:</strong> deposits are currently collected and released manually by SwapSutra, not held in a regulated escrow account. We will update this page when escrow is in place. If you would rather not pay a deposit on these terms, please avoid temporary exchanges. <strong>Where the money is held:</strong> SwapSutra is run by its founder, Unnati Goyal, and every amount paid to SwapSutra (platform fees, deposits, purchase money, partner fees and payouts) is held in the founder's account — the UPI ID or bank account shown in every payment box — until it is refunded or paid out.
       </Warn>
     </S>
 
     <S title="Money between readers">
-      <p><strong>Purchases</strong> are paid to SwapSutra and held until the buyer has the book: a buyer whose seller cancels or never sends the book is refunded in full; if the buyer reports a problem, SwapSutra decides from the exchange videos. Rent and courier charges are paid directly between readers, and SwapSutra cannot refund them. Nothing here limits your rights under the Consumer Protection Act, 2019.</p>
+      <p><strong>Purchases</strong> are paid to SwapSutra and held until the buyer has the book: a buyer whose seller cancels or never sends the book is refunded in full; if the buyer reports a problem, SwapSutra decides from the exchange videos. Rent is taken from the renter’s deposit and paid to the owner; courier charges are paid directly between readers, and SwapSutra cannot refund them. Nothing here limits your rights under the Consumer Protection Act, 2019.</p>
     </S>
   </Shell>
 );

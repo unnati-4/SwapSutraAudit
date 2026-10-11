@@ -1,22 +1,23 @@
 import React, { useMemo, useState } from 'react';
+import PayoutFields, { EMPTY_PAYOUT, payoutErrors, type PayoutDetails } from '../PayoutFields';
 import { LocationPinPicker, LocationCard } from '../LocationPin';
 import { PARTNER_CONTRACTS, PARTNER_LABEL, type PartnerType } from '../../data/partnerContracts';
 import { fileForUpload, partnerPost, type PartnerView } from './partnerApi';
 
 /**
  * Partner registration (9 Oct 2026) — a separate form for each type:
- * bookstore, author, publisher, promoter. Google location, documents,
+ * bookstore, author, publisher, promoter, library. Google location, documents,
  * banner / ads choice, and the type's own agreement signed by typing the
  * full name. Used for a first application and for "changes requested".
  */
 
 const NAME_LABEL: Record<PartnerType, string> = {
-  bookstore: 'Bookstore name', author: 'Author name (as printed on your books)', publisher: 'Publisher / imprint name', promoter: 'Agency or promoter name',
+  bookstore: 'Bookstore name', author: 'Author name (as printed on your books)', publisher: 'Publisher / imprint name', promoter: 'Agency or promoter name', library: 'Library name',
 };
 const REGISTERED_LABEL: Record<PartnerType, string> = {
-  bookstore: 'Registered in the name of (owner / firm)', author: 'Your name as on your PAN card', publisher: 'Registered company / firm name', promoter: 'Your name (or firm) as on the PAN card',
+  bookstore: 'Registered in the name of (owner / firm)', author: 'Your name as on your PAN card', publisher: 'Registered company / firm name', promoter: 'Your name (or firm) as on the PAN card', library: 'Registered in the name of (trust / society / school / owner)',
 };
-const NEEDS_LOCATION: Record<PartnerType, boolean> = { bookstore: true, author: false, publisher: true, promoter: false };
+const NEEDS_LOCATION: Record<PartnerType, boolean> = { bookstore: true, author: false, publisher: true, promoter: false, library: true };
 const DOCS: Record<PartnerType, { key: string; label: string; required: boolean }[]> = {
   bookstore: [
     { key: 'aadhaar', label: "Owner's Aadhaar — masked (only the last 4 digits visible)", required: true },
@@ -41,6 +42,12 @@ const DOCS: Record<PartnerType, { key: string; label: string; required: boolean 
     { key: 'businessProof', label: 'Business registration (optional)', required: false },
     { key: 'other', label: 'Any other document (optional)', required: false },
   ],
+  library: [
+    { key: 'aadhaar', label: "Librarian's / authorised person's Aadhaar — masked (only the last 4 digits visible)", required: true },
+    { key: 'pan', label: 'PAN card (library, trust or authorised person)', required: true },
+    { key: 'businessProof', label: 'Library registration — trust / society / shop registration, or the school or college letter', required: true },
+    { key: 'other', label: 'Any other document (optional)', required: false },
+  ],
 };
 const TYPE_FIELDS: Record<PartnerType, { key: string; label: string; required?: boolean; placeholder?: string; long?: boolean }[]> = {
   bookstore: [
@@ -62,10 +69,16 @@ const TYPE_FIELDS: Record<PartnerType, { key: string; label: string; required?: 
     { key: 'promotes', label: 'What do you promote?', required: true, placeholder: 'Books, authors, launches, literary events…', long: true },
     { key: 'clients', label: 'Authors / publishers / stores you work with', long: true },
   ],
+  library: [
+    { key: 'libraryType', label: 'What kind of library?', required: true, placeholder: 'Public, private, school, college, community…' },
+    { key: 'openingHours', label: 'Opening hours', placeholder: 'e.g. 9 am – 7 pm, closed Sunday' },
+    { key: 'membership', label: 'Membership (if any)', placeholder: 'e.g. ₹200 a month, or free for students' },
+    { key: 'collectionSize', label: 'About how many books?', placeholder: 'e.g. 5,000' },
+  ],
 };
 
 type Form = {
-  name: string; contactName: string; phone: string; about: string; website: string; instagram: string; address: string; city: string; pincode: string;
+  name: string; contactName: string; phone: string; altPhone: string; altEmail: string; about: string; website: string; instagram: string; address: string; city: string; pincode: string;
   lat: number | null; lng: number | null; placeLabel: string; registeredName: string; gstin: string; panNumber: string; aadhaarLast4: string;
   showBanner: boolean; runAds: boolean; typeFields: Record<string, string>; agree: boolean; signedName: string;
 };
@@ -75,13 +88,15 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
 }) {
   const [type, setType] = useState<PartnerType | null>(existing?.type || initialType || null);
   const [form, setForm] = useState<Form>(() => ({
-    name: existing?.name || '', contactName: existing?.contactName || '', phone: existing?.phone || '', about: existing?.about || '',
+    name: existing?.name || '', contactName: existing?.contactName || '', phone: existing?.phone || '', altPhone: existing?.altPhone || '', altEmail: existing?.altEmail || '', about: existing?.about || '',
     website: existing?.website || '', instagram: existing?.instagram || '', address: existing?.address || '', city: existing?.city || '',
     pincode: existing?.pincode || '', lat: existing?.lat ?? null, lng: existing?.lng ?? null, placeLabel: existing?.placeLabel || '',
     registeredName: existing?.registeredName || '', gstin: existing?.gstin || '', panNumber: '', aadhaarLast4: existing?.aadhaarLast4 || '',
     showBanner: existing ? existing.showBanner : true, runAds: existing ? existing.runAds : true, typeFields: existing?.typeFields || {},
     agree: false, signedName: '',
   }));
+  // 11 Oct 2026 (owner's request): where SwapSutra pays the partner.
+  const [payout, setPayout] = useState<PayoutDetails>(() => ({ ...EMPTY_PAYOUT, payeeName: existing?.registeredName || '', accountName: '' }));
   const [docs, setDocs] = useState<Record<string, { dataUrl: string; name: string }>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [picking, setPicking] = useState(false);
@@ -103,7 +118,9 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
 
   const pickDoc = async (key: string, file?: File | null) => {
     if (!file) return;
-    const r = await fileForUpload(file, { allowPdf: true, maxMb: 4 });
+    // 11 Oct 2026 (launch check): everything is sent in one request, which
+    // the host caps at ~4.5 MB. Photos are shrunk; a PDF must be small.
+    const r = await fileForUpload(file, { allowPdf: true, maxMb: 1 });
     if (r.error) { setErrors((e) => ({ ...e, ['doc_' + key]: r.error! })); return; }
     setErrors((e) => ({ ...e, ['doc_' + key]: '' }));
     setDocs((d) => ({ ...d, [key]: { dataUrl: r.dataUrl!, name: file.name } }));
@@ -117,9 +134,22 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!type || !contract) return;
+    const totalBytes = Object.keys(docs).reduce((n, k) => n + String(docs[k]?.dataUrl || "").length, 0);
+    if (totalBytes > 3.6 * 1024 * 1024) {
+      setNote('Your documents are too large to send together. Upload photos instead of PDFs (photos are shrunk automatically), or smaller PDFs.');
+      return;
+    }
+    const pe = existing ? {} : payoutErrors(payout);
+    if (Object.keys(pe).length) {
+      setErrors(Object.fromEntries(Object.entries(pe).map(([k, v]) => ['payout_' + k, String(v)])));
+      setNote('Add where SwapSutra should pay you — a UPI ID or a bank account.');
+      window.setTimeout(() => document.querySelector('.pp-error, [data-testid="payout-fields"] [role="alert"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+      return;
+    }
     setBusy(true); setErrors({}); setNote('');
     try {
       const d = await partnerPost('submitPartnerApplication', {
+        payout: { ...payout, ifsc: payout.ifsc.trim().toUpperCase(), accountNumber: payout.accountNumber.replace(/\s+/g, '') },
         type, ...form, panNumber: form.panNumber.trim().toUpperCase(), gstin: form.gstin.trim().toUpperCase(),
         lat: form.lat ?? '', lng: form.lng ?? '',
         docs: Object.fromEntries(Object.keys(docs).map((k) => [k, docs[k].dataUrl])),
@@ -164,8 +194,11 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
       <fieldset className="pp-fieldset">
         <legend>About you</legend>
         {text('name', NAME_LABEL[type] + ' *', { maxLength: 100 })}
-        {text('contactName', (type === 'bookstore' || type === 'publisher' ? 'Owner / authorised person — full name' : 'Your full name') + ' *', { maxLength: 80, autoComplete: 'name' })}
+        {text('contactName', (type === 'bookstore' || type === 'publisher' || type === 'library' ? 'Owner / librarian / authorised person — full name' : 'Your full name') + ' *', { maxLength: 80, autoComplete: 'name' })}
         {text('phone', 'Mobile number *', { inputMode: 'tel', autoComplete: 'tel', placeholder: '98xxxxxxxx' })}
+        {/* 11 Oct 2026 (owner's request): a second way to reach the partner. */}
+        {text('altPhone', 'Alternative mobile number (optional)', { inputMode: 'tel', autoComplete: 'off', placeholder: 'Another number we can call' })}
+        {text('altEmail', 'Alternative email (optional)', { type: 'email', inputMode: 'email', autoComplete: 'off', placeholder: 'Another email we can write to' })}
         {TYPE_FIELDS[type].map((f) => (
           <label className="pp-field" key={f.key}>
             <span className="pp-label">{f.label}{f.required ? ' *' : ''}</span>
@@ -216,15 +249,22 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
           {text('panNumber', 'PAN number *', { maxLength: 10, autoComplete: 'off', placeholder: existing?.panMasked ? `On file: ${existing.panMasked} — type it again` : 'ABCDE1234F', style: { textTransform: 'uppercase' } })}
           {text('aadhaarLast4', 'Aadhaar — last 4 digits only *', { inputMode: 'numeric', maxLength: 4, autoComplete: 'off' })}
         </div>
-        {(type === 'bookstore' || type === 'publisher') && text('gstin', 'GSTIN (if registered)', { maxLength: 15, style: { textTransform: 'uppercase' } })}
+        {(type === 'bookstore' || type === 'publisher' || type === 'library') && text('gstin', 'GSTIN (if registered)', { maxLength: 15, style: { textTransform: 'uppercase' } })}
         {DOCS[type].map((d) => (
           <div className="pp-field" key={d.key}>
             <span className="pp-label">{d.label}{d.required ? ' *' : ''}</span>
             <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => pickDoc(d.key, e.target.files?.[0])} aria-label={d.label} />
-            <span className="pp-hint">{docs[d.key] ? `✓ ${docs[d.key].name}` : sameType && onFile.has(d.key) ? '✓ Already on file — upload again only to replace it' : 'JPG, PNG, WebP or PDF, under 4 MB'}</span>
+            <span className="pp-hint">{docs[d.key] ? `✓ ${docs[d.key].name}` : sameType && onFile.has(d.key) ? '✓ Already on file — upload again only to replace it' : 'A photo (any size — it is shrunk) or a PDF under 1 MB'}</span>
             {errors['doc_' + d.key] && <span className="pp-error" role="alert">{errors['doc_' + d.key]}</span>}
           </div>
         ))}
+      </fieldset>
+
+      <fieldset className="pp-fieldset" data-testid="partner-payout">
+        <legend>Where SwapSutra pays you{existing ? '' : ' *'}</legend>
+        <p className="pp-hint">Your monthly payouts (sales and rent, minus commission) go here. A UPI ID, a bank account, or both. {existing ? 'Leave blank to keep the details you already gave.' : ''}</p>
+        <PayoutFields value={payout} onChange={setPayout} inputClassName="input-classic pp-input" labelClassName="pp-label"
+          errors={Object.fromEntries(Object.entries(errors).filter(([k]) => k.startsWith('payout_')).map(([k, v]) => [k.slice(7), String(v)])) as Record<string, string>} />
       </fieldset>
 
       <fieldset className="pp-fieldset">

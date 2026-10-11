@@ -12,7 +12,7 @@ import { apiUrl } from '../config/runtime';
  *   are shuffled, and mugs and ads are dropped in between them.
  */
 
-export type AdKind = 'bookstore' | 'author' | 'book';
+export type AdKind = 'bookstore' | 'author' | 'publisher' | 'promoter' | 'library' | 'book';
 export type AdPlacement = 'both' | 'banner' | 'shelf';
 
 export interface SponsoredAd {
@@ -30,12 +30,13 @@ export interface SponsoredAd {
   partner?: boolean;
 }
 
-export const AD_KIND_LABEL: Record<AdKind, string> = { bookstore: 'Bookstore', author: 'Author', book: 'Book' };
+export const AD_KIND_LABEL: Record<AdKind, string> = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter', library: 'Library', book: 'Book' };
 
 export const adShowsOn = (ad: SponsoredAd, where: 'banner' | 'shelf') => ad.placement === 'both' || ad.placement === where;
 
 export const adCta = (ad: SponsoredAd) =>
-  ad.ctaLabel || (ad.kind === 'bookstore' ? 'Visit the store' : ad.kind === 'author' ? 'Meet the author' : 'See the book');
+  ad.ctaLabel || (ad.kind === 'bookstore' ? 'Visit the store' : ad.kind === 'author' ? 'Meet the author'
+    : ad.kind === 'publisher' ? 'See their books' : ad.kind === 'promoter' ? 'Find out more' : ad.kind === 'library' ? 'Visit the library' : 'See the book');
 
 /** A Google Drive share link → an image link a page can show. */
 export function adImageSrc(url: string): string {

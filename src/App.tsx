@@ -1268,12 +1268,14 @@ const bookAvailabilityFromBook = (book: Partial<Book> | any) => {
   const temporaryExchange = truthyFlag(book?.temporary_exchange) || swapMode === 'temporary';
   const rent = truthyFlag(book?.rent) || rentSaleMode === 'rent';
   const sell = truthyFlag(book?.sell) || rentSaleMode === 'sell' || rentSaleMode === 'sale';
-  return { permanentExchange, temporaryExchange, rent, sell };
+  // Launch check (11 Oct 2026): a book offered on loan can be borrowed.
+  const lend = truthyFlag(book?.lend);
+  return { permanentExchange, temporaryExchange, rent, sell, lend };
 };
 
 const bookHasPublicUse = (book: Partial<Book> | any) => {
   const flags = bookAvailabilityFromBook(book);
-  return flags.permanentExchange || flags.temporaryExchange || flags.rent || flags.sell;
+  return flags.permanentExchange || flags.temporaryExchange || flags.rent || flags.sell || flags.lend;
 };
 
 // 9 Oct 2026: a partner's book with no copies left stays off the shelf.
@@ -1292,6 +1294,7 @@ const readingStatusBadgesFromBook = (book: Partial<Book> | any) => {
     availability.permanentExchange ? 'Permanent Exchange' : '',
     availability.temporaryExchange ? 'Temporary Exchange' : '',
     availability.rent ? 'Rent' : '',
+    availability.lend ? 'Lend' : '',
     availability.sell ? 'Sell' : ''
   ].filter(Boolean);
 };
@@ -3094,12 +3097,14 @@ const LoginModal = memo(({
               </div>
               <div>
                 <h3 className="text-2xl font-serif text-[var(--text-primary)] mb-2">
-                  {loginStep === 'choice' ? 'Welcome to SwapSutra' : 'Welcome Back'}
+                  {loginStep === 'choice' ? 'Welcome to SwapSutra' : loginStep === 'otp' ? 'Check your email' : 'Welcome Back'}
                 </h3>
                 <p className="text-sm text-[var(--text-secondary)]">
                   {loginStep === 'choice'
                     ? "Tell us which one you're here for."
-                    : 'Enter your email to access your SwapSutra profile.'}
+                    : loginStep === 'otp'
+                      ? 'Enter the 6-digit code we just emailed you.'
+                      : 'Enter your email to access your SwapSutra profile.'}
                 </p>
                 {/* Name the book they were reaching for. A prompt that
                     says why it interrupted converts far better than one
@@ -3793,7 +3798,7 @@ const BookDetailModal = memo(({
                   {/* 9 Oct 2026: sold by a SwapSutra partner, with the copies left. */}
                   {(book as any).sellerType && (
                     <p className="text-xs text-[var(--text-secondary)]" data-testid="partner-seller">
-                      <span className="inline-block rounded-full bg-brand-gold/10 px-2 py-0.5 font-bold text-brand-gold-text">{({ bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' } as Record<string, string>)[(book as any).sellerType] || 'Partner'}</span>
+                      <span className="inline-block rounded-full bg-brand-gold/10 px-2 py-0.5 font-bold text-brand-gold-text">{({ bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter', library: 'Library' } as Record<string, string>)[(book as any).sellerType] || 'Partner'}</span>
                       {' '}{(book as any).sellerName}{Number((book as any).stock) > 0 ? ` · ${(book as any).stock} in stock` : ''}
                     </p>
                   )}
@@ -3980,7 +3985,7 @@ const BookDetailModal = memo(({
                     {(() => {
                       if (book.status?.toLowerCase() !== 'approved') return null;
                       // The ways THIS owner offers the book — nothing else is shown.
-                      const options: { key: 'SWAP' | 'RENT' | 'SELL'; title: string; detail: string; gate: string }[] = [];
+                      const options: { key: 'SWAP' | 'RENT' | 'SELL' | 'LEND'; title: string; detail: string; gate: string }[] = [];
                       if (canRequestExchange) {
                         options.push({
                           key: 'SWAP',
@@ -3997,6 +4002,13 @@ const BookDetailModal = memo(({
                           key: 'RENT', title: 'Rent',
                           detail: (Number(book.monthlyRent) > 0 ? `₹${book.monthlyRent} a month` : 'A monthly charge') + ' · 65% MRP refundable deposit · return in 21 days',
                           gate: 'Join SwapSutra to request a rental.',
+                        });
+                      }
+                      if (availability.lend) {
+                        options.push({
+                          key: 'LEND', title: 'Borrow',
+                          detail: 'No rent · 65% MRP refundable deposit + ₹10 · return in 21 days',
+                          gate: 'Join SwapSutra to borrow books.',
                         });
                       }
                       if (availability.sell) {
@@ -4531,7 +4543,7 @@ const ManagementConsole = memo(() => {
       return;
     }
     // Screens that load their own data (no generic fetch, no error banner).
-    if (['customMugs', 'sponsoredAds', 'paymentSettings', 'partners'].includes(currentTab)) { setLoading(false); return; }
+    if (['customMugs', 'sponsoredAds', 'paymentSettings', 'partners', 'securityFeeQueue', 'disputes', 'bookPricing', 'readerBadges'].includes(currentTab)) { setLoading(false); return; }
     let apiActions: string[] = [];
     if (currentTab === 'dashboard') apiActions = ['getAdminDashboardMetrics'];
     else if (currentTab === 'approvals') apiActions = ['getPendingMembershipApprovals'];
@@ -5481,7 +5493,7 @@ const ChatModal = memo(({
     };
 
     const otherParticipant = normalizeEmail(currentChat.ownerEmail) === activeUserEmail ? currentChat.requesterEmail : currentChat.ownerEmail;
-    const displayRecipient = getChatName(otherParticipant);
+    const displayRecipient = String((currentChat as any).otherName || '').trim() || getChatName(otherParticipant);
 
 
     return (
@@ -6170,7 +6182,7 @@ const routeToTab = (path: string): AppTab => {
     '/terms': 'terms',
     '/refund-policy': 'refund-policy',
     '/grievance': 'grievance',
-    // 9 Oct: bookstores, authors, publishers and promoters.
+    // 9 Oct: bookstores, authors, publishers, promoters and libraries.
     '/partners': 'partners',
     '/partner': 'partners',
     '/mugs': 'mugs',
@@ -6388,7 +6400,7 @@ export default function App() {
   // string has no price, so there was nothing to take the owner's 60% of.
   const [offeredBookId, setOfferedBookId] = useState('');
   const [depositQuote, setDepositQuote] = useState<{ requestedBookValue: number; offeredBookValue: number; requesterDeposit: number; ownerDeposit: number; ratePercent: number; requesterDepositRatePercent?: number; ownerDepositRatePercent?: number; requesterDepositEstimated?: boolean; ownerDepositEstimated?: boolean } | null>(null);
-  const [showServiceModal, setShowServiceModal] = useState<{ book: Book; serviceType: 'RENT' | 'SELL' } | null>(null);
+  const [showServiceModal, setShowServiceModal] = useState<{ book: Book; serviceType: 'RENT' | 'SELL' | 'LEND' } | null>(null);
   const [serviceModalPolicyAccepted, setServiceModalPolicyAccepted] = useState(false);
   const [showBookDetail, setShowBookDetail] = useState<Book | null>(null);
   const [showSubForm, setShowSubForm] = useState(false);
@@ -8473,12 +8485,21 @@ export default function App() {
     localStorage.setItem('swapsutraOnboardingCompleted', 'true');
   };
 
-  const advanceOnboarding = (toStep?: number) => {
+  // quiet: move the tour on without opening it over what the reader is
+  // doing (final check, 11 Oct 2026 — the step-2 card used to cover the
+  // email-code box right after Sign Up, and step 3 then talked about a
+  // review that no longer exists). The "resume" badge keeps it reachable.
+  const advanceOnboarding = (toStep?: number, opts?: { quiet?: boolean }) => {
     setShowOnboardingQuillIntro(false);
     if (toStep) {
       setOnboardingStep(toStep);
     } else if (onboardingStep < 5) {
       setOnboardingStep(prev => prev + 1);
+    }
+    if (opts?.quiet) {
+      setOnboardingOpen(false);
+      setShowResumeBadge(true);
+      return;
     }
     setOnboardingOpen(true);
     setShowResumeBadge(false);
@@ -8994,7 +9015,7 @@ export default function App() {
       // Onboarding Step 2 -> 3, exactly as the code path does.
       if (!onboardingCompleted && onboardingStep === 2) {
         localStorage.setItem('swapsutraSignedIn', 'true');
-        advanceOnboarding(3);
+        advanceOnboarding(3, { quiet: true });
       }
 
       setLoginEmail('');
@@ -9119,7 +9140,7 @@ export default function App() {
         // Onboarding Step 2 -> 3
         if (!onboardingCompleted && onboardingStep === 2) {
           localStorage.setItem('swapsutraSignedIn', 'true');
-          advanceOnboarding(3);
+          advanceOnboarding(3, { quiet: true });
         }
 
         // Cleanup
@@ -9446,7 +9467,7 @@ export default function App() {
       // Onboarding Step 3 -> 4
       if (!onboardingCompleted && onboardingStep === 3 && isActive) {
         localStorage.setItem('swapsutraOnboardingStep', '4');
-        advanceOnboarding(4);
+        advanceOnboarding(4, { quiet: true });
       }
     } else {
       setActiveSubscription(null);
@@ -10627,7 +10648,7 @@ export default function App() {
             setGoogleSignupPrefill(null);
             if (!onboardingCompleted && onboardingStep === 1) {
               localStorage.setItem('swapsutraJoined', 'true');
-              advanceOnboarding(2);
+              advanceOnboarding(2, { quiet: true });
             }
             const activation = await activateFreeTrialForEmail(normalizeEmail(newAccountEmail));
             if (!activation.success) {
@@ -10650,7 +10671,7 @@ export default function App() {
 
           if (!onboardingCompleted && onboardingStep === 1) {
             localStorage.setItem('swapsutraJoined', 'true');
-            advanceOnboarding(2);
+            advanceOnboarding(2, { quiet: true });
           }
 
           await beginPostSignupVerification(newAccountEmail);
@@ -10667,7 +10688,7 @@ export default function App() {
           setPaymentScreenshotError(null);
           if (!onboardingCompleted && onboardingStep === 1) {
             localStorage.setItem('swapsutraJoined', 'true');
-            advanceOnboarding(2);
+            advanceOnboarding(2, { quiet: true });
           }
           return;
         }
@@ -10704,7 +10725,7 @@ export default function App() {
         // Onboarding Step 1 -> 2
         if (!onboardingCompleted && onboardingStep === 1) {
           localStorage.setItem('swapsutraJoined', 'true');
-          advanceOnboarding(2);
+          advanceOnboarding(2, { quiet: true });
         }
       } else {
         if (data.code === 'EMAIL_EXISTS' || data.code === 'PHONE_EXISTS') {
@@ -11464,20 +11485,9 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        setSuccessMessage(status === 'Accepted' ? 'Swap accepted successfully. Your private chat is now live in My Profile → My Chats.' : `Swap request ${status.toLowerCase()} successfully.`);
+        setSuccessMessage(status === 'Accepted' ? 'Request accepted. The exchange room is open in Cart → Chats — record the book’s condition video first.' : `Request ${status.toLowerCase()}.`);
         
-        // Dispatch Notification to requester
-        const requestItem = swapRequests.find((r: any) => r.id === requestId || r.requestId === requestId);
-        const targetEmail = requestItem?.senderEmail || requestItem?.userEmail;
-        if (targetEmail) {
-          NotificationEngine.notifySwapEvent({
-            type: status === 'Accepted' ? 'swap_request_accepted' : 'swap_request_rejected',
-            recipientEmail: targetEmail,
-            senderName: activeUserEmail || 'Book Owner',
-            bookTitle: requestItem?.bookTitle || 'Book',
-            swapId: requestId
-          });
-        }
+        // The requester is told by SwapSutra itself (accept / decline on the server).
 
         if (data.chatId && activeUserEmail) {
           const chats = await fetch(`${API_URL}?action=getUserChats&email=${encodeURIComponent(activeUserEmail)}`).then(r => r.json());
@@ -11743,18 +11753,9 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         trackOnce('first_request_sent', { serviceType: 'SWAP' });
-        setSuccessMessage('Swap request sent. If the owner accepts, you each pay only your refundable deposit from the Stages tab — SwapSutra’s ₹10 platform fee is taken from it when it is refunded — and your chat opens once both are verified. Track it in My Profile → Swap Requests.');
+        setSuccessMessage('Swap request sent. If the owner accepts, your exchange room opens in Cart → Chats: there you each pay your refundable deposit (SwapSutra’s ₹10 fee is kept from it at the end; with no deposit, the ₹10 is paid up front). Track it in Cart → My orders.');
         
-        // Dispatch Notification to Book Owner
-        if (showSwapModal.ownerEmail) {
-          NotificationEngine.notifySwapEvent({
-            type: 'swap_request_received',
-            recipientEmail: showSwapModal.ownerEmail,
-            senderName: activeUserEmail,
-            bookTitle: showSwapModal.title || 'Your Book',
-            swapId: data.requestId || 'swap_req'
-          });
-        }
+        // The owner is told by SwapSutra itself (createSwapRequest), by name, never by email.
 
         setShowSwapModal(null); setOfferedBookId(''); setDepositQuote(null);
       } else {
@@ -11811,20 +11812,14 @@ export default function App() {
       if (data.success) {
         trackOnce('first_request_sent', { serviceType });
         setSuccessMessage(
-          serviceType === 'RENT'
-            ? 'Rent request sent. If the owner accepts, you each pay a ₹10 platform fee and you also pay a refundable deposit (the rent is paid to the owner from it) from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
-            : 'Buy request sent. If the owner accepts, you pay SwapSutra the price + ₹10 from the Stages tab; SwapSutra pays the seller after you have the book. Track it in My Profile → Swap Requests.'
+          serviceType === 'LEND'
+            ? 'Borrow request sent. If the owner accepts, your exchange room opens in Cart → Chats: you pay the refundable deposit + ₹10 there, and the deposit comes back when the book is returned. Track it in Cart → My orders.'
+          : serviceType === 'RENT'
+            ? 'Rent request sent. If the owner accepts, your exchange room opens in Cart → Chats: you pay the refundable deposit + ₹10 there, and the rent goes to the owner from the deposit. Track it in Cart → My orders.'
+            : 'Buy request sent. If the owner accepts, your exchange room opens in Cart → Chats: you pay SwapSutra the price + ₹10 there, and SwapSutra pays the seller after you have the book. Track it in Cart → My orders.'
         );
 
-        if (book.ownerEmail) {
-          NotificationEngine.notifySwapEvent({
-            type: 'swap_request_received',
-            recipientEmail: book.ownerEmail,
-            senderName: activeUserEmail,
-            bookTitle: book.title || 'Your Book',
-            swapId: data.requestId || 'swap_req'
-          });
-        }
+        // The owner is told by SwapSutra itself (createSwapRequest), by name, never by email.
 
         setShowServiceModal(null);
         setServiceModalPolicyAccepted(false);
@@ -13003,11 +12998,14 @@ export default function App() {
         onConfirm={quillPromptModal.onConfirm}
       />
 
+      {/* 10 Oct 2026 (owner's request): Quill stays out of every chat — a
+          circle's chat page and the exchange chat — where it covered the
+          chat summary and the message box. */}
       {/* Quill floats at bottom-24, which is exactly where the Café's
           composer now lives — the mascot would sit on top of the emoji
           key. A reader circle already hides him for the same reason; the
           Café hides him below xl, where the bottom nav also exists. */}
-      <div className={`quill-mobile ${footerInView && !isQuillOpen ? 'is-tucked' : ''} fixed bottom-24 left-4 z-[90] flex max-w-[calc(100vw-2rem)] flex-col items-start gap-3 sm:bottom-24 sm:left-7 xl:bottom-5 xl:sm:bottom-7 ${currentReadRouteCircleId ? 'hidden md:flex' : ''} ${activeTab === 'cafe' ? 'quill-cafe' : ''} ${activeTab === 'reader-circle' ? 'quill-readers-circle' : ''} ${activeTab === 'reader-circle' && currentReadFormOpen ? 'quill-form-open' : ''}`}>
+      <div className={`quill-mobile ${footerInView && !isQuillOpen ? 'is-tucked' : ''} fixed bottom-24 left-4 z-[90] flex max-w-[calc(100vw-2rem)] flex-col items-start gap-3 sm:bottom-24 sm:left-7 xl:bottom-5 xl:sm:bottom-7 ${currentReadRouteCircleId || activeChat ? 'hidden' : ''} ${activeTab === 'cafe' ? 'quill-cafe' : ''} ${activeTab === 'reader-circle' ? 'quill-readers-circle' : ''} ${activeTab === 'reader-circle' && currentReadFormOpen ? 'quill-form-open' : ''}`}>
         <AnimatePresence>
           {isQuillOpen && (
             <motion.aside
@@ -13678,7 +13676,7 @@ export default function App() {
                 <p className="text-base text-[var(--text-secondary)] leading-relaxed max-w-sm mx-auto">
                   {onboardingStep === 1 && 'Start by joining the SwapSutra community. Your registration powers the member registry.'}
                   {onboardingStep === 2 && 'Sign in with the same email you used while joining. We’ll send a magic code to verify.'}
-                  {onboardingStep === 3 && 'Our stewards are reviewing your reader access. This typically takes under 24 hours.'}
+                  {onboardingStep === 3 && 'We are setting up your account — it is usually ready the moment your email is confirmed.'}
                   {onboardingStep === 4 && 'Your access is active! List your first book to activate your shelf and discover others.'}
                   {onboardingStep === 5 && 'Congratulations! Your shelf is live. Now explore books shared by readers nearby.'}
                 </p>
@@ -13775,7 +13773,7 @@ export default function App() {
       <AnimatePresence>
         {/* Same reason as Quill: bottom-24 right-6 lands on the Café's
             send button. */}
-        {showResumeBadge && activeUserEmail && !footerInView && !onboardingCompleted && onboardingStep < 5 && activeTab !== 'cafe' && (
+        {showResumeBadge && activeUserEmail && !isAdmin && !footerInView && !onboardingCompleted && onboardingStep < 5 && activeTab !== 'cafe' && (
           <motion.div 
             initial={{ x: 100, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
@@ -14598,7 +14596,22 @@ export default function App() {
               {/* Height flows straight through to the room: motion.div ->
                   centring wrapper -> ReadersCafe, each h-full/min-h-0, so
                   the composer is always the last thing above the nav. */}
-              <div className="h-full min-h-0 max-w-3xl mx-auto sm:px-4 sm:py-4">
+              <div className="h-full min-h-0 max-w-3xl mx-auto sm:px-4 sm:py-4 flex flex-col">
+                {/* Final check (11 Oct 2026): "Chat" opens the Café, but a
+                    reader with an exchange in progress is usually looking
+                    for that room — so it is one tap away, right here. */}
+                {activeUserEmail && activeChats.some((c) => c.chatStatus !== 'Archived') && (
+                  <button
+                    type="button"
+                    data-testid="cafe-exchange-chats"
+                    onClick={() => { setCartView('chats'); navigateTo('cart'); }}
+                    className="shrink-0 mx-3 sm:mx-0 mt-2 mb-2 flex items-center justify-between gap-3 rounded-2xl border border-brand-border bg-[var(--bg-surface)] px-4 py-3 text-left text-sm text-[var(--text-primary)]"
+                  >
+                    <span>💬 Your exchange chats ({activeChats.filter((c) => c.chatStatus !== 'Archived').length}) — pay, videos and delivery</span>
+                    <span className="text-2xs font-bold uppercase tracking-widest text-brand-gold-text whitespace-nowrap">Open →</span>
+                  </button>
+                )}
+                <div className="flex-1 min-h-0">
                 <ReadersCafe
                   snapshot={cafe}
                   loading={cafeLoading}
@@ -14646,6 +14659,7 @@ export default function App() {
                   onBack={() => navigateTo('browse')}
                   onOpenReader={openReaderProfileById}
                 />
+                </div>
               </div>
             </motion.div>
           )}
@@ -18613,9 +18627,9 @@ export default function App() {
                       <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] px-4 py-4 text-center space-y-1">
                         <p className="text-2xs font-bold text-[var(--text-primary)] uppercase tracking-widest">No payment yet</p>
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed italic">
-                          If the owner accepts, you each pay your refundable deposit by UPI from the exchange's Stages tab — no separate fee. When the exchange is complete the deposit comes back minus SwapSutra's ₹10 platform fee. Your chat opens once SwapSutra verifies both payments.
+                          If the owner accepts, your exchange room opens in Cart → Chats, where you each pay your refundable deposit by UPI — no separate fee. When the exchange is complete the deposit comes back minus SwapSutra's ₹10 platform fee.
                         </p>
-                        <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book needs three short videos in the app: its condition and its packing (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides the deposit from these videos.</p>
+                        <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book is filmed in the app: its condition, packing and hand-over (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides from these videos.</p>
                       </div>
                     </div>
                   )}
@@ -18684,10 +18698,10 @@ export default function App() {
 
               <div className="text-center mb-10">
                 <span className="text-2xs font-bold uppercase tracking-eyebrow text-brand-gold-text mb-3 block">
-                  {showServiceModal.serviceType === 'RENT' ? 'Rental Interest' : 'Purchase Interest'}
+                  {showServiceModal.serviceType === 'RENT' ? 'Rental Interest' : showServiceModal.serviceType === 'LEND' ? 'Borrow' : 'Purchase Interest'}
                 </span>
                 <h3 className="text-3xl font-serif text-[var(--text-primary)] tracking-tight leading-tight">
-                  {showServiceModal.serviceType === 'RENT' ? 'Request to Rent' : 'Interest to Buy'}
+                  {showServiceModal.serviceType === 'RENT' ? 'Request to Rent' : showServiceModal.serviceType === 'LEND' ? 'Request to Borrow' : 'Interest to Buy'}
                 </h3>
                 <p className="mt-4 text-[var(--text-secondary)] text-sm font-medium italic opacity-70">
                   “{showServiceModal.book.title}” by {showServiceModal.book.author}
@@ -18701,14 +18715,16 @@ export default function App() {
                       <Icons.Shield size={20} />
                     </div>
                     <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                      {showServiceModal.serviceType === 'RENT'
-                        ? `This sends the owner a rental request. ${Number(showServiceModal.book.monthlyRent) > 0 ? `Rent is ₹${showServiceModal.book.monthlyRent} a month (the owner's price).` : ''} If they accept, you pay a security deposit of 65% of the MRP plus the ₹10 platform fee, and your chat opens once SwapSutra verifies it.`
+                      {showServiceModal.serviceType === 'LEND'
+                        ? `This asks the owner to lend you the book — no rent. If they accept, you pay a refundable security deposit of 65% of the MRP plus the ₹10 platform fee; the deposit comes back when you return the book within 21 days.`
+                        : showServiceModal.serviceType === 'RENT'
+                        ? `This sends the owner a rental request. ${Number(showServiceModal.book.monthlyRent) > 0 ? `Rent is ₹${showServiceModal.book.monthlyRent} a month (the owner's price).` : ''} If they accept, you pay a security deposit of 65% of the MRP (or the rent, if that is more) plus the ₹10 platform fee. The rent goes to the owner from the deposit and the rest comes back to you.`
                         : `This sends the owner a buy request. ${Number(showServiceModal.book.sellPrice) > 0 ? `The price is ₹${showServiceModal.book.sellPrice} (the owner's price).` : ''} If they accept, you pay SwapSutra the price + ₹10 platform fee by UPI. SwapSutra holds the money and pays the seller only after you have the book and close the purchase. No security deposit.`}
                     </p>
                   </div>
                 </div>
-                {showServiceModal.serviceType === 'RENT' && <ReturnRuleNotice />}
-                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book needs three short videos in the app: its condition and its packing (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides the deposit from these videos.</p>
+                {(showServiceModal.serviceType === 'RENT' || showServiceModal.serviceType === 'LEND') && <ReturnRuleNotice />}
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book is filmed in the app: its condition, packing and hand-over (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides from these videos.</p>
 
                 <textarea name="notes" placeholder={`A message for the owner (optional)...`} className="input-classic bg-[var(--input-bg)]" rows={2}></textarea>
 
@@ -18734,7 +18750,7 @@ export default function App() {
                 >
                   {submitting
                     ? 'Transmitting Request...'
-                    : (showServiceModal.serviceType === 'RENT' ? 'Send Rent Request' : 'Send Buy Interest')}
+                    : (showServiceModal.serviceType === 'RENT' ? 'Send Rent Request' : showServiceModal.serviceType === 'LEND' ? 'Send Borrow Request' : 'Send Buy Interest')}
                 </button>
               </form>
             </motion.div>

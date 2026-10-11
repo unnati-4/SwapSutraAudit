@@ -204,6 +204,7 @@ export default function AdminDisputeConsole() {
                     ownerEmail={d.swap?.ownerEmail}
                     requesterDeposit={Number(d.swap?.securityDeposit || 0)}
                     ownerDeposit={Number((d.swap as any)?.ownerDeposit || 0)}
+                    serviceType={d.swap?.serviceType}
                   />
                   <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)] pt-2">Close the dispute</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

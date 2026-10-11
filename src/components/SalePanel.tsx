@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import PayoutFields, { EMPTY_PAYOUT, payoutErrors, payoutFromAccount, type PayoutDetails } from './PayoutFields';
 import { apiUrl } from '../config/runtime';
 
 /**
@@ -184,37 +185,41 @@ export default function SalePanel({ swapId, archived }: { swapId: string; archiv
 
 /** Profile → Settings: where SwapSutra sends any money owed to you (sales, forfeited deposits). */
 export function PayoutAccountForm() {
-  const [acct, setAcct] = useState<{ upiId: string; payeeName: string; qrUrl: string } | null>(null);
-  const [upiId, setUpiId] = useState('');
-  const [payeeName, setPayeeName] = useState('');
+  const [acct, setAcct] = useState<any>(null);
+  const [v, setV] = useState<PayoutDetails>(EMPTY_PAYOUT);
   const [qr, setQr] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [errs, setErrs] = useState<Partial<Record<string, string>>>({});
   useEffect(() => { (async () => {
-    try { const d = await post({ action: 'getPayoutAccount' }); if (d?.success && d.account) { setAcct(d.account); setUpiId(d.account.upiId); setPayeeName(d.account.payeeName); } } catch { /* stays empty */ }
+    try { const d = await post({ action: 'getPayoutAccount' }); if (d?.success && d.account) { setAcct(d.account); setV(payoutFromAccount(d.account)); } } catch { /* stays empty */ }
   })(); }, []);
   const save = async () => {
+    const local = payoutErrors(v);
+    setErrs(local);
+    if (Object.keys(local).length) { setMsg(''); return; }
     setBusy(true); setMsg('');
     try {
       const fileData = qr ? await fileToDataUrl(qr) : undefined;
-      const d = await post({ action: 'savePayoutAccount', upiId: upiId.trim(), payeeName: payeeName.trim(), fileData });
+      const d = await post({ action: 'savePayoutAccount', ...v, upiId: v.upiId.trim(), payeeName: v.payeeName.trim(), fileData });
       setMsg(d.message || (d.success ? 'Saved.' : 'Could not save.'));
-      if (d.success) { setAcct(d.account); setQr(null); }
+      if (d.errors) setErrs(d.errors);
+      if (d.success) { setAcct(d.account); setQr(null); setErrs({}); }
     } catch { setMsg('Could not save. Check your connection.'); } finally { setBusy(false); }
   };
+  const current = acct ? [acct.upiId, acct.bank ? `${acct.bank.bankName ? acct.bank.bankName + ' ' : ''}a/c ••••${String(acct.bank.accountNumber).slice(-4)}` : ''].filter(Boolean).join(' or ') : '';
   return (
     <section className="classic-card p-6 bg-[var(--bg-surface)] space-y-3 max-w-xl mx-auto" data-testid="payout-account-form">
       <h3 className="font-serif text-xl text-[var(--text-primary)]">Where SwapSutra pays you</h3>
       <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-        Money owed to you — a book you sold, or a deposit awarded to you — is sent to this UPI ID.{acct ? ` Currently: ${acct.upiId}.` : ''}
+        Money owed to you — a book you sold, a refund, or a deposit awarded to you — is sent here. A UPI ID, a bank account, or both.{current ? ` Currently: ${current}.` : ''}
       </p>
-      <input value={upiId} onChange={(e) => setUpiId(e.target.value)} placeholder="UPI ID, e.g. name@okaxis" autoComplete="off" className="input-classic !py-2 text-xs w-full bg-[var(--bg-page)]" />
-      <input value={payeeName} onChange={(e) => setPayeeName(e.target.value)} placeholder="Name on the account" className="input-classic !py-2 text-xs w-full bg-[var(--bg-page)]" />
+      <PayoutFields value={v} onChange={setV} errors={errs} inputClassName="input-classic !py-2 text-xs w-full bg-[var(--bg-page)]" />
       <label className="block text-2xs text-[var(--text-secondary)]">
         UPI QR (optional){acct?.qrUrl ? ' — one is saved' : ''}
         <input type="file" accept="image/jpeg,image/png,image/webp" className="block mt-1 text-xs" onChange={(e) => setQr(e.currentTarget.files?.[0] || null)} />
       </label>
-      <button type="button" disabled={busy || !upiId.trim() || !payeeName.trim()} onClick={save}
+      <button type="button" disabled={busy} onClick={save}
         className="rounded-lg bg-brand-brown px-5 py-2 text-2xs font-bold uppercase tracking-widest text-white disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
       {msg && <p className="text-xs text-[var(--text-secondary)]" role="status">{msg}</p>}
     </section>

@@ -34,7 +34,11 @@ export interface CartOrder {
   paid: { total: number; sale: number; deposit: number; fee: number } | null;
   /** amount = what comes back; rent = the rent taken from it (rentals); of = the deposit paid. */
   deposit: { amount: number; status: 'refunded' | 'refund_due' | 'held' | 'forfeited' | 'rent_used'; note?: string; paidAt?: string; rent?: number; fee?: number; of?: number } | null;
-  payout: { amount: number; status: 'paid' | 'due'; paidAt?: string; kind?: 'sale' | 'rent' } | null;
+  payout: { amount: number; status: 'paid' | 'due'; paidAt?: string; kind?: 'sale' | 'rent' | 'refund' } | null;
+  /** SwapSutra's decision, when it closed a disputed exchange. */
+  decision?: string;
+  /** Deposit money awarded to this reader (late return or a dispute decision). */
+  awarded?: { amount: number; status: 'paid' | 'due' } | null;
   completedAt: string;
   /** sold · received · swapped · rented · lent · in_return */
   category?: string;
@@ -260,7 +264,7 @@ export default function CartPage(props: CartPageProps) {
                   <div className="cart-item__body">
                     <p className="cart-item__kind">
                       <span className="cart-chip">{kindOf(r.serviceType)}</span>
-                      <span>from {nameOf(r.receiverEmail)}</span>
+                      <span>from {(r as any).ownerName || nameOf(r.receiverEmail)}</span>
                     </p>
                     <h3 className="cart-item__title">{r.requestedBookTitle}</h3>
                     {(inr(r.amount) || inr(r.securityDeposit)) && (
@@ -274,7 +278,7 @@ export default function CartPage(props: CartPageProps) {
                       {s === 'accepted' ? (
                         <button type="button" className="cart-btn cart-btn--solid" onClick={() => p.onOpenRequestChat(r)}>Open chat</button>
                       ) : s === 'pending' ? (
-                        <span className="cart-item__wait">Waiting for {nameOf(r.receiverEmail)}</span>
+                        <span className="cart-item__wait">Waiting for {(r as any).ownerName || nameOf(r.receiverEmail)}</span>
                       ) : (
                         <button type="button" className="cart-btn" onClick={p.onBrowse}>Find another copy</button>
                       )}
@@ -300,9 +304,9 @@ export default function CartPage(props: CartPageProps) {
               return (
                 <li key={c.chatId}>
                   <button type="button" className="cart-chat" onClick={() => p.onOpenChat(c)} data-testid="cart-chat">
-                    <span className="cart-chat__avatar" aria-hidden="true">{nameOf(other).charAt(0)}</span>
+                    <span className="cart-chat__avatar" aria-hidden="true">{((c as any).otherName || nameOf(other)).charAt(0)}</span>
                     <span className="cart-chat__text">
-                      <span className="cart-chat__name">{nameOf(other)}</span>
+                      <span className="cart-chat__name">{(c as any).otherName || nameOf(other)}</span>
                       <span className="cart-chat__about">{isRequest ? 'Book request' : book || 'Swap'} · since {when(c.createdAt)}</span>
                     </span>
                     <span className="cart-chat__go" aria-hidden="true">›</span>
@@ -418,7 +422,7 @@ export default function CartPage(props: CartPageProps) {
                         <div className="cart-item__body">
                           <p className="cart-item__kind">
                             <span className="cart-chip">{kindOf(r.serviceType, false)}</span>
-                            <span>{nameOf(r.senderEmail)}</span>
+                            <span>{(r as any).requesterName || nameOf(r.senderEmail)}</span>
                           </p>
                           <h3 className="cart-item__title">{r.requestedBookTitle}</h3>
                           {inr(r.amount) && <p className="cart-item__price">{inr(r.amount)}</p>}
@@ -494,8 +498,12 @@ function OrderCard({ o, cover, onOpenChat }: { o: CartOrder; cover: string; onOp
           </p>
         ) : !o.payout ? <p className="cart-order__line">Nothing paid through SwapSutra</p> : null}
         {o.payout && (
-          <p className="cart-order__line">{o.payout.status === 'paid' ? `✓ ${inr(o.payout.amount)} paid to you` : `${inr(o.payout.amount)} on its way to you`} {o.payout.kind === 'rent' ? '(rent, from the renter’s deposit)' : '(book price minus the fee)'}</p>
+          <p className="cart-order__line">{o.payout.status === 'paid' ? `✓ ${inr(o.payout.amount)} paid to you` : `${inr(o.payout.amount)} on its way to you`} {o.payout.kind === 'rent' ? '(rent, from the renter’s deposit)' : o.payout.kind === 'refund' ? '(your refund)' : '(book price minus the fee)'}</p>
         )}
+        {o.awarded && (
+          <p className="cart-order__line">{o.awarded.status === 'paid' ? `✓ ${inr(o.awarded.amount)} paid to you` : `${inr(o.awarded.amount)} on its way to you`} (from the other reader’s deposit)</p>
+        )}
+        {o.decision && <p className="cart-order__line">{o.decision}</p>}
         {dep && (
           <p className={`cart-order__line ${dep.status === 'forfeited' ? 'is-bad' : ''}`}>
             {!dep.rent && dep.fee ? (dep.status === 'held' ? `Of your ${inr(dep.of)} deposit, ${inr(dep.fee)} is SwapSutra's fee · ` : `${inr(dep.fee)} platform fee taken from your ${inr(dep.of)} deposit · `) : ''}

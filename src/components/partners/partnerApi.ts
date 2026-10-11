@@ -35,7 +35,7 @@ export const monthLabel = (ym: string) => {
 };
 
 export interface PartnerView {
-  id: string; type: PartnerType; typeLabel: string; email: string; status: string; name: string; contactName: string; phone: string;
+  id: string; type: PartnerType; typeLabel: string; email: string; status: string; name: string; contactName: string; phone: string; altPhone?: string; altEmail?: string; bannerClicks?: number;
   about: string; website: string; instagram: string; address: string; city: string; pincode: string; lat: number | null; lng: number | null;
   placeLabel: string; registeredName: string; gstin: string; panMasked: string; aadhaarLast4: string; typeFields: Record<string, string>;
   showBanner: boolean; runAds: boolean; bannerImageUrl: string; bannerHeadline: string; bannerTagline: string; bannerStatus: string; bannerNote: string;
@@ -54,6 +54,6 @@ export interface PartnerDash {
   orders?: { swapId: string; bookTitle: string; serviceType: string; amount: number; status: string; createdAt: string; nextStep: string; step: number; closed?: boolean; urgent?: boolean }[];
   books?: { id: string; title: string; author: string; status: string; stock: number; sellPrice: number | null }[];
   ads?: { id: string; kind: string; sponsor: string; headline: string; tagline: string; imageUrl: string; linkUrl: string; bookId: string; ctaLabel: string; placement: string; status: string; reviewNote: string; clicks: number }[];
-  payoutAccount?: { upiId: string; payeeName: string } | null;
+  payoutAccount?: { upiId: string; payeeName: string; bank?: { accountName: string; accountNumber: string; ifsc: string; bankName: string } | null } | null;
   nextSteps?: { key: string; text: string; swapId?: string; urgent?: boolean }[];
 }

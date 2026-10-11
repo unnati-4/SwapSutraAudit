@@ -184,6 +184,17 @@ console.log('--- Apps Script: saving ads ---');
   C('Saving a missing ad is refused', env.api.saveSponsoredAd(ad({ id: 'AD-NOPE' })).success === false);
 }
 
+{
+  const env = makeEnv();
+  env.as(ADMIN);
+  // 11 Oct 2026 (owner's request): publishers and promoters can be advertised too.
+  const pub = env.api.saveSponsoredAd(ad({ kind: 'publisher', sponsor: 'Lotus Press', headline: 'New autumn list' }));
+  const pro = env.api.saveSponsoredAd(ad({ kind: 'promoter', sponsor: 'Readwell PR', headline: 'Book launch this Sunday' }));
+  C('The admin can place a publisher ad and a promoter ad', pub.success && pro.success, JSON.stringify([pub, pro]));
+  env.as(''); const served = env.api.getSponsoredAds().items; env.as(ADMIN);
+  C('...and the site gets them with their kind', served.some(a => a.kind === 'publisher' && a.sponsor === 'Lotus Press') && served.some(a => a.kind === 'promoter' && a.sponsor === 'Readwell PR'), JSON.stringify(served.map(a => a.kind)));
+}
+
 console.log('--- Apps Script: what the site gets ---');
 {
   const env = makeEnv();
@@ -261,6 +272,7 @@ const A = loadTs('src/utils/ads.ts', { '../config/runtime': { apiUrl: (p) => p }
   C('Ads choose banner / shelf', A.adShowsOn({ placement: 'both' }, 'banner') && A.adShowsOn({ placement: 'shelf' }, 'shelf') && !A.adShowsOn({ placement: 'shelf' }, 'banner'));
   C('A Google Drive share link becomes a picture link', A.adImageSrc('https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/view?usp=sharing') === 'https://drive.google.com/thumbnail?id=1AbCdEfGhIjKlMnOpQrStUvWxYz&sz=w1600');
   const cta = (k) => A.adCta({ kind: k, ctaLabel: '' });
+  C('Publisher and promoter ads have their own labels and buttons', A.AD_KIND_LABEL.publisher === 'Publisher' && A.AD_KIND_LABEL.promoter === 'Promoter' && cta('publisher') === 'See their books' && cta('promoter') === 'Find out more');
   C('Default button words per kind', cta('bookstore') === 'Visit the store' && cta('author') === 'Meet the author' && cta('book') === 'See the book');
 }
 
@@ -283,7 +295,7 @@ console.log('--- the site ---');
   C('Every ad slide is marked Sponsored and links out as sponsored', /sponsored: true,/.test(comp) && /rel=\{s\.sponsored \? 'sponsored noopener noreferrer'/.test(mascot) && /<span className="ss-ad__chip">Sponsored<\/span>/.test(mascot));
   C('A mug on the shelf opens the mug shop', /onOpen=\{\(\) => navigateTo\('mugs'\)\}/.test(app));
   C('Admin has an Ads tab', /id: 'sponsoredAds', label: 'Ads'/.test(app) && /tab === 'sponsoredAds' && <AdminSponsoredAds \/>/.test(app) && /import\('\.\/components\/AdminSponsoredAds'\)/.test(admin.length ? app : ''));
-  C('The admin form covers bookstore / author / book, picture, link, listing, where, dates', ['"bookstore"', '"author"', '"book"', "'uploadSponsoredAdImage'", "field('linkUrl'", "field('bookId'", "set('placement')", "field('startDate'", "field('endDate'"].every(s => admin.includes(s)));
+  C('The admin form covers bookstore / author / publisher / promoter / book, picture, link, listing, where, dates', ['"bookstore"', '"author"', '"publisher"', '"promoter"', '"book"', "'uploadSponsoredAdImage'", "field('linkUrl'", "field('bookId'", "set('placement')", "field('startDate'", "field('endDate'"].every(s => admin.includes(s)));
   const T = loadTs('src/components/AdminSponsoredAds.tsx', { react: { createElement() {}, useEffect() {}, useMemo() {}, useState() {} }, '../config/runtime': { apiUrl: (p) => p }, '../utils/imageCompress': {}, '../utils/ads': {} });
   C('A pasted SwapSutra book link gives the listing id', T.bookIdFromInput('https://swapsutra.in/book/BK42') === 'BK42' && T.bookIdFromInput('BK42') === 'BK42' && T.bookIdFromInput('not an id!') === '');
   for (const p of ['api/swapsutra.ts', 'server.ts']) C(`${p} lets visitors fetch ads and count a click`, /'getSponsoredAds', 'recordAdClick'/.test(read(p)));

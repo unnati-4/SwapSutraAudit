@@ -1,6 +1,6 @@
 # SwapSutra Promoter Partner Agreement
 
-**Version:** promoter-2026-10-10
+**Version:** promoter-2026-10-11
 
 > Drafted for SwapSutra. Have an advocate review it before relying on it.
 
@@ -26,6 +26,8 @@ The Promoter must tell SwapSutra within 7 days if any of these details change. S
 
 Buyers pay SwapSutra through the site. SwapSutra holds the money until the buyer has received the book and closed the purchase (or 7 days after receipt with no problem reported), as set out in the Refund & Security Deposit Policy.
 
+SwapSutra is run by its founder, Unnati Goyal. All money paid to SwapSutra — buyers' payments, security deposits, the Promoter's promotion fees and the money waiting for the Promoter's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is paid out or refunded under this agreement.
+
 The Promoter keeps every listing accurate — title, edition, condition, price and the number of copies in stock — and marks a book out of stock as soon as it is no longer available. An order the Promoter cannot fulfil must be cancelled in the exchange room straight away; repeated cancellations may lead to suspension.
 
 Every order runs in its exchange room: the condition video, packaging video, courier name and tracking ID, and the steps the room asks for must be completed within the times it shows.
@@ -46,7 +48,7 @@ SwapSutra keeps a commission of 2% of every payout to the Promoter (the sale pri
 
 If SwapSutra approves the Promoter "commission-free", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.
 
-Payouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID the Promoter saves in the partner dashboard. The dashboard shows every order, the commission kept and what was paid.
+Payouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID or bank account the Promoter gives at registration (it can be changed in the partner dashboard). The dashboard shows every order, the commission kept and what was paid.
 
 The Promoter is responsible for its own taxes (including GST where it applies) on its sales. SwapSutra may change the commission rate or the fees with at least 30 days' notice by email; The Promoter may end this agreement before the change applies.
 

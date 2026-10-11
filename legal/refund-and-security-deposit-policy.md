@@ -101,10 +101,12 @@ A deposit is **security, not a fee**.
 >
 > If you would prefer not to place a deposit under this interim arrangement, please do
 > not use Temporary exchanges. We will update this page the moment escrow is live.
+>
+> **Where the money is held.** SwapSutra is run by its founder, **Unnati Goyal** (sole proprietor, trading as SwapSutra). Every amount paid to SwapSutra — platform fees, security deposits, purchase money held until the buyer has the book, rent taken from a deposit, partner promotion fees and money waiting for a partner's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is refunded or paid out as set out here.
 
 ## B2. How much may be asked for
 
-The deposit is **65% of the book's printed MRP**, for a swap, a rental or a loan, whatever the book's condition. In a swap, both readers pay one, each on the book they receive. A purchase has no deposit. SwapSutra works the amount out; readers cannot change it.
+The deposit is **65% of the book's printed MRP**, for a swap, a rental or a loan, whatever the book's condition — for a rental, never less than the rent, because the rent is paid to the owner out of it. In a swap, both readers pay one, each on the book they receive. A purchase has no deposit. SwapSutra works the amount out; readers cannot change it.
 
 ## B1a. The exchange room — and the 48-hour rule (Oct 2026)
 
@@ -168,7 +170,7 @@ Videos are recorded in the SwapSutra app, which stamps each frame with the excha
 
 ## B6. Rent and purchase payments
 
-**Rent** is paid directly between readers. The owner sets their own monthly rent on the listing; SwapSutra does not collect, hold or refund it.
+**Rent** is taken from the renter's security deposit when the book is back and paid to the owner; the rest of the deposit is refunded. The owner sets their own monthly rent on the listing.
 
 **Purchases go through SwapSutra.** The owner sets their selling price. The buyer pays SwapSutra the price plus the ₹10 platform fee by UPI. SwapSutra holds the price until the buyer has the book and closes the purchase in the app (after recording the receiving video), then pays the seller the price minus their own ₹10 platform fee, to the UPI ID or QR the seller provided.
 

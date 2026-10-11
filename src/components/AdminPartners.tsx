@@ -6,7 +6,7 @@ import { PartnerBannerPreview } from './partners/PartnerDashboard';
 /**
  * Admin → Partners (9 Oct 2026, owner's request).
  *
- * Bookstores, authors, publishers and promoters: applications with their
+ * Bookstores, authors, publishers, promoters and libraries: applications with their
  * documents (private Drive links), approve (2% commission) or approve
  * commission-free for the first year, ask for changes, reject, pause;
  * banners to check; ₹100 promotion payments to verify; and the monthly
@@ -64,10 +64,11 @@ export default function AdminPartners() {
       <div className="admin-ads__info">
         <p className="admin-ads__title">{p.name} <span className="type-caption">· {p.typeLabel} · {STATUS[p.status] || p.status}</span></p>
         <p className="type-caption">{p.contactName} · {p.email} · {p.phone} · {p.city} {p.pincode}</p>
+        {(p.altPhone || p.altEmail) && <p className="type-caption">Alternative: {[p.altPhone, p.altEmail].filter(Boolean).join(' · ')}</p>}
         {p.status === 'APPROVED' && (
           <p className="type-caption">
             Commission now {p.commissionNow}%{p.commissionPlan === 'free_first_year' ? ` (free until ${day(p.commissionFreeUntil)})` : ''} ·
-            Promotion {p.promotion?.active ? `on until ${day(p.promotion.activeUntil)}` : 'off'} · Payout UPI: {p.payoutAccount?.upiId || 'not added'}
+            Promotion {p.promotion?.active ? `on until ${day(p.promotion.activeUntil)}` : 'off'} · Payout: {[p.payoutAccount?.upiId, p.payoutAccount?.bank ? `${p.payoutAccount.bank.accountName} · A/c ${p.payoutAccount.bank.accountNumber} · ${p.payoutAccount.bank.ifsc}` : ''].filter(Boolean).join(' / ') || 'not added'}
           </p>
         )}
         {p.reviewNote && <p className="type-caption">Note: {p.reviewNote}</p>}
@@ -112,7 +113,7 @@ export default function AdminPartners() {
         <button type="button" className="mug-btn mug-btn--quiet" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
       </div>
       <p className="type-caption">
-        Bookstores, authors, publishers and promoters. Approved partners list without a limit, pay no ₹10 fee, and SwapSutra keeps {data?.commissionPercent ?? 2}% of their payouts
+        Bookstores, authors, publishers, promoters and libraries. Approved partners list without a limit, pay no ₹10 fee, and SwapSutra keeps {data?.commissionPercent ?? 2}% of their payouts
         (0% for the first year if approved commission-free). Promotion: 6 months free, then ₹{data?.adFee ?? 100} per {data?.adMonths ?? 2} months. Partner ads are approved in the Ads tab.
       </p>
       <div className="admin-mugs__bar" role="tablist">
@@ -157,7 +158,7 @@ export default function AdminPartners() {
         <ul className="admin-ads__list">{monthly.map((m) => (
           <li key={m.email + m.month} className="admin-ads__item" style={{ gridTemplateColumns: '1fr' }}>
             <p className="admin-ads__title">{m.partnerName} — {m.month}</p>
-            <p className="type-caption">{m.items} order(s) · earned {inr(m.net)} after commission · paid {inr(m.paid)} · <b>due {inr(m.due)}</b> · pay to {m.payTo?.upiId || 'no UPI yet'}{m.payTo?.payeeName ? ` (${m.payTo.payeeName})` : ''}</p>
+            <p className="type-caption">{m.items} order(s) · earned {inr(m.net)} after commission · paid {inr(m.paid)} · <b>due {inr(m.due)}</b> · pay to {[m.payTo?.upiId ? `${m.payTo.upiId}${m.payTo.payeeName ? ` (${m.payTo.payeeName})` : ''}` : '', m.payTo?.bank ? `${m.payTo.bank.accountName} · A/c ${m.payTo.bank.accountNumber} · IFSC ${m.payTo.bank.ifsc}` : ''].filter(Boolean).join(' / ') || 'no UPI or bank yet'}</p>
             {m.due > 0 && (m.payable
               ? <div className="admin-ads__actions"><button type="button" className="mug-btn mug-btn--solid" onClick={() => { const n = ask(`Paid ${inr(m.due)} to ${m.partnerName}? Add the UTR (optional):`); if (n !== null) run('adminMarkPartnerMonthPaid', { email: m.email, month: m.month, note: n }, 'Month marked paid.'); }}>Mark {m.month} paid</button></div>
               : <p className="type-caption">Payable after the month ends.</p>)}

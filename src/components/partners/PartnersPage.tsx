@@ -56,7 +56,7 @@ function PartnersIntro({ onPick }: { onPick: (t: PartnerType) => void }) {
       <div className="pp-hero__inner">
         <p className="pp-eyebrow">SwapSutra partners</p>
         <h1 className="pp-h1">Bring your bookstore, your books or your launches to SwapSutra's readers.</h1>
-        <p className="pp-lead">For bookstores, authors, publishers and promoters. A separate account, verified by SwapSutra.</p>
+        <p className="pp-lead">For bookstores, authors, publishers, promoters and libraries. A separate account, verified by SwapSutra.</p>
         <ul className="pp-perks">
           <li><b>No listing limit</b> — list every title, with how many copies you have.</li>
           <li><b>No ₹10 platform fee</b> for you on your own books (buyers pay it as usual). SwapSutra keeps <b>2%</b> of your payouts — <b>0% for the first year</b> if SwapSutra approves you commission-free.</li>
@@ -95,7 +95,7 @@ function VerifyEmail({ onSession }: { onSession: (s: { sessionToken: string; ema
     e.preventDefault();
     setBusy(true); setMsg('');
     try {
-      const d = await partnerPost('verifyOTP', { email: email.trim().toLowerCase(), otp: otp.trim() });
+      const d = await partnerPost('verifyOTP', { email: email.trim().toLowerCase(), otp: otp.trim(), purpose: 'partner' });
       if (d?.success && d.sessionToken) onSession({ sessionToken: d.sessionToken, email: email.trim().toLowerCase(), role: d.role });
       else setMsg(d?.message || 'That code did not work.');
     } catch { setMsg('Could not reach SwapSutra.'); }

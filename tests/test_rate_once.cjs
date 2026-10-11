@@ -187,7 +187,7 @@ function finishSale(env, id, title) {
   C('The seller rating SwapSutra for the first time is still asked', room(env, 'own@x.com', 'B').platformRated === false);
 }
 const gsx = gs;
-C('Chats hide exchanges the reader has rated', /!ratedByUser\[String\(c\.swapId \|\| ''\)\]/.test(gsx) && /return respondJson\(visibleChats\)/.test(gsx));
+C('Chats hide exchanges the reader has rated', /!ratedByUser\[String\(c\.swapId \|\| ''\)\]/.test(gsx) && /const named = visibleChats\.map\(/.test(gsx) && /: named\);/.test(gsx));
 const ui = fs.readFileSync(path.join(root, 'src/components/ExchangeRoom.tsx'), 'utf8');
 C('The rating card skips SwapSutra once rated', /\{!room\.platformRated && \(/.test(ui));
 C('The Google review card shows only when the server offers it', /\{rated && rated\.reviewUrl && <GoogleReviewCard/.test(ui));

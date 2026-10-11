@@ -357,6 +357,8 @@ const SELF_SCOPED_IDENTITY_FIELDS = {
   joinCurrentReadCircle: ["user_id", "userId", "email"],
   leaveCurrentReadCircle: ["user_id", "userId", "email"],
   addCircleMessage: ["user_id", "userId", "email"],
+  // Launch check (11 Oct 2026): reading a circle's messages is as the caller.
+  getCircleMessages: ["user_id", "userId", "email"],
   postCafeStory: ["user_id", "userId", "userEmail", "email"],
   markCafeStoryViewed: ["user_id", "userId", "userEmail", "email"],
   getCafeStoryViewers: ["user_id", "userId", "userEmail", "email"],
@@ -2894,7 +2896,17 @@ function doGetHandler_(e) {
         obj.receiverBookId = parties.requestedBookId;
         return obj;
       }).filter(r => normalizeEmail(r.requesterEmail) === email || normalizeEmail(r.ownerEmail) === email);
-      return respondJson(requests);
+      // Names for the screens (final check, 11 Oct 2026): the owner's public
+      // name (a partner's business name) and the requester's own name.
+      requests.forEach(r => {
+        try {
+          const partner = approvedPartner_(r.ownerEmail);
+          r.ownerName = partner && partner.name ? String(partner.name) : roomName_(r.ownerEmail);
+          r.requesterName = roomName_(r.requesterEmail);
+        } catch (err) { /* names are cosmetic */ }
+      });
+      // A partner never learns who the buyer is (launch check, 11 Oct 2026).
+      return respondJson(approvedPartner_(email) ? requests.map(r => maskBuyerForPartner_(r, email)) : requests);
     }
 
     if (action === 'previewNewsletter') {
@@ -2958,7 +2970,22 @@ function doGetHandler_(e) {
         (c.chatStatus !== 'Archived' || email === 'swapsutra@gmail.com') &&
         !ratedByUser[String(c.swapId || '')]
       );
-      return respondJson(visibleChats);
+      // Final check (11 Oct 2026): each chat carries the other reader's name
+      // (a partner's business name), so screens never fall back to the
+      // front of someone's email address.
+      const named = visibleChats.map(c => {
+        if (email === 'swapsutra@gmail.com') return c;
+        const other = normalizeEmail(c.ownerEmail) === email ? c.requesterEmail : c.ownerEmail;
+        let otherName = '';
+        try {
+          const partner = approvedPartner_(other);
+          otherName = partner && partner.name ? String(partner.name) : roomName_(other);
+        } catch (err) { otherName = ''; }
+        return Object.assign({}, c, { otherName: otherName });
+      });
+      return respondJson(approvedPartner_(email)
+        ? named.map(c => normalizeEmail(c.ownerEmail) === email ? Object.assign(maskBuyerForPartner_(c, email), { otherName: 'Buyer' }) : c)
+        : named);
     }
 
     if (action === 'getChatMessages') {
@@ -3144,12 +3171,13 @@ function doGetHandler_(e) {
     }
 
     if (action === 'repairDatabase') {
-        if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: "Unauthorized" });
+        if (!isAuthorizedAdminEmail()) return respondJson({ success: false, message: "Unauthorized" });
         return respondJson(repairDatabase());
     }
 
 
     if (action === 'cleanupDuplicates') {
+      if (!isAuthorizedAdminEmail()) return respondJson({ success: false, message: "Unauthorized" });
       const results = removeDuplicateUsers();
       return respondJson(results);
     }
@@ -3237,6 +3265,9 @@ function doGetHandler_(e) {
           // The id is what the directory should navigate by. The email
           // field below it is legacy and should follow it out.
           entry.readerId = readerPublicId(email);
+          // Final check (11 Oct 2026): the directory is public, so it never
+          // carries anyone's email address (only the admin sees it).
+          if (!isAuthenticatedAdmin()) delete entry.email;
           return entry;
         });
 
@@ -3837,6 +3868,7 @@ function doGetHandler_(e) {
       }
     }
     if (action === 'listSheets') {
+      if (!isAuthorizedAdminEmail()) return respondJson({ success: false, message: "Unauthorized" });
       try {
         const ss = getSpreadsheet();
         const sheets = ss.getSheets();
@@ -4309,6 +4341,11 @@ function updateUserProfile(data) {
   };
 
   for (let key in updates) {
+    // Final check (11 Oct 2026): a field the request did not send is left as
+    // it is — saving one thing never blanks the others — and a name is never
+    // wiped to nothing.
+    if (updates[key] === undefined || updates[key] === null) continue;
+    if (key === 'name' && !String(updates[key]).trim()) continue;
     const colIdx = headers.indexOf(key);
     if (colIdx !== -1) {
       sheet.getRange(rowIndex + 1, colIdx + 1).setValue(updates[key]);
@@ -5411,7 +5448,11 @@ function joinCurrentReadCircle(data) {
 
 function getCircleMessages(data) {
   const circleId = data.circle_id || data.circleId;
-  const userId = normalizeEmail(data.user_id || data.userId || data.email);
+  // Launch check (11 Oct 2026): the reader is whoever is signed in — never
+  // an address sent with the request (that let anyone read a private circle).
+  const sessionEmail = normalizeEmail(getAuthenticatedEmail());
+  if (!sessionEmail) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to read this circle.', data: [] };
+  const userId = isAuthenticatedAdmin() ? normalizeEmail(data.user_id || data.userId || data.email || sessionEmail) : sessionEmail;
   const rows = getCurrentReadRows();
   if (!isCurrentReadMember(circleId, userId, rows.members)) {
     return { success: false, message: "Only circle members can view messages.", data: [] };
@@ -5903,7 +5944,7 @@ function bookHasAnyPublicUse(book) {
 
 function bookHasPublicLibraryVisibility(book) {
   const flags = bookStatusFlags(book);
-  return flags.favourite || flags.bookshelf || flags.permanent_exchange || flags.temporary_exchange || flags.rent || flags.sell;
+  return flags.favourite || flags.bookshelf || flags.permanent_exchange || flags.temporary_exchange || flags.rent || flags.sell || flags.lend;
 }
 
 // Internal plumbing that has no business reaching any reader's browser:
@@ -6410,6 +6451,7 @@ function doPostHandler_(e) {
     if (action === 'vmsUploadChunk') return respondJson(vmsUploadChunk(data));
     if (action === 'vmsFinishUpload') return respondJson(vmsFinishUpload(data));
     if (action === 'adminDecideDeposits') return respondJson(adminDecideDeposits(data));
+    if (action === 'adminDecideSale') return respondJson(adminDecideSale(data));
     // Oct 2026 — sales through SwapSutra, payout accounts.
     if (action === 'getPayoutAccount') return respondJson(getPayoutAccount(data));
     if (action === 'savePayoutAccount') return respondJson(savePayoutAccount(data));
@@ -6796,6 +6838,19 @@ function doPostHandler_(e) {
       if (normalizeEmail(parties.ownerEmail) !== ownerEmail && !isAuthenticatedAdmin()) {
         return respondJson({ success: false, message: "Unauthorized: Only book owner can accept." });
       }
+      // Launch check (11 Oct 2026): only a waiting request can be accepted,
+      // and one copy of a book goes to one reader at a time.
+      const statusNow = String(values[rowIndex][headers.indexOf('status')] || 'Pending').trim();
+      if (statusNow.toLowerCase() !== 'pending') {
+        return respondJson({ success: false, error: 'NOT_PENDING', message: 'This request is already ' + statusNow.toLowerCase() + ', so it can no longer be accepted.' });
+      }
+      const busy = copiesInExchange_(values, headers, parties.requestedBookId, id);
+      if (busy > 0) {
+        const stock = approvedPartner_(parties.ownerEmail) ? partnerBookStock_(parties.requestedBookId) : 1;
+        if (busy >= stock) {
+          return respondJson({ success: false, error: 'BOOK_IN_EXCHANGE', message: 'This book is already in another exchange you accepted. Finish or close that one first, or decline this request.' });
+        }
+      }
 
       sheet.getRange(rowIndex + 1, headers.indexOf('status') + 1).setValue('Accepted');
       sheet.getRange(rowIndex + 1, headers.indexOf('updatedAt') + 1).setValue(new Date());
@@ -6887,6 +6942,12 @@ function doPostHandler_(e) {
       if (normalizeEmail(parties.ownerEmail) !== ownerEmail && !isAuthenticatedAdmin()) {
         return respondJson({ success: false, message: "Unauthorized: Only book owner can decline." });
       }
+      const statusNowD = String(values[rowIndex][headers.indexOf('status')] || 'Pending').trim();
+      if (statusNowD.toLowerCase() !== 'pending') {
+        return respondJson({ success: false, error: 'NOT_PENDING', message: statusNowD.toLowerCase() === 'accepted'
+          ? 'You already accepted this request. If you cannot go ahead, close it from the exchange room (before payment).'
+          : 'This request is already ' + statusNowD.toLowerCase() + '.' });
+      }
 
       sheet.getRange(rowIndex + 1, headers.indexOf('status') + 1).setValue('Declined');
       sheet.getRange(rowIndex + 1, headers.indexOf('updatedAt') + 1).setValue(new Date());
@@ -6951,7 +7012,10 @@ function doPostHandler_(e) {
     if (action === 'approveBook') result = approveBook(data);
     if (action === 'sendBookApprovalEmailOnce') result = sendBookApprovalEmailOnceForBook(data);
     if (action === 'updateSubscriptionDates') result = updateSubscriptionDates(data);
-    if (action === 'checkExpiredSubscriptions') result = checkExpiredSubscriptions();
+    if (action === 'checkExpiredSubscriptions') {
+      if (!isAuthorizedAdminEmail()) return respondJson({ success: false, message: "Unauthorized" });
+      result = checkExpiredSubscriptions() || { success: true, message: 'Memberships do not expire on the free plan.' };
+    }
     if (action === 'sendExpiryReminders') {
       if (!isAuthorizedAdminEmail(data.adminEmail)) return respondJson({ success: false, message: "Unauthorized" });
       result = sendMembershipExpiryReminders();
@@ -7001,7 +7065,7 @@ function doPostHandler_(e) {
     if (action === 'subscribeEventNotify' || action === 'notifyEvent') result = subscribeEventNotify(data);
     if (action === 'unsubscribeEventNotify') result = unsubscribeEventNotify(data);
     if (action === 'sendOTP') result = sendOTP(data.email, data.purpose);
-    if (action === 'verifyOTP') result = verifyOTP(data.email, data.otp);
+    if (action === 'verifyOTP') result = verifyOTP(data.email, data.otp, data.purpose);
     if (action === 'resolveSession') result = resolveSessionForProxy(data);
     if (action === 'sendChatMessage') result = sendChatMessage(data);
     if (action === 'uploadSwapProof') result = uploadSwapProof(data);
@@ -7313,7 +7377,13 @@ function registerFreeReader(data) {
     try { recordReferralClaim(normEmail, data.referralCode); } catch (referralErr) { Logger.log('Referral claim skipped: ' + referralErr.toString()); }
   }
 
-  const name = data.name || (normEmail ? normEmail.split('@')[0] : 'Reader');
+  // Launch check (11 Oct 2026): starting the free trial right after sign-up
+  // sends only the email — keep the name and mobile the reader typed at
+  // Sign Up instead of replacing them with the start of the email.
+  let known = {};
+  try { known = findRowByEmail_('Subscriptions', normEmail) || findRowByEmail_('Users', normEmail) || {}; } catch (e) { known = {}; }
+  const name = String(data.name || known.name || '').trim() || (normEmail ? normEmail.split('@')[0] : 'Reader');
+  const knownPhone = String(data.phone || known.phone || '').trim();
   const now = new Date();
   const trialEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 1 Month Free Trial
 
@@ -7499,7 +7569,7 @@ function registerFreeReader(data) {
       ensureUserFromPayload({
         name: name,
         email: normEmail,
-        phone: data.phone || '',
+        phone: knownPhone,
         area: data.area || '',
         pincode: data.pincode || '',
         genres: data.genres || '',
@@ -7568,7 +7638,7 @@ function registerFreeReader(data) {
     const userResult = ensureUserFromPayload({
       name: name,
       email: normEmail,
-      phone: data.phone || '',
+      phone: knownPhone,
       area: data.area || '',
       pincode: data.pincode || '',
       genres: data.genres || '',
@@ -7804,6 +7874,14 @@ function createBook(data) {
       message: "An active SwapSutra membership (free trial or Chapters) is required to list books.",
       error: "MEMBERSHIP_REQUIRED"
     };
+  }
+
+  // Launch check (11 Oct 2026): a listing needs a real title and author
+  // (spaces alone used to get through).
+  data.title = String(data.title || '').trim();
+  data.author = String(data.author || '').trim();
+  if (data.title.length < 1 || data.author.length < 1) {
+    return { success: false, error: 'TITLE_REQUIRED', message: 'Add the book\'s title and author.' };
   }
 
   // Backend validation for the transparent-listing fields — never trust the
@@ -8545,10 +8623,48 @@ function updateBookRequestStatus(data) {
   }
 }
 
+/**
+ * May this signed-in reader put a notification in someone's bell? (launch
+ * check, 11 Oct 2026). Only someone they are actually dealing with: the
+ * other reader on a request or chat, or the author of a post they reacted
+ * to or commented on. The admin may notify anyone.
+ */
+function canNotifyReader_(caller, recipient, entityId) {
+  if (!caller) return false;
+  if (isAuthenticatedAdmin() || caller === recipient) return true;
+  const both = (a, b) => (normalizeEmail(a) === caller && normalizeEmail(b) === recipient) || (normalizeEmail(a) === recipient && normalizeEmail(b) === caller);
+  try {
+    const sv = getOrCreateSheet('SwapRequests', []).getDataRange().getValues();
+    for (let r = 1; r < sv.length; r++) { const p = resolveSwapRequestParties(sv[0], sv[r]); if (both(p.requesterEmail, p.ownerEmail)) return true; }
+  } catch (e) { /* keep checking */ }
+  try {
+    const ct = readSheetObjects_(getOrCreateSheet('Chats', []));
+    if (ct.rows.some(r => both(r.obj.requesterEmail, r.obj.ownerEmail))) return true;
+  } catch (e) { /* keep checking */ }
+  try {
+    if (entityId) {
+      const pt = readSheetObjects_(getOrCreateSheet('ReadingRoomPosts', []));
+      if (pt.rows.some(r => String(r.obj.id) === String(entityId) && normalizeEmail(r.obj.authorEmail) === recipient)) return true;
+    }
+  } catch (e) { /* not a post */ }
+  return false;
+}
+
 function handleCreateNotificationApi(data) {
   try {
     const userEmail = normalizeEmail(data.userEmail || data.recipientEmail || data.email);
     if (!userEmail) return { success: false, message: "userEmail required" };
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    if (!canNotifyReader_(caller, userEmail, data.entityId || data.relatedId || '')) {
+      return { success: false, error: 'NOT_ALLOWED', message: 'You can only notify readers you are exchanging or talking with.' };
+    }
+    // A link in a reader-made notification stays on SwapSutra.
+    if (!isAuthenticatedAdmin()) {
+      const link = String(data.targetUrl || data.link || '');
+      if (link && !/^\/(?!\/)/.test(link)) { data.targetUrl = ''; data.link = ''; }
+      data.title = String(data.title || '').slice(0, 120);
+      data.message = String(data.message || '').slice(0, 500);
+    }
     const type = data.type || 'general';
     const title = data.title || 'Notification';
     const message = data.message || '';
@@ -8797,7 +8913,7 @@ function respondToBookRequest(data) {
       });
     }
 
-    createNotification(requesterEmail, 'book_request_response', 'Someone responded to your book request', `${responderEmail.split('@')[0]} can help with "${request.title || 'your requested book'}".`, requestId);
+    createNotification(requesterEmail, 'book_request_response', 'Someone responded to your book request', `${publicReaderName('', responderEmail) || 'A reader'} can help with "${request.title || 'your requested book'}".`, requestId);
     try {
       const subject = "Someone responded to your SwapSutra book request";
       const content = `
@@ -8828,6 +8944,10 @@ function createSupportMessage(data) {
 
   if (!name || !email || !message) {
     return jsonResponse({ success: false, message: "Missing required fields." });
+  }
+  // Launch check (11 Oct 2026): support has to be able to write back.
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    return jsonResponse({ success: false, message: "Enter a valid email address so we can reply." });
   }
 
   sheet.appendRow([id, name, email, phone, message, "Open", new Date()]);
@@ -8978,6 +9098,21 @@ function createSwapRequest(data) {
 
   const requestedBook = {};
   bookHeaders.forEach((h, i) => requestedBook[h] = requestedBookRow[i]);
+  // Launch check (11 Oct 2026): not your own book, and not the same request twice.
+  if (normalizeEmail(requestedBook.ownerEmail) === normalizedEmail) {
+    return { success: false, error: 'OWN_BOOK', message: 'This is your own book.' };
+  }
+  {
+    const rv = sheet.getDataRange().getValues();
+    const rh = rv[0] || [];
+    for (let r = 1; r < rv.length; r++) {
+      const pr = resolveSwapRequestParties(rh, rv[r]);
+      if (String(pr.requestedBookId) === requestedId && normalizeEmail(pr.requesterEmail) === normalizedEmail
+        && ['pending', 'accepted'].indexOf(String(rv[r][rh.indexOf('status')] || '').trim().toLowerCase()) !== -1) {
+        return { success: false, error: 'ALREADY_REQUESTED', message: 'You already have a request open for this book. Track it in Cart → My orders.' };
+      }
+    }
+  }
   // A partner's book with no copies left (9 Oct 2026).
   if (requestedBook.stock !== undefined && requestedBook.stock !== '' && Number(requestedBook.stock) <= 0) {
     return { success: false, error: 'OUT_OF_STOCK', message: 'This book is out of stock right now.' };
@@ -9046,7 +9181,8 @@ function createSwapRequest(data) {
       error: "OFFERED_BOOK_NOT_YOURS"
     };
   }
-  if ((serviceType === 'SWAP' || serviceType === 'LEND') && !offeredBook) {
+  // Launch check (11 Oct 2026): a loan needs no book in return — only a swap does.
+  if (serviceType === 'SWAP' && !offeredBook) {
     return {
       success: false,
       message: "Please choose one of your listed books to offer, so both deposits can be worked out.",
@@ -9126,6 +9262,12 @@ function createSwapRequest(data) {
   }
   const rentMonths = serviceType === 'RENT' ? Math.max(1, Math.ceil(durationDays / 30)) : 0;
   const rentCharge = monthlyRent === null ? null : Math.round(monthlyRent * rentMonths * 100) / 100;
+  // Launch check (11 Oct 2026): the rent is paid to the owner out of the
+  // renter's deposit, so the deposit is never smaller than the rent — else
+  // the owner would quietly get less than the price they set.
+  if (serviceType === 'RENT' && rentCharge && deposits.requesterDeposit !== null && Number(deposits.requesterDeposit) < rentCharge) {
+    deposits.requesterDeposit = Math.ceil(rentCharge);
+  }
   const dueDate = (serviceType === 'RENT' || serviceType === 'LEND')
     ? (data.dueDate || new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString())
     : '';
@@ -9135,7 +9277,7 @@ function createSwapRequest(data) {
   headers.forEach((h, i) => {
     if (h === 'id') row[i] = id;
     else if (h === 'serviceType') row[i] = serviceType;
-    else if (h === 'requesterName') row[i] = data.requesterName || normalizedEmail.split('@')[0];
+    else if (h === 'requesterName') row[i] = publicReaderName('', normalizedEmail) || normalizedEmail.split('@')[0]; // the reader's own name, never one the request claims
     else if (h === 'requesterEmail') row[i] = normalizedEmail;
     else if (h === 'requesterPhone') row[i] = data.requesterPhone || '';
     else if (h === 'ownerEmail') row[i] = normalizeEmail(requestedBook.ownerEmail || data.receiverEmail || data.ownerEmail || '');
@@ -9195,6 +9337,19 @@ function createSwapRequest(data) {
     `Initiated ${serviceType} request for "${data.requestedBookTitle || requestedBook.title || "Book"}".`,
     { requestId: id, serviceType: serviceType, requestedBookTitle: data.requestedBookTitle || requestedBook.title, offeredBook: data.offeredBook }
   );
+
+  // Launch check (11 Oct 2026): the owner is told by SwapSutra itself — in
+  // the app and by email — with the reader's public name, never their email.
+  try {
+    const ownerEmail = normalizeEmail(requestedBook.ownerEmail);
+    const who = publicReaderName('', normalizedEmail) || 'A reader';
+    const verb = { SWAP: 'wants to swap', RENT: 'wants to rent', SELL: 'wants to buy', LEND: 'wants to borrow' }[serviceType] || 'asked for';
+    const bookTitle = String(data.requestedBookTitle || requestedBook.title || 'your book');
+    const msg = who + ' ' + verb + ' "' + bookTitle + '". Accept or decline it in Cart → My orders → Requests.';
+    createNotification(ownerEmail, 'swap_request_received', 'New request for "' + bookTitle + '"', msg, id, { link: '/cart' });
+    sendSwapSutraEmail({ to: ownerEmail, subject: 'New request for "' + bookTitle + '" on SwapSutra',
+      htmlBody: getBrandedEmailTemplate('A new request', '<p>' + msg + '</p>', 'https://swapsutra.in/cart', 'Open Cart') });
+  } catch (e) { Logger.log('Owner request notice failed: ' + e); }
 
   return { success: true, id: id, requestId: id, serviceType: serviceType, message: `${serviceType} request sent successfully.` };
 }
@@ -11465,7 +11620,7 @@ function buildLoginSuccessResponse(normEmail, extras) {
   return response;
 }
 
-function verifyOTP(email, otp) {
+function verifyOTP(email, otp, purpose) {
   const normEmail = normalizeEmail(email);
   if (!normEmail) return { success: false, message: "Email is required." };
 
@@ -11504,7 +11659,11 @@ function verifyOTP(email, otp) {
   // Data predicate for the same reason as sendOTP above — no session
   // exists until this call succeeds.
   const isExemptAuthEmail = isAdminEmail(normEmail);
-  if (!isExemptAuthEmail && !emailExistsInUsersSheet(normEmail)) {
+  // A partner (bookstore, author, publisher, promoter, library) verifies on
+  // /partners before it has an account — the code was sent with purpose
+  // "partner" for the same reason (launch check, 11 Oct 2026).
+  const isPartnerSignup = String(purpose || '') === 'partner';
+  if (!isExemptAuthEmail && !isPartnerSignup && !emailExistsInUsersSheet(normEmail)) {
     logActivity(normEmail, "OTP Verify Blocked", "No registered SwapSutra account for this email", "Failed", "Auth");
     return {
       success: false,
@@ -11585,7 +11744,8 @@ function verifyOTP(email, otp) {
 
 // REMOVED DUPLICATE logActivity function here
 
-const BASE_APP_URL = "https://ais-pre-dpzamjialbdsyvt3j6wets-457022929234.asia-southeast1.run.app";
+// Launch check (11 Oct 2026): the live site, not an old preview address.
+const BASE_APP_URL = "https://swapsutra.in";
 
 function subscribeEventNotify(data) {
   const headers = ["Timestamp", "FullName", "Email", "Mobile", "City", "SourcePage", "SubscriptionStatus", "Consent", "LastNotifiedAt", "LastNotificationEventID", "LastNotificationEventName", "NotificationCount", "UnsubscribeToken", "UnsubscribeStatus", "LastAttemptAt", "Notes"];
@@ -13348,7 +13508,17 @@ function formatNewsletterBody(text) {
 
 function findHeaderIndex(headers, candidates) {
   const normalized = headers.map(h => normalizeHeader(h));
-  return normalized.findIndex(h => candidates.includes(h));
+  // Final check (11 Oct 2026): the candidates are normalised the same way.
+  // Callers pass 'requesterEmail' / 'createdAt', which never matched the
+  // lower-cased headers — so, for one, a reader whose request expired was
+  // never told.
+  const wanted = (candidates || []).map(c => normalizeHeader(c));
+  // In the caller's order of preference, not the sheet's column order.
+  for (let i = 0; i < wanted.length; i++) {
+    const idx = normalized.indexOf(wanted[i]);
+    if (idx !== -1) return idx;
+  }
+  return -1;
 }
 
 function isTruthyValue(value) {
@@ -13633,8 +13803,8 @@ function sendTrustEmail(email) {
 
             <div class="card">
               <div class="card-num">1</div>
-              <div class="card-title">Verified Souls Only</div>
-              <p class="card-text">Every reader on SwapSutra is manually vetted. We verify profiles to ensure only genuine book-lovers join our circle.</p>
+              <div class="card-title">Verified Readers</div>
+              <p class="card-text">Every reader signs in with a verified email, and the SwapSutra team is part of every exchange chat.</p>
             </div>
 
             <div class="card">
@@ -13646,7 +13816,7 @@ function sendTrustEmail(email) {
             <div class="card">
                 <div class="card-num">3</div>
               <div class="card-title">The Condition Guarantee</div>
-              <p class="card-text">Condition proofs are uploaded before and after every swap. Your books are returned exactly as they left.</p>
+              <p class="card-text">Condition videos are recorded before and after every exchange, and refundable deposits protect your books while they travel.</p>
             </div>
 
             <div class="highlight">Your shelf. Your decision. Your books won’t travel alone.</div>
@@ -14223,12 +14393,24 @@ function getReadingRoomFeed(data) {
         recognizedReaderIds: String(p.recognizedEmails || '').split(',').map(function (e) { return readerPublicId(e); }).filter(Boolean),
         createdAt: p.createdAt
       };
-    });
+    }).filter(readingRoomPostHasContent_);
 
     return { success: true, posts };
   } catch (err) {
     return { success: false, message: "Error loading Reading Room feed: " + err.toString() };
   }
+}
+
+/**
+ * A post worth showing (10 Oct 2026, owner's request): blank rows in the
+ * sheet came through as empty "Reader · Thought" cards with nothing in
+ * them. A post needs an id and something to read, see or hear.
+ */
+function readingRoomPostHasContent_(p) {
+  if (!p || !String(p.id || '').trim()) return false;
+  const has = (v) => String(v === undefined || v === null ? '' : v).trim() !== '';
+  return has(p.content) || has(p.bookTitle) || has(p.mediaUrl) || has(p.audioUrl)
+    || (Array.isArray(p.recognizedNames) && p.recognizedNames.length > 0);
 }
 
 const READING_ROOM_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
@@ -14303,6 +14485,12 @@ function createReadingRoomPost(data) {
     const content = String(data.content || '').trim();
     const bookTitle = String(data.bookTitle || '').trim();
     const bookAuthor = String(data.bookAuthor || '').trim();
+    // Final check (11 Oct 2026): the Reading Room is public, so the same
+    // contact-details gate as the chats and the Café.
+    if (content && !isAdminEmail(authorEmail)) {
+      const pii = scanMessageForPII(content);
+      if (pii.blocked) return { success: false, blocked: true, reason: 'PERSONAL_INFORMATION', message: piiWarningForCategory(pii.category) };
+    }
 
     // Photo posts. The browser sends the picture as a data URL (already
     // shrunk to ~1600px JPEG); it is stored in Drive and only the Drive link
@@ -14395,6 +14583,12 @@ function togglePostReaction(data) {
     const postId = data.postId;
     const reactionType = data.reactionType || 'like'; // 'like', 'love', 'thoughtful'
     if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
+    // Launch check (11 Oct 2026): only on a post that exists.
+    {
+      const pv = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts).getDataRange().getValues();
+      const pid = (pv[0] || []).map(h => String(h).trim()).indexOf('id');
+      if (!pv.slice(1).some(r => String(r[pid]) === String(postId))) return { success: false, message: "That post is no longer there." };
+    }
 
     const rxSheet = getOrCreateSheet('ReadingRoomReactions', DB_SCHEMA.ReadingRoomReactions);
     const rxValues = rxSheet.getDataRange().getValues();
@@ -14435,7 +14629,7 @@ function togglePostReaction(data) {
               authorEmail,
               'post_reaction',
               'New reaction in Reading Room',
-              `${userEmail.split('@')[0]} reacted to your post.`,
+              `${publicReaderName('', userEmail) || 'A reader'} reacted to your post.`,
               postId,
               { link: `/reading-room#post-${postId}` }
             );
@@ -14458,6 +14652,16 @@ function addPostComment(data) {
     const audioUrl = data.audioUrl || '';
     if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
     if (!comment && !audioUrl) return { success: false, message: "Comment or voice message required" };
+    if (comment && !isAdminEmail(userEmail)) {
+      const pii = scanMessageForPII(comment);
+      if (pii.blocked) return { success: false, blocked: true, reason: 'PERSONAL_INFORMATION', message: piiWarningForCategory(pii.category) };
+    }
+    // Launch check (11 Oct 2026): only on a post that exists.
+    {
+      const pv = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts).getDataRange().getValues();
+      const pid = (pv[0] || []).map(h => String(h).trim()).indexOf('id');
+      if (!pv.slice(1).some(r => String(r[pid]) === String(postId))) return { success: false, message: "That post is no longer there." };
+    }
 
     const cmSheet = getOrCreateSheet('ReadingRoomComments', DB_SCHEMA.ReadingRoomComments);
     const id = generateId('RR_CMT_');
@@ -16228,7 +16432,8 @@ function runSwapRequestSla() {
       const ageHours = (now - created.getTime()) / (60 * 60 * 1000);
       const sheetRow = r + 1;
       const ownerEmail = normalizeEmail(values[r][ownerIdx]);
-      const requesterEmail = requesterIdx === -1 ? '' : normalizeEmail(values[r][requesterIdx]);
+      // Old rows keep the requester under senderEmail; resolve per row.
+      const requesterEmail = normalizeEmail((requesterIdx === -1 ? '' : values[r][requesterIdx]) || resolveSwapRequestParties(hdr, values[r]).requesterEmail || '');
       const bookTitle = titleIdx === -1 ? 'a book' : String(values[r][titleIdx] || 'a book');
       const requestId = String(values[r][idIdx]);
 
@@ -16464,6 +16669,10 @@ function runTrialConversionSequence() {
       else if (dayOfTrial >= 10) stage = 2;
       else if (dayOfTrial >= 3) stage = 1;
 
+      // Final check (11 Oct 2026): SwapSutra is free to join and nothing
+      // expires, so the "your free month ends / continue for ₹49" letters
+      // (stages 3 and 4) are never sent while registration is free.
+      if (freeRegistrationMode_() && stage > 2) stage = 2;
       if (stage === 0 || stage <= stageSent) continue;
 
       try {
@@ -16571,7 +16780,9 @@ function sendTrialSequenceEmail(email, stage) {
       + '<div class="benefit-item"><strong>' + stats.booksListed + '</strong> book' + (stats.booksListed === 1 ? '' : 's') + ' offered to the community</div>'
       + '<div class="benefit-item"><strong>' + stats.requestsSent + '</strong> request' + (stats.requestsSent === 1 ? '' : 's') + ' sent to other readers</div>'
       + '<div class="benefit-item"><strong>' + stats.swapsCompleted + '</strong> swap' + (stats.swapsCompleted === 1 ? '' : 's') + ' completed</div>'
-      + '<p>Twenty days of your free month remain. If there is a book you have been meaning to ask for, this is a good week for it.</p>';
+      + (freeRegistrationMode_()
+        ? '<p>If there is a book you have been meaning to ask for, this is a good week for it.</p>'
+        : '<p>Twenty days of your free month remain. If there is a book you have been meaning to ask for, this is a good week for it.</p>');
     ctaLink = site + '/browse';
     ctaText = 'Browse the Library';
   } else if (stage === 3) {
@@ -17349,6 +17560,10 @@ function buildLibraryPayload() {
       if (emailIdx !== -1 && ownerEmailIdx !== -1) {
         const ownerEmail = normalizeEmail(b.ownerEmail);
         if (isAdminEmail(ownerEmail)) return true;
+        // Final check (11 Oct 2026): an approved partner (bookstore, author,
+        // publisher, promoter, library) has no reader membership — its
+        // books are shown while the partnership is approved.
+        if (!subscriptionByEmail[ownerEmail]) return !!approvedPartner_(ownerEmail);
         const sub = subscriptionByEmail[ownerEmail];
         if (sub) {
           const computed = computeSubscriptionStatus(sub);
@@ -18840,7 +19055,8 @@ function runCirculationSla() {
       const when = new Date(obj.createdAt);
       if (isNaN(when.getTime())) continue;
       const key = String(obj.swapId);
-      if (!latest[key] || when > new Date(latest[key].createdAt)) latest[key] = obj;
+      // >= so that, at the same moment, the later row (the newer event) wins.
+      if (!latest[key] || when >= new Date(latest[key].createdAt)) latest[key] = obj;
     }
 
     const now = Date.now();
@@ -20622,6 +20838,8 @@ function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
       screenshotUrl: isSelf ? (rec.screenshotUrl || '') : '',
       submittedAt: rec.submittedAt || '',
       approvedAt: rec.approvedAt || '',
+      // When SwapSutra last acted on it (a rejection restarts the payment clock).
+      updatedAt: rec.updatedAt || '',
       rejectedReason: isSelf ? (rec.rejectedReason || '') : ''
     };
   });
@@ -20977,6 +21195,10 @@ function submitSecurityFeePayment(data) {
 
     const role = swapPartyRole(swap, caller);
     if (!role) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    // Launch check (11 Oct 2026): no payments into a request that has closed.
+    if (['expired', 'cancelled', 'declined', 'rejected'].indexOf(String(swap.obj.status || '').toLowerCase()) !== -1) {
+      return { success: false, error: 'REQUEST_CLOSED', message: 'This request has closed, so there is nothing to pay. Please do not send money for it.' };
+    }
 
     ensureSecurityFeeRecords(swap);
     const { sheet, headers, rows } = loadSecurityFeeRows(swapId);
@@ -21053,6 +21275,9 @@ function adminApproveSecurityFeePayment(data) {
     if (!row) return { success: false, message: 'No such security-fee record.' };
     if (row.obj.paymentStatus !== 'SUBMITTED') {
       return { success: false, message: 'This payer has not submitted evidence yet — nothing to approve.' };
+    }
+    if (decision === 'APPROVE' && ['expired', 'cancelled', 'declined', 'rejected'].indexOf(String(swap.obj.status || '').toLowerCase()) !== -1) {
+      return { success: false, error: 'REQUEST_CLOSED', message: 'This request has already closed. Reject this payment and refund it to the reader (Admin → Payouts) instead of approving it.' };
     }
 
     const admin = normalizeEmail(getAuthenticatedEmail());
@@ -23019,7 +23244,8 @@ const AD_HEADERS = [
   // A partner's own ad (9 Oct 2026): it waits as "pending" until the admin approves it.
   'partnerId', 'reviewNote'
 ];
-const AD_KINDS = ['bookstore', 'author', 'book'];
+// 11 Oct 2026 (owner's request): publishers and promoters too.
+const AD_KINDS = ['bookstore', 'author', 'publisher', 'promoter', 'library', 'book'];
 const AD_PLACEMENTS = ['both', 'banner', 'shelf'];
 const AD_STATUSES = ['live', 'paused', 'removed', 'pending', 'rejected'];
 const AD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
@@ -23037,7 +23263,12 @@ function adRows_() {
   const rows = [];
   for (let i = 1; i < values.length; i++) {
     const o = {};
-    headers.forEach(function (h, j) { o[h] = values[i][j] instanceof Date ? values[i][j].toISOString() : values[i][j]; });
+    headers.forEach(function (h, j) {
+      const v = values[i][j];
+      // Sheets turns "2026-10-15" into a Date at midnight of the sheet's
+      // time zone (India); read it back as the same India day (launch check).
+      o[h] = v instanceof Date ? ((h === 'startDate' || h === 'endDate') ? adDate_(v) : v.toISOString()) : v;
+    });
     if (String(o.id || '').trim()) rows.push({ rowIndex: i, obj: o });
   }
   return { headers: headers, rows: rows };
@@ -23100,6 +23331,15 @@ function recordAdClick(data) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(3000)) return { success: false };
   try {
+    // A partner's Library banner (id "PB-<partnerId>") counts on its partner row.
+    if (id.indexOf('PB-') === 0) {
+      const pr = partnerRows_();
+      const ph = pr.rows.find(function (r) { return String(r.obj.id) === id.slice(3); });
+      if (!ph || String(ph.obj.status) !== 'APPROVED') return { success: false };
+      const headers = ensureSheetHeaders(partnerSheet_(), PARTNER_HEADERS);
+      partnerSheet_().getRange(ph.rowIndex + 1, headers.indexOf('bannerClicks') + 1).setValue((Number(ph.obj.bannerClicks) || 0) + 1);
+      return { success: true };
+    }
     const sheet = adSheet_();
     const all = adRows_();
     const hit = all.rows.find(function (r) { return String(r.obj.id) === id; });
@@ -23141,7 +23381,7 @@ function validateSponsoredAd_(data) {
   if (AD_STATUSES.indexOf(status) === -1) errors.status = 'Unknown status.';
   if (status === 'removed') return { errors: errors, clean: clean };
   if (status === 'rejected') { clean.status = 'rejected'; }
-  if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author or book.';
+  if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author, publisher, promoter, library or book.';
   if (AD_PLACEMENTS.indexOf(clean.placement) === -1) errors.placement = 'Choose where the ad shows.';
   if (!clean.sponsor) errors.sponsor = 'Who is the ad for? (the bookstore, author or publisher)';
   if (!clean.headline) errors.headline = 'Write a short headline.';
@@ -24316,7 +24556,10 @@ function returnNotify_(email, type, title, body, swapId, dedupeKey, opts) {
     // createNotification de-duplicates on dedupeKey, which is what stops the
     // daily job repeating a reminder. Its result tells us whether it was new.
     const res = createNotification(email, type, title, body, swapId, { link: '/profile', dedupeKey: dedupeKey });
-    if (res && (res.duplicate || res.deduped || res.skipped)) isNew = false;
+    // Final check (11 Oct 2026): createNotification returns the new id, or
+    // null when this notice was already sent — so the email (and WhatsApp)
+    // go out once, not again on every run of the hourly job.
+    if (!res) isNew = false;
   } catch (e) { Logger.log('returnNotify_ in-app failed: ' + e); }
   if (!isNew) return;
   try {
@@ -24451,6 +24694,16 @@ function runReturnDeadlines() {
           return;
         }
         if (leg.state === 'OVERDUE' || leg.state === 'RETURNED_LATE') {
+          // Launch check (11 Oct 2026): a deposit already refunded, or decided
+          // by SwapSutra in a dispute, is never forfeited on top of that.
+          const settled = forfeits.some(f => String(f.swapId) === id && (String(f.leg) === 'refund:' + leg.borrower
+            || (/^dispute:/.test(String(f.leg)) && String(f.leg).split(':').pop() === leg.borrower)));
+          if (settled) {
+            returnNotify_('swapsutra@gmail.com', 'return_late_settled', 'Late return — deposit already settled',
+              'Exchange ' + id + ': "' + title + '" came back late, but the ' + leg.borrower + '\'s deposit was already refunded or decided. Check it in Admin → Payouts.',
+              id, 'ret_late_settled_' + id + '_' + leg.leg, { whatsapp: false });
+            return;
+          }
           // A swap (9 Oct 2026): SwapSutra's fee comes out of a forfeited deposit too.
           const fullDeposit = Number(o[leg.deposit] || 0);
           const feeKept = Math.min(fullDeposit, feeTakenFromDeposit_(o, borrowerEmail, myFeeRecord_(id, leg.borrower), leg.borrower));
@@ -24479,7 +24732,7 @@ function runReturnDeadlines() {
             bookLabel + ' was not on its way back by ' + due + ', so your ₹' + fullDeposit + ' security deposit has been forfeited' + (feeKept > 0 ? ' (₹' + amount + ' to the owner, ₹' + feeKept + ' platform fee)' : ' and will be paid to the owner') + '. You must still return the book.',
             id, 'ret_forfeit_' + id + '_' + leg.leg);
           returnNotify_(ownerEmail, 'return_forfeited_owner', 'The deposit is coming to you',
-            'Your book was not returned by ' + due + '. The borrower\'s ₹' + amount + ' security deposit has been forfeited and SwapSutra will pay it to you' + (readPayoutAccount_(ownerEmail) ? '' : ' — add your UPI ID in Profile → Settings so we can') + '. SwapSutra will also help you get the book back.',
+            'Your book was not returned by ' + due + '. The borrower\'s ₹' + amount + ' security deposit has been forfeited and SwapSutra will pay it to you' + (readPayoutAccount_(ownerEmail) ? '' : ' — add your UPI ID or bank account in Profile → Settings so we can') + '. SwapSutra will also help you get the book back.',
             id, 'ret_forfeit_owner_' + id + '_' + leg.leg);
           returnNotify_('swapsutra@gmail.com', 'return_forfeit_admin', 'Pay out a forfeited deposit',
             'Exchange ' + id + ': ₹' + amount + ' forfeited by ' + borrowerEmail + ' — pay it to ' + ownerEmail + ' and mark it paid in Admin → Returns.',
@@ -24537,7 +24790,7 @@ function adminMarkForfeitPaid(data) {
     : 'the deposit forfeited when your book was not returned on time';
   const account = readPayoutAccount_(row.obj.ownerEmail);
   returnNotify_(row.obj.ownerEmail, 'return_forfeit_paid', 'SwapSutra has paid you ₹' + row.obj.amount,
-    'SwapSutra has sent you ₹' + row.obj.amount + (account ? ' to ' + account.upiId : '') + ' — ' + kindOfPayout + '.',
+    'SwapSutra has sent you ₹' + row.obj.amount + (account ? ' to ' + payoutDestinationLabel_(account) : '') + ' — ' + kindOfPayout + '.',
     row.obj.swapId, 'ret_paid_' + row.obj.id);
   return { success: true };
 }
@@ -24877,15 +25130,50 @@ function adminDecideDeposits(data) {
     if (existing.some(f => String(f.swapId) === String(swap.obj.id) && String(f.leg) === leg)) {
       return { success: false, message: 'The ' + payerRole + ' deposit on this exchange has already been decided.' };
     }
+    // Final check (11 Oct 2026): on a rental the rent is the owner's whatever
+    // the dispute decides — it comes out of the renter's deposit first, and
+    // only the rest is refunded or forfeited.
+    // Only once the renter actually received the book — a rental that never
+    // reached them owes no rent.
+    let rentTaken = 0;
+    if (payerRole === 'requester' && String(swap.obj.serviceType || '').toUpperCase() === 'RENT') {
+      const rentFee = myFeeRecord_(swap.obj.id, 'requester');
+      if (rentFee && rentFee.adminStatus === 'ADMIN_APPROVED' && feeRecordBreakdown_(rentFee).depositAmount > 0) {
+        const prior = existing.find(f => String(f.swapId) === String(swap.obj.id) && String(f.leg) === 'rent');
+        let received = false;
+        try {
+          const rm = computeExchangeRoom_(roomInputFor_(swap, swap.ownerEmail));
+          received = (rm.legs.out || []).some(l => l.leg === 'outbound' && !!l.receivedAt);
+        } catch (e) { received = false; }
+        rentTaken = prior ? Number(prior.grossAmount || prior.amount || 0) : (received ? Math.min(held, rentChargeFor_(swap.obj)) : 0);
+      }
+    }
+    const available = held - rentTaken;
     let forfeit = 0;
     if (outcome === 'FORFEIT') {
-      forfeit = d.amount === undefined || d.amount === '' || d.amount === null ? held : Math.round(Number(d.amount));
-      if (!(forfeit > 0) || forfeit > held) return { success: false, message: 'The amount to forfeit must be between ₹1 and ₹' + held + '.' };
+      forfeit = d.amount === undefined || d.amount === '' || d.amount === null ? available : Math.round(Number(d.amount));
+      if (!(available > 0)) return { success: false, message: 'The whole ₹' + held + ' deposit is the rent, which goes to the owner — there is nothing left to forfeit. Choose "Refund" to record the decision.' };
+      if (!(forfeit > 0) || forfeit > available) return { success: false, message: 'The amount to forfeit must be between ₹1 and ₹' + available + (rentTaken > 0 ? ' (the ₹' + rentTaken + ' rent goes to the owner first)' : '') + '.' };
     } else if (outcome !== 'REFUND') {
       return { success: false, message: 'Each deposit is either refunded or forfeited.' };
     }
     const payer = emailOf[payerRole];
     const other = emailOf[payerRole === 'owner' ? 'requester' : 'owner'];
+    if (rentTaken > 0 && !existing.some(f => String(f.swapId) === String(swap.obj.id) && String(f.leg) === 'rent')) {
+      const rentRec = {
+        id: generateId('SS_RENT_'), swapId: swap.obj.id, leg: 'rent', bookTitle: title,
+        defaulterEmail: payer, ownerEmail: swap.ownerEmail, amount: rentTaken, dueAt: '', forfeitedAt: new Date(),
+        payoutStatus: 'TO_PAY_OWNER', note: 'Rent for "' + title + '", taken from the renter\'s ₹' + held + ' deposit (dispute decision).'
+      };
+      const rentParts = partnerPayoutParts_(swap.ownerEmail, rentTaken, rentRec.forfeitedAt);
+      if (rentParts) {
+        rentRec.amount = rentParts.net; rentRec.grossAmount = rentTaken; rentRec.payoutCycle = rentParts.cycle;
+        rentRec.note += rentParts.commission ? ' Partner: − ₹' + rentParts.commission + ' commission.' : ' Partner: no commission.';
+        appendCommissionRow_(sheet, headers, String(swap.obj.id), title, swap.ownerEmail, rentParts.commission, rentParts.cycle, Math.round(rentParts.rate * 100) + '% commission on ₹' + rentTaken + ' rent.');
+      }
+      sheet.appendRow(headers.map(k => rentRec[k] !== undefined ? rentRec[k] : ''));
+      existing.push(rentRec);
+    }
     if (forfeit > 0) {
       const rec = {
         id: generateId('SS_FORFEIT_'), swapId: swap.obj.id, leg: leg, bookTitle: title,
@@ -24903,13 +25191,41 @@ function adminDecideDeposits(data) {
       sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
       existing.push(rec);
     }
-    const refund = held - forfeit;
+    let refund = available - forfeit;
+    // Launch check (11 Oct 2026): the part of a paid deposit that is not
+    // forfeited is actually refunded — queued for the admin to pay — minus
+    // SwapSutra's ₹10 where the swap rule takes it from the deposit.
+    const feeRec = myFeeRecord_(swap.obj.id, payerRole);
+    const paid = feeRec && feeRec.adminStatus === 'ADMIN_APPROVED' && feeRecordBreakdown_(feeRec).depositAmount > 0;
+    if (refund > 0 && paid) {
+      const sid = String(swap.obj.id);
+      const feeCut = Math.min(refund, feeTakenFromDeposit_(swap.obj, payer, feeRec, payerRole));
+      if (feeCut > 0 && !existing.some(f => String(f.swapId) === sid && String(f.leg) === 'fee:' + payerRole)) {
+        const feeRow = { id: generateId('SS_FEE_KEPT_'), swapId: sid, leg: 'fee:' + payerRole, bookTitle: title, defaulterEmail: payer,
+          ownerEmail: 'swapsutra@gmail.com', amount: feeCut, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'KEPT_AS_FEE',
+          note: 'Platform fee taken from the ₹' + held + ' deposit (dispute decision).' };
+        sheet.appendRow(headers.map(k => feeRow[k] !== undefined ? feeRow[k] : ''));
+        existing.push(feeRow);
+        refund -= feeCut;
+      }
+      if (refund > 0 && !existing.some(f => String(f.swapId) === sid && String(f.leg) === 'refund:' + payerRole)) {
+        const refRow = { id: generateId('SS_REFUND_'), swapId: sid, leg: 'refund:' + payerRole, bookTitle: title, defaulterEmail: '',
+          ownerEmail: payer, amount: refund, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'TO_PAY_OWNER',
+          note: 'Deposit refund after the dispute decision' + (forfeit > 0 ? ' (₹' + forfeit + ' forfeited)' : '') + (feeCut > 0 ? ', minus the ₹' + feeCut + ' platform fee' : '') + '. Reason: ' + reason };
+        sheet.appendRow(headers.map(k => refRow[k] !== undefined ? refRow[k] : ''));
+        existing.push(refRow);
+      }
+    } else if (!paid && feeRec) {
+      // A deposit that was never verified as paid has nothing to refund.
+      refund = 0;
+    }
+    const rentNote = rentTaken > 0 ? '₹' + rentTaken + ' of it is the rent, paid to the owner. ' : '';
     const message = forfeit > 0
-      ? '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
-      : 'The ₹' + held + ' deposit is refunded in full. Reason: ' + reason;
+      ? rentNote + '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
+      : rentNote + (refund > 0 ? 'The deposit is refunded' + (refund < available ? ' (₹' + refund + ' after the ₹' + (available - refund) + ' platform fee)' : rentTaken > 0 ? ' (₹' + refund + ')' : ' in full (₹' + refund + ')') : 'No deposit is kept') + '. Reason: ' + reason;
     [payer, other].forEach(email => returnNotify_(email, 'deposit_decided', 'Decision on the security deposit',
-      'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + leg));
-    results.push({ payerRole: payerRole, held: held, forfeit: forfeit, refund: refund });
+      'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID or bank account in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + swap.obj.id + '_' + leg));
+    results.push({ payerRole: payerRole, held: held, rent: rentTaken, forfeit: forfeit, refund: refund });
   }
   try {
     appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'system', actionType: 'deposit_decided',
@@ -24941,7 +25257,10 @@ function adminDecideDeposits(data) {
    ════════════════════════════════════════════════════════════════════════ */
 
 const PAYOUT_ACCOUNT_SHEET = 'PayoutAccounts';
-const PAYOUT_ACCOUNT_HEADERS = ['email', 'upiId', 'payeeName', 'qrUrl', 'updatedAt'];
+// 11 Oct 2026 (owner's request): a bank account can be given instead of, or
+// as well as, a UPI ID — partners in particular are often paid to a bank.
+const PAYOUT_ACCOUNT_HEADERS = ['email', 'upiId', 'payeeName', 'qrUrl', 'updatedAt', 'accountName', 'accountNumber', 'ifsc', 'bankName'];
+const PAYOUT_IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const UPI_ID_PATTERN = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,63}$/;
 const GOOGLE_REVIEW_URL = 'https://g.page/r/CTKbe5CpoGNPEAI/review';
 
@@ -24950,7 +25269,10 @@ function getPayoutAccountSheet_() { const s = getOrCreateSheet(PAYOUT_ACCOUNT_SH
 function readPayoutAccount_(email) {
   const norm = normalizeEmail(email);
   const row = readSheetObjects_(getPayoutAccountSheet_()).rows.find(r => normalizeEmail(r.obj.email) === norm);
-  return row ? { upiId: row.obj.upiId || '', payeeName: row.obj.payeeName || '', qrUrl: row.obj.qrUrl || '', updatedAt: row.obj.updatedAt || '' } : null;
+  if (!row) return null;
+  const bank = row.obj.accountNumber ? { accountName: String(row.obj.accountName || ''), accountNumber: String(row.obj.accountNumber || ''),
+    ifsc: String(row.obj.ifsc || ''), bankName: String(row.obj.bankName || '') } : null;
+  return { upiId: row.obj.upiId || '', payeeName: row.obj.payeeName || '', qrUrl: row.obj.qrUrl || '', updatedAt: row.obj.updatedAt || '', bank: bank };
 }
 
 /** Action: getPayoutAccount — your own. */
@@ -24961,31 +25283,72 @@ function getPayoutAccount() {
 }
 
 /** Action: savePayoutAccount { upiId, payeeName, fileData? (QR image) } */
+/**
+ * Checks payout details: a UPI ID (with the name on it) and/or a bank
+ * account (holder, number, IFSC). At least one is needed; whatever is
+ * given must be complete. Returns { errors, clean }.
+ */
+function validatePayoutDetails_(data) {
+  const d = data || {};
+  const errors = {};
+  const upiId = String(d.upiId || '').trim();
+  const payeeName = String(d.payeeName || '').trim().slice(0, 80);
+  const accountName = String(d.accountName || '').trim().slice(0, 80);
+  const accountNumber = String(d.accountNumber || '').replace(/\s+/g, '');
+  const ifsc = String(d.ifsc || '').trim().toUpperCase();
+  const bankName = String(d.bankName || '').trim().slice(0, 80);
+  const wantsBank = !!(accountName || accountNumber || ifsc || bankName);
+  if (!upiId && !wantsBank) errors.upiId = 'Add a UPI ID or a bank account, so SwapSutra can pay you.';
+  if (upiId && !UPI_ID_PATTERN.test(upiId)) errors.upiId = 'Enter a UPI ID like name@okbank or 98xxxxxxxx@upi.';
+  if (upiId && !payeeName) errors.payeeName = 'Enter the name on the UPI account, so SwapSutra can check it before paying.';
+  if (wantsBank) {
+    if (!accountName) errors.accountName = 'Enter the account holder\'s name.';
+    if (!/^\d{9,18}$/.test(accountNumber)) errors.accountNumber = 'Enter the account number (9–18 digits).';
+    if (!PAYOUT_IFSC_PATTERN.test(ifsc)) errors.ifsc = 'Enter the IFSC code, like SBIN0001234.';
+  }
+  return { errors: errors, clean: { upiId: upiId, payeeName: payeeName || accountName, accountName: accountName, accountNumber: accountNumber, ifsc: ifsc, bankName: bankName, hasBank: wantsBank } };
+}
+
+/** Saves the payout details for an email (already validated). */
+function storePayoutAccount_(email, c, qrUrl) {
+  const sheet = getPayoutAccountSheet_();
+  const t = readSheetObjects_(sheet);
+  const existing = t.rows.find(r => normalizeEmail(r.obj.email) === email);
+  const now = new Date();
+  const rec = { email: email, upiId: c.upiId, payeeName: c.payeeName, updatedAt: now,
+    accountName: c.hasBank ? c.accountName : '', accountNumber: c.hasBank ? c.accountNumber : '', ifsc: c.hasBank ? c.ifsc : '', bankName: c.hasBank ? c.bankName : '' };
+  if (qrUrl) rec.qrUrl = qrUrl;
+  if (existing) {
+    const headers = ensureSheetHeaders(sheet, PAYOUT_ACCOUNT_HEADERS);
+    Object.keys(rec).forEach(k => { const i = headers.indexOf(k); if (i !== -1 && k !== 'email') sheet.getRange(existing.rowIndex + 1, i + 1).setValue(rec[k]); });
+  } else {
+    const headers = ensureSheetHeaders(sheet, PAYOUT_ACCOUNT_HEADERS);
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  }
+}
+
+function payoutDestinationLabel_(acct) {
+  if (!acct) return '';
+  const parts = [];
+  if (acct.upiId) parts.push(acct.upiId);
+  if (acct.bank) parts.push((acct.bank.bankName ? acct.bank.bankName + ' ' : '') + 'a/c ••••' + String(acct.bank.accountNumber).slice(-4));
+  return parts.join(' or ');
+}
+
 function savePayoutAccount(data) {
   const caller = normalizeEmail(getAuthenticatedEmail());
   if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in first.' };
-  const upiId = String((data && data.upiId) || '').trim();
-  const payeeName = String((data && data.payeeName) || '').trim().slice(0, 80);
-  if (!UPI_ID_PATTERN.test(upiId)) return { success: false, message: 'Enter a UPI ID like name@okbank or 98xxxxxxxx@upi.' };
-  if (!payeeName) return { success: false, message: 'Enter the name on the account, so SwapSutra can check it before paying.' };
+  const v = validatePayoutDetails_(data);
+  const firstError = Object.keys(v.errors).map(k => v.errors[k])[0];
+  if (firstError) return { success: false, errors: v.errors, message: firstError };
   let qrUrl = '';
   if (data && data.fileData) {
     qrUrl = saveFileToDrive(data.fileData, 'payout_qr_' + caller.split('@')[0] + '.jpg') || '';
     if (!qrUrl) return { success: false, message: 'That QR image could not be saved. Use a JPG or PNG under 10 MB.' };
   }
-  const sheet = getPayoutAccountSheet_();
-  const t = readSheetObjects_(sheet);
-  const existing = t.rows.find(r => normalizeEmail(r.obj.email) === caller);
-  const now = new Date();
-  if (existing) {
-    const set = (k, v) => { const i = t.headers.indexOf(k); if (i !== -1) sheet.getRange(existing.rowIndex + 1, i + 1).setValue(v); };
-    set('upiId', upiId); set('payeeName', payeeName); if (qrUrl) set('qrUrl', qrUrl); set('updatedAt', now);
-  } else {
-    const headers = ensureSheetHeaders(sheet, PAYOUT_ACCOUNT_HEADERS);
-    const rec = { email: caller, upiId: upiId, payeeName: payeeName, qrUrl: qrUrl, updatedAt: now };
-    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
-  }
-  return { success: true, account: readPayoutAccount_(caller), message: 'Saved. Payouts will go to ' + upiId + '.' };
+  storePayoutAccount_(caller, v.clean, qrUrl);
+  const acct = readPayoutAccount_(caller);
+  return { success: true, account: acct, message: 'Saved. Payouts will go to ' + payoutDestinationLabel_(acct) + '.' };
 }
 
 /** The sale's state for the buyer and seller: what was paid, whether it can be closed, the payout. */
@@ -24996,8 +25359,10 @@ function saleStatusFor_(swap) {
   // A partner seller (9 Oct 2026) pays no ₹10 fee; SwapSutra keeps its commission instead.
   const partnerSeller = approvedPartner_(swap.ownerEmail);
   const sellerFee = isAdminEmail(swap.ownerEmail) || partnerSeller ? 0 : fee;
-  const payout = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
-    .find(f => String(f.swapId) === id && String(f.leg) === 'sale') || null;
+  const saleRows = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj).filter(f => String(f.swapId) === id);
+  const payout = saleRows.find(f => String(f.leg) === 'sale') || null;
+  // Launch check (11 Oct 2026): SwapSutra may refund the buyer after a dispute.
+  const buyerRefund = saleRows.find(f => String(f.leg) === 'sale_refund') || null;
   const commission = partnerSeller ? partnerCommissionFor_(partnerSeller, price, payout && payout.forfeitedAt ? payout.forfeitedAt : new Date()) : { rate: 0, commission: 0 };
   const events = journeyEventsBySwap_()[id] || [];
   const received = events.some(e => e.leg === 'outbound' && e.event === 'received');
@@ -25009,7 +25374,8 @@ function saleStatusFor_(swap) {
     sellerFee: sellerFee,
     commission: commission.commission, commissionRate: commission.rate, partnerSeller: !!partnerSeller,
     received: received,
-    closed: !!payout,
+    closed: !!payout || !!buyerRefund,
+    refundedToBuyer: buyerRefund ? Number(buyerRefund.amount || 0) : 0,
     payoutStatus: payout ? payout.payoutStatus : '',
     paidAt: payout ? payout.paidAt || '' : '',
     disputeOpen: swapHasOpenDispute(id),
@@ -25055,6 +25421,70 @@ function getSaleStatus(data) {
  * video), no open dispute, and the purchase not already closed.
  * Creates the seller's payout (price − seller's platform fee).
  */
+/**
+ * Admin action: adminDecideSale { swapId, outcome: 'REFUND_BUYER' | 'PAY_SELLER', reason }
+ * (launch check, 11 Oct 2026). After a problem is reported on a purchase,
+ * SwapSutra decides from the videos: refund the buyer in full (price + ₹10)
+ * or release the money to the seller. Either way the purchase is closed and
+ * the payout is queued in Admin → Payouts; both readers are told why.
+ */
+function adminDecideSale(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  if (String(swap.obj.serviceType || '').toUpperCase() !== 'SELL') return { success: false, message: 'Only a purchase is decided this way.' };
+  const outcome = String((data && data.outcome) || '').toUpperCase();
+  const reason = String((data && data.reason) || '').trim().slice(0, 500);
+  if (['REFUND_BUYER', 'PAY_SELLER'].indexOf(outcome) === -1) return { success: false, message: 'Choose: refund the buyer, or pay the seller.' };
+  if (!reason) return { success: false, message: 'Write the reason — both readers will see it.' };
+  const st = saleStatusFor_(swap);
+  if (!st.escrow) return { success: false, message: 'This sale was paid directly between readers; SwapSutra holds nothing for it.' };
+  if (st.closed) return { success: false, message: 'This purchase has already been closed.' };
+  const paid = loadSecurityFeeRows(String(swap.obj.id)).rows.map(r => r.obj)
+    .find(r => r.payerRole === 'requester' && r.adminStatus === 'ADMIN_APPROVED');
+  if (!paid) return { success: false, message: 'The buyer\'s payment has not been verified, so there is nothing to refund or release.' };
+  const sheet = getReturnForfeitSheet_();
+  const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
+  const title = String(swap.obj.requestedBookTitle || 'the book');
+  if (outcome === 'REFUND_BUYER') {
+    const amount = Number(paid.requiredAmount || st.buyerPays) || st.buyerPays;
+    const rec = { id: generateId('SS_REFUND_'), swapId: swap.obj.id, leg: 'sale_refund', bookTitle: title, defaulterEmail: swap.ownerEmail,
+      ownerEmail: swap.requesterEmail, amount: amount, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'TO_PAY_OWNER',
+      note: 'Purchase refunded to the buyer after a dispute. Reason: ' + reason };
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    returnNotify_(swap.requesterEmail, 'sale_refund_buyer', 'Your purchase is refunded',
+      'After reviewing "' + title + '", SwapSutra is refunding your ₹' + amount + '. Reason: ' + reason, swap.obj.id, 'sale_ref_b_' + swap.obj.id);
+    returnNotify_(swap.ownerEmail, 'sale_refund_seller', 'Purchase refunded to the buyer',
+      'After reviewing "' + title + '", SwapSutra has refunded the buyer. Reason: ' + reason, swap.obj.id, 'sale_ref_s_' + swap.obj.id);
+  } else {
+    const rec = { id: generateId('SS_PAYOUT_'), swapId: swap.obj.id, leg: 'sale', bookTitle: title, defaulterEmail: swap.requesterEmail,
+      ownerEmail: swap.ownerEmail, amount: st.sellerReceives, dueAt: '', forfeitedAt: new Date(),
+      payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
+      note: 'Sale released to the seller after a dispute: price ₹' + st.price + ' − ₹' + st.sellerFee + ' platform fee. Reason: ' + reason };
+    salePartnerPayout_(swap, st, rec, sheet, headers);
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    returnNotify_(swap.ownerEmail, 'sale_payout_due', 'Your sale is complete',
+      'After reviewing "' + title + '", SwapSutra is paying you ₹' + st.sellerReceives + '. Reason: ' + reason, swap.obj.id, 'sale_dec_s_' + swap.obj.id);
+    returnNotify_(swap.requesterEmail, 'sale_decided_buyer', 'Decision on your purchase',
+      'After reviewing "' + title + '", SwapSutra has released the payment to the seller. Reason: ' + reason, swap.obj.id, 'sale_dec_b_' + swap.obj.id);
+  }
+  try {
+    appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'system', actionType: 'sale_decided',
+      actorEmail: normalizeEmail(getAuthenticatedEmail()), note: outcome + ' — ' + reason });
+  } catch (e) { /* the payout record is the source of truth */ }
+  // Final check (11 Oct 2026): SwapSutra's decision ends the purchase, so the
+  // room closes with the decision in it — no "received"/"delivered" steps are
+  // left open afterwards.
+  try {
+    const closing = outcome === 'REFUND_BUYER'
+      ? 'SwapSutra has refunded the buyer for this purchase. Reason: ' + reason
+      : 'SwapSutra has released the payment to the seller. Reason: ' + reason;
+    appendStageEvent({ swapId: swap.obj.id, stage: 'ROOM', party: 'system', actionType: 'room_closed', actorEmail: 'swapsutra@gmail.com', note: closing.slice(0, 300) });
+    roomArchive_(swap, '🏁 ' + closing + ' This room is now closed — SwapSutra keeps the full record.', closing);
+  } catch (e) { Logger.log('adminDecideSale: room close failed ' + e); }
+  return { success: true, outcome: outcome, message: outcome === 'REFUND_BUYER' ? 'The buyer\'s refund is queued in Payouts.' : 'The seller\'s payout is queued in Payouts.' };
+}
+
 function confirmSaleComplete(data) {
   const caller = normalizeEmail(getAuthenticatedEmail());
   const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
@@ -25093,7 +25523,7 @@ function confirmSaleComplete(data) {
     'The buyer has the book and closed the purchase. SwapSutra will send you ₹' + st.sellerReceives + (st.partnerSeller
       ? ' (₹' + st.price + (st.commission ? ' minus ' + Math.round(st.commissionRate * 100) + '% commission' : '') + ') with your monthly payout'
       : ' (₹' + st.price + ' minus the ₹' + st.sellerFee + ' platform fee)') +
-    (account ? ' to ' + account.upiId + '.' : '. Add your UPI ID in the exchange\'s Delivery panel so we can pay you.'),
+    (account ? ' to ' + payoutDestinationLabel_(account) + '.' : '. Add your UPI ID or bank account in the exchange room (or Profile → Settings) so we can pay you.'),
     swap.obj.id, 'sale_closed_seller_' + swap.obj.id);
   returnNotify_(caller, 'sale_closed_buyer', 'Thank you — purchase closed',
     'Enjoy the book!' + (hasRatedPlatform_(caller) ? '' : ' Rate the exchange in its room — it moves to My orders after that.'),
@@ -25456,7 +25886,13 @@ function computeExchangeRoom_(input) {
   const clockStart = Math.max(isFinite(input.acceptedAtMs) ? input.acceptedAtMs : now, t(ROOM_TIMERS_START_ISO));
   const conditionDoneAt = raw[3] ? Math.max.apply(null, out.map(l => t(l.videos.QUALITY.at))) : NaN;
   const conditionBy = clockStart + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
-  const payBy = (isFinite(conditionDoneAt) ? Math.max(conditionDoneAt, clockStart) : NaN) + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
+  // Launch check (11 Oct 2026): a payment SwapSutra rejected gets a fresh
+  // 48 hours from the rejection, so "pay again" is never followed at once by
+  // "request closed".
+  const rejectedTimes = (fee.payers || []).filter(p => p.adminStatus === 'ADMIN_REJECTED')
+    .map(p => t(p.updatedAt || p.submittedAt)).filter(x => isFinite(x));
+  const rejectedAt = rejectedTimes.length ? Math.max.apply(null, rejectedTimes) : NaN;
+  const payBy = (isFinite(conditionDoneAt) ? Math.max(conditionDoneAt, clockStart, isFinite(rejectedAt) ? rejectedAt : -Infinity) : NaN) + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
   const unpaid = (fee.payers || []).filter(p => p.adminStatus === 'NOT_SUBMITTED' || p.adminStatus === 'ADMIN_REJECTED' || !p.adminStatus);
   const paymentPhase = accepted && !done[4];
 
@@ -25543,7 +25979,11 @@ function computeExchangeRoom_(input) {
             push({ type: 'markDelivered', step: isBack ? 14 : 9, leg: l.leg, method: route.method });
           }
         });
-        legs.filter(l => l.youReceive && !l.receivedAt).forEach(l => {
+        // Final check (11 Oct 2026): the receiver is asked for the unboxing
+        // video only once the sender has handed the book over (handover
+        // video, a tracking ID, or marked delivered) — never while it is
+        // still on the sender's shelf.
+        legs.filter(l => l.youReceive && !l.receivedAt && (has(l, 'HANDOVER') || !!l.awb || !!l.senderMarkedAt)).forEach(l => {
           if (!has(l, 'RECEIVING')) push({ type: 'video', step: isBack ? 14 : 9, leg: l.leg, kind: 'RECEIVING' });
           else push({ type: 'markReceived', step: isBack ? 14 : 9, leg: l.leg, sale: sale && l.leg === 'outbound' && input.saleEscrow !== false });
         });
@@ -25574,7 +26014,7 @@ function computeExchangeRoom_(input) {
             push({ type: 'markDelivered', step: 14, leg: l.leg, method: backRoute.method });
           }
         });
-        legsB.filter(l => l.youReceive && !l.receivedAt).forEach(l => {
+        legsB.filter(l => l.youReceive && !l.receivedAt && (has(l, 'HANDOVER') || !!l.awb || !!l.senderMarkedAt)).forEach(l => {
           if (!has(l, 'RECEIVING')) push({ type: 'video', step: 14, leg: l.leg, kind: 'RECEIVING' });
           else push({ type: 'markReceived', step: 14, leg: l.leg, sale: false });
         });
@@ -25916,11 +26356,18 @@ function roomCreateRefunds_(swap) {
   const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
   const existing = readSheetObjects_(sheet).rows.map(r => r.obj).filter(f => String(f.swapId) === id);
   const created = [];
+  // Launch check (11 Oct 2026): a book that came back late is settled by the
+  // forfeit job (runReturnDeadlines), never refunded here as well.
+  const late = {};
+  try {
+    (returnStateForSwap_(swap).legs || []).forEach(l => { if (l.state === 'OVERDUE' || l.state === 'RETURNED_LATE') late[l.borrower] = true; });
+  } catch (e) { /* no return rule on this exchange */ }
   loadSecurityFeeRows(id).rows.map(r => r.obj).forEach(rec => {
     if (rec.adminStatus !== 'ADMIN_APPROVED') return;
     const deposit = feeRecordBreakdown_(rec).depositAmount;
     if (!(deposit > 0)) return;
     const role = rec.payerRole;
+    if (late[role]) return;
     // The deposit that protected a late-returned book is the owner's now.
     const forfeitLeg = role === 'requester' ? 'return' : 'counter_return';
     if (existing.some(f => String(f.leg) === forfeitLeg)) return;
@@ -25951,7 +26398,7 @@ function roomCreateRefunds_(swap) {
         created.push(rentRec);
         try {
           returnNotify_(swap.ownerEmail, 'room_rent_due', 'Your rent is on its way',
-            '"' + title + '" is back with you. SwapSutra will send you the rent, ₹' + rent + (readPayoutAccount_(swap.ownerEmail) ? '.' : ' — add your UPI ID in Profile → Settings so we can pay you.'),
+            '"' + title + '" is back with you. SwapSutra will send you the rent, ₹' + rent + (readPayoutAccount_(swap.ownerEmail) ? '.' : ' — add your UPI ID or bank account in Profile → Settings so we can pay you.'),
             id, 'room_rent_owner_' + id);
           returnNotify_('swapsutra@gmail.com', 'room_rent_admin', 'Pay rent to an owner',
             'Exchange ' + id + ': pay ₹' + rent + ' rent to ' + swap.ownerEmail + ' (from the renter\'s deposit) and mark it paid in Admin → Payouts.', id, 'room_rent_admin_' + id, { whatsapp: false });
@@ -26453,7 +26900,12 @@ function getMyOrders() {
       // stays in the cart, where the reader rates; then it is an order.
       const roomClosed = String((chats[id] || {}).chatStatus || '') === 'Archived' || evs.some(e => e.actionType === 'room_closed') || !!ratedByMe[id];
       let inReturn = null;
-      if (!done) {
+      // Final check (11 Oct 2026): an exchange SwapSutra closed with a decision
+      // (a disputed purchase refunded or released) is an order too, with the
+      // decision on it — it must not vanish from both the cart and My orders.
+      const decided = evs.filter(e => e.actionType === 'room_closed' && /^SwapSutra has /.test(String(e.note || ''))).pop() || null;
+      if (decided && !done) { /* listed below with its decision */ }
+      else if (!done) {
         // Not finished — but a book that has reached the reader and has to
         // come back is listed under "In return process".
         const swapR = loadSwapForCirculation(id);
@@ -26488,7 +26940,9 @@ function getMyOrders() {
         const rentCut = rentRow ? Number(rentRow.amount || 0) : 0;
         const feeRow = p.find(x => String(x.leg) === 'fee:' + role);
         const feeCut = feeRow ? Number(feeRow.amount || 0) : (role === 'requester' || role === 'owner' ? feeTakenFromDeposit_(swap.obj, caller, myFee, role) : 0);
-        deposit = forfeit ? { amount: paid.deposit, status: 'forfeited', note: 'Forfeited' + (forfeit.amount ? ' (₹' + forfeit.amount + ')' : '') }
+        deposit = forfeit ? { amount: paid.deposit, status: 'forfeited', note: 'Forfeited' + (forfeit.amount ? ' (₹' + forfeit.amount + ')' : '') +
+            (rentCut ? ' · ₹' + rentCut + ' rent to the owner' : '') +
+            (refund ? ' · ₹' + Number(refund.amount || 0) + (refund.payoutStatus === 'PAID_TO_OWNER' ? ' refunded to you' : ' coming back to you') : '') }
           : refund ? { amount: Number(refund.amount || paid.deposit), status: refund.payoutStatus === 'PAID_TO_OWNER' ? 'refunded' : 'refund_due', paidAt: refund.paidAt || '', rent: rentCut, fee: feeCut, of: paid.deposit }
           : rentCut >= paid.deposit ? { amount: 0, status: 'rent_used', rent: rentCut, of: paid.deposit }
           : { amount: paid.deposit, status: 'held', rent: role === 'requester' ? rentChargeFor_(swap.obj) : 0, fee: feeCut, of: paid.deposit };
@@ -26498,6 +26952,16 @@ function getMyOrders() {
       if (role === 'owner' && (type === 'SELL' || type === 'RENT')) {
         const p = (payouts[id] || []).find(x => String(x.leg) === (type === 'SELL' ? 'sale' : 'rent'));
         if (p) payout = { amount: Number(p.amount || 0), status: p.payoutStatus === 'PAID_TO_OWNER' ? 'paid' : 'due', paidAt: p.paidAt || '', kind: type === 'SELL' ? 'sale' : 'rent' };
+      }
+      // A deposit SwapSutra's decision (or a late return) awarded to this reader.
+      let awarded = null;
+      const won = (payouts[id] || []).filter(x => normalizeEmail(x.ownerEmail) === caller && Number(x.amount) > 0 &&
+        (/^dispute:/.test(String(x.leg)) || String(x.leg) === 'return' || String(x.leg) === 'counter_return'));
+      if (won.length) awarded = { amount: won.reduce((t, x) => t + Number(x.amount || 0), 0), status: won.every(x => x.payoutStatus === 'PAID_TO_OWNER') ? 'paid' : 'due' };
+      // A buyer refunded by SwapSutra's decision.
+      if (role === 'requester' && type === 'SELL') {
+        const p = (payouts[id] || []).find(x => String(x.leg) === 'sale_refund');
+        if (p) payout = { amount: Number(p.amount || 0), status: p.payoutStatus === 'PAID_TO_OWNER' ? 'paid' : 'due', paidAt: p.paidAt || '', kind: 'refund' };
       }
       const other = role === 'owner' ? swap.requesterEmail : swap.ownerEmail;
       orders.push({
@@ -26517,7 +26981,9 @@ function getMyOrders() {
         paid: paid,
         deposit: deposit,
         payout: payout,
-        completedAt: done && done.createdAt ? new Date(done.createdAt).toISOString() : '',
+        completedAt: done && done.createdAt ? new Date(done.createdAt).toISOString() : (decided && decided.createdAt ? new Date(decided.createdAt).toISOString() : ''),
+        decision: decided && !done ? String(decided.note || '') : '',
+        awarded: awarded,
         roomClosed: true
       });
     });
@@ -26609,16 +27075,19 @@ function toggleWishlist(data) {
      responsibility (see their contract).
    ════════════════════════════════════════════════════════════════════════ */
 
-const PARTNER_TYPES = ['bookstore', 'author', 'publisher', 'promoter'];
-const PARTNER_TYPE_LABEL = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter' };
+// 11 Oct 2026 (owner's request): libraries register as partners too.
+const PARTNER_TYPES = ['bookstore', 'author', 'publisher', 'promoter', 'library'];
+const PARTNER_TYPE_LABEL = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter', library: 'Library' };
 /** Bump a type's version when its contract text changes; partners sign the current one. */
-const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-10', author: 'author-2026-10-10', publisher: 'publisher-2026-10-10', promoter: 'promoter-2026-10-10' };
+const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-11', author: 'author-2026-10-11', publisher: 'publisher-2026-10-11', promoter: 'promoter-2026-10-11', library: 'library-2026-10-11' };
 const PARTNER_HEADERS = [
   'id', 'type', 'email', 'status', 'name', 'contactName', 'phone', 'about', 'website', 'instagram',
   'address', 'city', 'pincode', 'lat', 'lng', 'placeLabel', 'registeredName', 'gstin', 'panNumber', 'aadhaarLast4',
   'docsJson', 'typeFieldsJson', 'showBanner', 'runAds', 'bannerImageUrl', 'bannerHeadline', 'bannerTagline', 'bannerStatus', 'bannerNote',
   'contractVersion', 'contractSignedName', 'contractSignedAt', 'commissionPlan', 'commissionFreeUntil', 'approvedAt', 'approvedBy',
-  'adsFreeUntil', 'reviewNote', 'createdAt', 'updatedAt', 'submittedAt'
+  'adsFreeUntil', 'reviewNote', 'createdAt', 'updatedAt', 'submittedAt',
+  // 11 Oct 2026 (owner's request): an alternative mobile number and email.
+  'altPhone', 'altEmail', 'bannerClicks'
 ];
 const PARTNER_STATUSES = ['PENDING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUSPENDED'];
 const PARTNER_AD_PAYMENT_HEADERS = ['id', 'partnerId', 'email', 'amount', 'months', 'utr', 'screenshotUrl', 'status', 'periodFrom', 'periodTo', 'reviewedBy', 'reviewedAt', 'reason', 'createdAt'];
@@ -26628,7 +27097,8 @@ const PARTNER_DOCS = {
   bookstore: { aadhaar: "Owner's Aadhaar (masked)", pan: "Owner's PAN card", businessProof: 'Shop registration / GST / Udyam / trade licence' },
   author: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' },
   publisher: { aadhaar: "Signatory's Aadhaar (masked)", pan: 'PAN card (business or signatory)', businessProof: 'Company / GST / Udyam registration' },
-  promoter: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' }
+  promoter: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' },
+  library: { aadhaar: "Librarian's / authorised person's Aadhaar (masked)", pan: 'PAN card (library, trust or authorised person)', businessProof: 'Library registration — trust / society / shop registration, or the school or college letter' }
 };
 const PARTNER_OPTIONAL_DOCS = { businessProof: 'Business proof (optional)', other: 'Any other document (optional)' };
 
@@ -26666,6 +27136,59 @@ function partnerByEmail_(email) {
 }
 /** The approved (not suspended) partner record for an email, or null. Cached per run. */
 let __SS_PARTNER_CACHE__ = null;
+/**
+ * A row as a partner may see it (launch check, 11 Oct 2026): when the
+ * partner owns the book, every field about the requester (email, name,
+ * phone, address…) is replaced — the buyer stays with SwapSutra. Book ids
+ * and titles stay, so the request still works.
+ */
+/**
+ * How many other accepted, still-running exchanges hold this book (launch
+ * check, 11 Oct 2026). A request counts until it is completed or closed.
+ */
+function copiesInExchange_(values, headers, bookId, exceptId) {
+  if (!bookId) return 0;
+  // An exchange stops holding the book once it is done (book back / sale
+  // closed) or its room is closed.
+  const finished = completedSwapIdSet();
+  try {
+    readSheetObjects_(getStageEventsSheet()).rows.forEach(r => {
+      const a = String(r.obj.actionType || '');
+      if (a === 'exchange_done' || a === 'room_closed') finished[String(r.obj.swapId)] = true;
+    });
+  } catch (e) { /* the chat statuses above still count */ }
+  let n = 0;
+  for (let r = 1; r < values.length; r++) {
+    if (finished[String(values[r][headers.indexOf('id')])]) continue;
+    const p = resolveSwapRequestParties(headers, values[r]);
+    if (String(p.requestedBookId) !== String(bookId)) continue;
+    if (String(values[r][headers.indexOf('id')]) === String(exceptId)) continue;
+    if (String(values[r][headers.indexOf('status')] || '').trim().toLowerCase() === 'accepted') n++;
+  }
+  return n;
+}
+/** A partner listing's copies in stock (1 when not set). */
+function partnerBookStock_(bookId) {
+  try {
+    const t = readSheetObjects_(getOrCreateSheet('Books', getBookHeaders()));
+    const hit = t.rows.find(r => String(r.obj.id) === String(bookId));
+    const n = hit ? Number(hit.obj.stock) : NaN;
+    return isFinite(n) && n > 0 ? n : 1;
+  } catch (e) { return 1; }
+}
+
+function maskBuyerForPartner_(row, partnerEmail) {
+  if (!row || normalizeEmail(row.ownerEmail || row.receiverEmail || '') !== normalizeEmail(partnerEmail)) return row;
+  const out = Object.assign({}, row);
+  Object.keys(out).forEach(function (k) {
+    if (!/^(requester|sender)/i.test(k) || /(BookId|BookTitle|BookAuthor|Book)$/i.test(k)) return;
+    if (/email/i.test(k)) out[k] = 'buyer';
+    else if (/name/i.test(k)) out[k] = 'Buyer';
+    else out[k] = '';
+  });
+  return out;
+}
+
 function approvedPartner_(email) {
   const e = normalizeEmail(email);
   if (!e) return null;
@@ -26744,11 +27267,13 @@ function validatePartnerApplication_(d, existingDocs) {
   d = d || {};
   const errors = {};
   const type = String(d.type || '').toLowerCase();
-  if (PARTNER_TYPES.indexOf(type) === -1) errors.type = 'Choose bookstore, author, publisher or promoter.';
+  if (PARTNER_TYPES.indexOf(type) === -1) errors.type = 'Choose bookstore, author, publisher, promoter or library.';
   const clean = {
     type: type,
     name: cleanPartnerText_(d.name, 100), contactName: cleanPartnerText_(d.contactName, 80),
     phone: String(d.phone || '').replace(/[^\d+]/g, '').slice(0, 15),
+    altPhone: String(d.altPhone || '').replace(/[^\d+]/g, '').slice(0, 15),
+    altEmail: String(d.altEmail || '').trim().toLowerCase().slice(0, 120),
     about: cleanPartnerText_(d.about, 600), website: '', instagram: cleanPartnerText_(d.instagram, 80),
     address: cleanPartnerText_(d.address, 300), city: cleanPartnerText_(d.city, 60), pincode: String(d.pincode || '').trim(),
     lat: Number(d.lat), lng: Number(d.lng), placeLabel: cleanPartnerText_(d.placeLabel, 120),
@@ -26763,14 +27288,23 @@ function validatePartnerApplication_(d, existingDocs) {
   if (clean.name.length < 2) errors.name = nameLabel + ' is required.';
   if (clean.contactName.length < 2) errors.contactName = 'Your full name is required.';
   if (!/^(\+91)?[6-9]\d{9}$/.test(clean.phone)) errors.phone = 'Enter a 10-digit Indian mobile number.';
+  // Alternative contact (optional): a second mobile and a second email.
+  if (clean.altPhone) {
+    if (!/^(\+91)?[6-9]\d{9}$/.test(clean.altPhone)) errors.altPhone = 'Enter a 10-digit Indian mobile number.';
+    else if (clean.altPhone.slice(-10) === clean.phone.slice(-10)) errors.altPhone = 'Give a different number from your main mobile.';
+  }
+  if (clean.altEmail) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(clean.altEmail)) errors.altEmail = 'Enter a valid email address.';
+    else if (d.mainEmail && normalizeEmail(d.mainEmail) === clean.altEmail) errors.altEmail = 'Give a different email from the one you verified.';
+  }
   if (!/^\d{6}$/.test(clean.pincode)) errors.pincode = 'Enter a 6-digit pincode.';
   if (clean.city.length < 2) errors.city = 'City is required.';
-  if (type === 'bookstore' || type === 'publisher') {
+  if (type === 'bookstore' || type === 'publisher' || type === 'library') {
     if (clean.address.length < 8) errors.address = 'Enter the full address.';
     if (!(isFinite(clean.lat) && isFinite(clean.lng) && Math.abs(clean.lat) <= 90 && Math.abs(clean.lng) <= 180 && (clean.lat || clean.lng))) errors.location = 'Pin your location on Google Maps.';
   }
   if (!(isFinite(clean.lat) && isFinite(clean.lng)) || (!clean.lat && !clean.lng)) { clean.lat = ''; clean.lng = ''; }
-  if (clean.registeredName.length < 2) errors.registeredName = type === 'bookstore' || type === 'publisher'
+  if (clean.registeredName.length < 2) errors.registeredName = type === 'bookstore' || type === 'publisher' || type === 'library'
     ? 'Whose name is the business registered in?' : 'Your name as on your PAN card.';
   if (!validPan_(clean.panNumber)) errors.panNumber = 'Enter the PAN number (like ABCDE1234F).';
   if (!/^\d{4}$/.test(clean.aadhaarLast4)) errors.aadhaarLast4 = 'Enter the last 4 digits of the Aadhaar.';
@@ -26782,6 +27316,7 @@ function validatePartnerApplication_(d, existingDocs) {
   if (type === 'author') { pick('penName', 80); if (!pick('booksPublished', 400)) errors.booksPublished = 'Name at least one of your books.'; pick('genres', 200); }
   if (type === 'publisher') { pick('imprints', 200); pick('yearEstablished', 4); pick('genres', 200); }
   if (type === 'promoter') { if (!pick('promotes', 300)) errors.promotes = 'What do you promote (books, authors, events)?'; pick('clients', 300); }
+  if (type === 'library') { if (!pick('libraryType', 60)) errors.libraryType = 'What kind of library is it (public, private, school, college, community)?'; pick('openingHours', 120); pick('membership', 200); pick('collectionSize', 40); }
   // Documents: new uploads (data URLs) or ones already on file.
   const have = existingDocs || {};
   const docs = d.docs || {};
@@ -26839,7 +27374,15 @@ function submitPartnerApplication(data) {
     // A different type is a different form: documents start again.
     Object.keys(prevDocs).forEach(k => delete prevDocs[k]);
   }
-  const v = validatePartnerApplication_(data, prevDocs);
+  // The verified email comes from the session, never from the form.
+  const v = validatePartnerApplication_(Object.assign({}, data, { mainEmail: caller }), prevDocs);
+  // 11 Oct 2026 (owner's request): where SwapSutra pays the partner, asked
+  // at registration (UPI and/or bank account).
+  const pIn = (data || {}).payout || {};
+  const payoutGiven = ['upiId', 'payeeName', 'accountName', 'accountNumber', 'ifsc', 'bankName'].some(k => String(pIn[k] || '').trim());
+  const keepSaved = !payoutGiven && !!readPayoutAccount_(caller);
+  const pv = validatePayoutDetails_(pIn);
+  if (!keepSaved) Object.keys(pv.errors).forEach(k => { v.errors['payout_' + k] = pv.errors[k]; });
   if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
   const c = v.clean;
   const lock = LockService.getScriptLock();
@@ -26852,7 +27395,7 @@ function submitPartnerApplication(data) {
     catch (err) { Logger.log('savePartnerDocs_ failed: ' + err); return { success: false, message: 'Your documents could not be saved. Please try again.' }; }
     const now = new Date();
     const rec = {
-      id: id, type: c.type, email: caller, status: 'PENDING', name: c.name, contactName: c.contactName, phone: c.phone, about: c.about,
+      id: id, type: c.type, email: caller, status: 'PENDING', name: c.name, contactName: c.contactName, phone: c.phone, altPhone: c.altPhone, altEmail: c.altEmail, about: c.about,
       website: c.website, instagram: c.instagram, address: c.address, city: c.city, pincode: c.pincode, lat: c.lat, lng: c.lng,
       placeLabel: c.placeLabel, registeredName: c.registeredName, gstin: c.gstin, panNumber: c.panNumber, aadhaarLast4: c.aadhaarLast4,
       docsJson: JSON.stringify(docs), typeFieldsJson: JSON.stringify(c.typeFields), showBanner: c.showBanner ? 'TRUE' : 'FALSE', runAds: c.runAds ? 'TRUE' : 'FALSE',
@@ -26866,6 +27409,8 @@ function submitPartnerApplication(data) {
       partnerSheet_().appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
       resetPartnerCache_();
     }
+    try { if (!keepSaved) storePayoutAccount_(caller, pv.clean, ''); }
+    catch (err) { Logger.log('partner payout details not saved: ' + err); }
     try {
       returnNotify_('swapsutra@gmail.com', 'partner_application', 'New partner application',
         PARTNER_TYPE_LABEL[c.type] + ' "' + c.name + '" (' + caller + ') applied. Review it in Management → Partners.', '', 'partner_app_' + id + '_' + now.getTime(), { whatsapp: false });
@@ -26885,7 +27430,7 @@ function partnerNextSteps_(p, promo, ctx) {
   if (st === 'REJECTED') steps.push({ key: 'rejected', text: 'Your application was not approved' + (p.reviewNote ? ': ' + p.reviewNote : '.') });
   if (st === 'SUSPENDED') steps.push({ key: 'suspended', text: 'Your partner account is paused' + (p.reviewNote ? ': ' + p.reviewNote : '.') + ' Write to swapsutra@gmail.com.' });
   if (st !== 'APPROVED') return steps;
-  if (!ctx.payoutAccount) steps.push({ key: 'payout', text: 'Add the UPI ID your monthly payouts should go to.', urgent: true });
+  if (!ctx.payoutAccount) steps.push({ key: 'payout', text: 'Add the UPI ID or bank account your monthly payouts should go to.', urgent: true });
   (ctx.orders || []).filter(o => o.nextStep).forEach(o => steps.push({ key: 'order_' + o.swapId, text: '"' + o.bookTitle + '": ' + o.nextStep, swapId: o.swapId, urgent: !!o.urgent }));
   if (!ctx.books) steps.push({ key: 'list', text: 'List your books — there is no limit, and you can set how many copies you have.' });
   if (truthy_(p.showBanner) && !p.bannerImageUrl) steps.push({ key: 'banner', text: 'Upload your banner for the Library page.' });
@@ -26899,11 +27444,18 @@ function partnerNextSteps_(p, promo, ctx) {
 /** A partner's orders: book, amount, status, the step they must do — never who the buyer is. */
 function partnerOrders_(email) {
   const swaps = readSheetObjects_(getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests)).rows.map(r => r.obj)
-    .filter(o => normalizeEmail(o.ownerEmail) === email && ['pending', 'declined', 'rejected'].indexOf(String(o.status || '').toLowerCase()) === -1);
+    .filter(o => normalizeEmail(o.ownerEmail) === email && ['declined', 'rejected', 'cancelled'].indexOf(String(o.status || '').toLowerCase()) === -1);
   const out = [];
   swaps.slice(-60).forEach(o => {
     const item = { swapId: String(o.id), bookTitle: String(o.requestedBookTitle || 'A book'), serviceType: String(o.serviceType || '').toUpperCase(),
       amount: Number(o.amount || 0), status: String(o.status || ''), createdAt: o.createdAt ? new Date(o.createdAt).toISOString() : '', nextStep: '', step: 0 };
+    // A new request waits for the partner to accept it (launch check, 11 Oct 2026).
+    if (String(o.status || '').toLowerCase() === 'pending') {
+      item.nextStep = 'new request — accept or decline it in Cart → My orders → Requests';
+      item.urgent = true;
+      out.push(item);
+      return;
+    }
     try {
       const swap = loadSwapForCirculation(String(o.id));
       if (swap) {
@@ -26955,13 +27507,13 @@ function partnerPublicView_(p, forAdmin) {
   const docs = parseJson_(p.docsJson, {});
   const out = {
     id: p.id, type: p.type, typeLabel: PARTNER_TYPE_LABEL[p.type] || p.type, email: p.email, status: p.status, name: p.name, contactName: p.contactName,
-    phone: p.phone, about: p.about, website: p.website, instagram: p.instagram, address: p.address, city: p.city, pincode: p.pincode,
+    phone: p.phone, altPhone: p.altPhone || '', altEmail: p.altEmail || '', about: p.about, website: p.website, instagram: p.instagram, address: p.address, city: p.city, pincode: p.pincode,
     lat: p.lat === '' ? null : Number(p.lat), lng: p.lng === '' ? null : Number(p.lng), placeLabel: p.placeLabel,
     registeredName: p.registeredName, gstin: p.gstin,
     panMasked: p.panNumber ? String(p.panNumber).slice(0, 2) + '•••••' + String(p.panNumber).slice(-3) : '', aadhaarLast4: p.aadhaarLast4,
     typeFields: parseJson_(p.typeFieldsJson, {}),
     showBanner: truthy_(p.showBanner), runAds: truthy_(p.runAds), bannerImageUrl: p.bannerImageUrl, bannerHeadline: p.bannerHeadline,
-    bannerTagline: p.bannerTagline, bannerStatus: p.bannerStatus || '', bannerNote: p.bannerNote || '',
+    bannerTagline: p.bannerTagline, bannerStatus: p.bannerStatus || '', bannerNote: p.bannerNote || '', bannerClicks: Number(p.bannerClicks) || 0,
     contractVersion: p.contractVersion, contractSignedName: p.contractSignedName,
     contractSignedAt: p.contractSignedAt ? new Date(p.contractSignedAt).toISOString() : '',
     currentContractVersion: PARTNER_CONTRACT_VERSIONS[p.type] || '',
@@ -27037,6 +27589,19 @@ function updatePartnerProfile(data) {
     const ph = String(d.phone || '').replace(/[^\d+]/g, '');
     if (!/^(\+91)?[6-9]\d{9}$/.test(ph)) errors.phone = 'Enter a 10-digit Indian mobile number.'; else fields.phone = ph;
   }
+  if (d.altPhone !== undefined) {
+    const ap = String(d.altPhone || '').replace(/[^\d+]/g, '');
+    const main = String(fields.phone || hit.obj.phone || '');
+    if (ap && !/^(\+91)?[6-9]\d{9}$/.test(ap)) errors.altPhone = 'Enter a 10-digit Indian mobile number.';
+    else if (ap && ap.slice(-10) === main.slice(-10)) errors.altPhone = 'Give a different number from your main mobile.';
+    else fields.altPhone = ap;
+  }
+  if (d.altEmail !== undefined) {
+    const ae = String(d.altEmail || '').trim().toLowerCase();
+    if (ae && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(ae)) errors.altEmail = 'Enter a valid email address.';
+    else if (ae && ae === caller) errors.altEmail = 'Give a different email from the one you sign in with.';
+    else fields.altEmail = ae.slice(0, 120);
+  }
   if (d.lat !== undefined && d.lng !== undefined) {
     const lat = Number(d.lat), lng = Number(d.lng);
     if (isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) { fields.lat = lat; fields.lng = lng; fields.placeLabel = cleanPartnerText_(d.placeLabel, 120); }
@@ -27060,6 +27625,8 @@ function uploadPartnerBanner(data) {
   const caller = normalizeEmail(getAuthenticatedEmail());
   const hit = partnerByEmail_(caller);
   if (!hit) return { success: false, error: 'NOT_PARTNER', message: 'Register as a partner first.' };
+  // Only an approved partner may put a public picture up (launch check, 11 Oct 2026).
+  if (String(hit.obj.status) !== 'APPROVED') return { success: false, error: 'NOT_APPROVED', message: 'You can add your banner once SwapSutra has approved your application.' };
   const saved = savePublicImage_(data, 'SwapSutra_Partner_Banners', 'banner_' + hit.obj.id + '_');
   if (!saved.success) return saved;
   setPartnerFields_(hit.rowIndex, partnerRows_().headers, { bannerImageUrl: saved.url, bannerStatus: 'PENDING', bannerNote: '', updatedAt: new Date() });
@@ -27095,7 +27662,8 @@ function savePartnerAd(data) {
     sheet.getRange(mine.rowIndex + 1, all.headers.indexOf('status') + 1).setValue(wanted);
     return { success: true, id: id };
   }
-  d.kind = p.type === 'author' ? 'author' : p.type === 'bookstore' ? 'bookstore' : (AD_KINDS.indexOf(String(d.kind)) !== -1 ? d.kind : 'book');
+  // A partner advertises itself (its own type) or one particular book.
+  d.kind = String(d.kind) === 'book' ? 'book' : (AD_KINDS.indexOf(p.type) !== -1 ? p.type : 'book');
   d.sponsor = p.name;
   d.status = 'live'; // validated as a live ad; stored as pending below
   const v = validateSponsoredAd_(d);
@@ -27410,7 +27978,7 @@ function partnerBannerAds_() {
       const link = /^https:\/\//i.test(String(p.website || '')) ? String(p.website)
         : (p.lat !== '' && p.lng !== '' && isFinite(Number(p.lat)) ? 'https://www.google.com/maps/search/?api=1&query=' + Number(p.lat) + ',' + Number(p.lng) : '');
       if (!link) return;
-      out.push({ id: 'PB-' + p.id, kind: p.type === 'author' ? 'author' : p.type === 'bookstore' ? 'bookstore' : 'book', sponsor: mugText_(p.name, 80),
+      out.push({ id: 'PB-' + p.id, kind: AD_KINDS.indexOf(p.type) !== -1 ? p.type : 'book', sponsor: mugText_(p.name, 80),
         headline: mugText_(p.bannerHeadline || p.name, 90), tagline: mugText_(p.bannerTagline || (p.city ? PARTNER_TYPE_LABEL[p.type] + ' · ' + p.city : ''), 160),
         imageUrl: String(p.bannerImageUrl), linkUrl: link, bookId: '', ctaLabel: p.type === 'bookstore' && !p.website ? 'Find the store' : '',
         placement: 'banner', partner: true, partnerType: p.type });
