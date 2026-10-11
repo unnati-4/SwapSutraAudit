@@ -119,7 +119,7 @@ function getSpreadsheet() {
 
 const DB_SCHEMA = {
     "Users": ["id", "name", "email", "phone", "area", "pincode", "genres", "bio", "membershipStatus", "paymentStatus", "createdAt", "updatedAt"],
-    "Subscriptions": ["id", "name", "email", "userEmail", "phone", "utr", "screenshotUrl", "originalAmount", "paymentAmount", "payableAmount", "finalAmount", "paymentRequired", "activationType", "paymentStatus", "couponCode", "adminStatus", "approvedAt", "subscriptionStartDate", "subscriptionExpiry", "booksListedCount", "reminderSent", "reminderSentAt", "approvalEmailSent", "cancellationReason", "createdAt", "updatedAt"],
+    "Subscriptions": ["id", "name", "email", "phone", "membershipStatus", "adminStatus", "cancellationReason", "createdAt", "updatedAt"],
     "Books": ["id", "ownerEmail", "title", "author", "condition", "status", "createdAt", "updatedAt"],
     "SwapRequests": ["id", "senderEmail", "receiverEmail", "status", "createdAt", "updatedAt"],
     "SupportMessages": ["id", "name", "email", "message", "status", "createdAt"],
@@ -6698,6 +6698,7 @@ function doPostHandler_(e) {
       const now = new Date();
       if (data.subAction === 'extend') {
         const expiryIdx = headers.indexOf('subscriptionExpiry');
+        if (expiryIdx === -1) return respondJson({ success: true, message: "Memberships are free and never expire — nothing to extend." });
         let expiryDate = new Date(values[rowIdx][expiryIdx]);
         expiryDate.setDate(expiryDate.getDate() + Number(data.days));
         sheet.getRange(rowIdx + 1, expiryIdx + 1).setValue(expiryDate);
@@ -7117,7 +7118,10 @@ function jsonResponse(data) {
 }
 
 function subscriptionHeadersRequired() {
-  return ["id", "name", "email", "userEmail", "phone", "utr", "screenshotUrl", "originalAmount", "paymentAmount", "payableAmount", "finalAmount", "paymentRequired", "activationType", "membershipType", "membershipStatus", "paymentStatus", "couponCode", "adminStatus", "approvedAt", "subscriptionStartDate", "subscriptionExpiry", "trialStartDate", "trialEndDate", "booksListedCount", "reminderSent", "reminderSentAt", "approvalEmailSent", "cancellationReason", "createdAt", "updatedAt"];
+  // Launch (11 Oct 2026): joining is free and nothing expires, so the old
+  // payment, coupon, trial-window and expiry columns are gone. Code that
+  // still mentions them reads a blank and skips the write.
+  return ["id", "name", "email", "phone", "membershipStatus", "adminStatus", "cancellationReason", "createdAt", "updatedAt"];
 }
 
 function getSubscriptionEmail(row, headers) {
@@ -12321,7 +12325,7 @@ function approveSubscription(data) {
     const userName = subValues[subRowIndex][subNameIdx];
     const emailSuccess = sendMembershipApprovalEmail(email, userName);
     if (emailSuccess) {
-      subSheet.getRange(subRowIndex + 1, subEmailSentIdx + 1).setValue('TRUE');
+      if (subEmailSentIdx !== -1) subSheet.getRange(subRowIndex + 1, subEmailSentIdx + 1).setValue('TRUE');
       
       // Auto-send trust email after approval
       try {
@@ -12347,6 +12351,9 @@ function activateSubscriptionIfEligible(email, adminEmail) {
   
   const subRowIdx = subData.findIndex(r => normalizeEmail(r[subEmailIdx]) === normEmail);
   if (subRowIdx === -1) return { activated: false, message: "" };
+  // Free membership: there is no paid window to start, and the sheet no
+  // longer has start/expiry columns.
+  if (freeRegistrationMode_() || subStartIdx === -1 || subExpiryIdx === -1) return { activated: false, message: "" };
   
   const sub = {};
   subHeaders.forEach((h, i) => sub[h] = subData[subRowIdx][i]);
@@ -16086,7 +16093,7 @@ function validateReferralCode(data) {
     success: true,
     code: code,
     inviterName: firstNameOnly(publicReaderName('', ownerEmail) || humanizeEmailLocalPart(ownerEmail)),
-    rewardDays: REFERRAL_REWARD_DAYS
+    rewardDays: (freeRegistrationMode_() ? 0 : REFERRAL_REWARD_DAYS)
   };
 }
 
@@ -16107,7 +16114,7 @@ function getMyReferral(data) {
       success: true,
       code: code,
       link: swapSutraSiteUrl() + '/?ref=' + code,
-      rewardDays: REFERRAL_REWARD_DAYS,
+      rewardDays: (freeRegistrationMode_() ? 0 : REFERRAL_REWARD_DAYS),
       invited: rows.length,
       joined: qualified.length,
       daysEarned: rows.reduce((sum, r) => sum + (Number(r.rewardDays) || 0), 0),
@@ -16229,11 +16236,13 @@ function maybeQualifyReferral(referredEmail) {
       return;
     }
 
-    const inviterOk = extendMembershipByDays(ownerEmail, REFERRAL_REWARD_DAYS);
-    const readerOk = extendMembershipByDays(referred, REFERRAL_REWARD_DAYS);
+    // Free membership never runs out, so there are no days to add.
+    const freeMode = freeRegistrationMode_();
+    const inviterOk = freeMode ? true : extendMembershipByDays(ownerEmail, REFERRAL_REWARD_DAYS);
+    const readerOk = freeMode ? true : extendMembershipByDays(referred, REFERRAL_REWARD_DAYS);
 
     if (statusIdx !== -1) sheet.getRange(sheetRow, statusIdx + 1).setValue('Rewarded');
-    if (daysIdx !== -1) sheet.getRange(sheetRow, daysIdx + 1).setValue(REFERRAL_REWARD_DAYS);
+    if (daysIdx !== -1) sheet.getRange(sheetRow, daysIdx + 1).setValue(freeMode ? 0 : REFERRAL_REWARD_DAYS);
     if (rewardIdx !== -1) sheet.getRange(sheetRow, rewardIdx + 1).setValue(new Date());
     if (noteIdx !== -1 && (!inviterOk || !readerOk)) {
       sheet.getRange(sheetRow, noteIdx + 1).setValue('Partial: inviter=' + inviterOk + ' reader=' + readerOk);
@@ -16244,15 +16253,15 @@ function maybeQualifyReferral(referredEmail) {
       ownerEmail,
       'referral_rewarded',
       'Your invite brought a reader',
-      readerName + ' joined SwapSutra and listed their first book — 30 days have been added to your membership.',
+      readerName + ' joined SwapSutra and listed their first book' + (freeMode ? ' — their shelf is now open to you.' : ' — 30 days have been added to your membership.'),
       '',
       { link: '/profile', dedupeKey: 'referral_' + referred }
     );
     createNotification(
       referred,
       'referral_rewarded',
-      '30 extra days, on the house',
-      'You joined through a reader’s invite and listed your first book — 30 days have been added to your membership.',
+      freeMode ? 'Your first book is on the shelf' : '30 extra days, on the house',
+      freeMode ? 'You joined through a reader’s invite and listed your first book — readers near you can now ask for it.' : 'You joined through a reader’s invite and listed your first book — 30 days have been added to your membership.',
       '',
       { link: '/profile', dedupeKey: 'referral_welcome_' + referred }
     );
@@ -16264,7 +16273,7 @@ function maybeQualifyReferral(referredEmail) {
         htmlBody: getBrandedEmailTemplate(
           'A reader you invited has arrived',
           '<p>' + escapeHtml(readerName) + ' signed up through your invite link and has already put their first book on the shelf.</p>' +
-          '<p><strong>30 days</strong> have been added to your membership — and to theirs.</p>' +
+          (freeMode ? '' : '<p><strong>30 days</strong> have been added to your membership — and to theirs.</p>') +
           '<p>Their shelf is now part of what you can browse. That is how this community grows: one reader at a time, each bringing the next.</p>',
           swapSutraSiteUrl() + '/profile',
           'See your invites'
@@ -16638,7 +16647,13 @@ function runTrialConversionSequence() {
     const trialEndIdx = hdr.indexOf('trialEndDate');
     const stageIdx = hdr.indexOf('trialSequenceStage');
     const stageSentIdx = hdr.indexOf('trialSequenceSentAt');
-    if (emailIdx === -1 || trialEndIdx === -1 || stageIdx === -1) return summary;
+    const createdIdx = hdr.indexOf('createdAt');
+    // Free membership: no trial window is stored, so the letters count
+    // from the day the reader joined (createdAt).
+    const freeMode = freeRegistrationMode_();
+    if (emailIdx === -1 || stageIdx === -1) return summary;
+    if (!freeMode && trialEndIdx === -1) return summary;
+    if (freeMode && createdIdx === -1) return summary;
 
     const now = new Date();
 
@@ -16654,13 +16669,19 @@ function runTrialConversionSequence() {
       // need convincing, and an expired one is the expiry reminder's job.
       if (status !== 'TRIAL' && status !== 'FREE_TRIAL' && status !== 'ACTIVE') continue;
 
-      const trialEnd = new Date(values[r][trialEndIdx]);
-      if (isNaN(trialEnd.getTime()) || trialEnd < now) continue;
-      const trialStart = trialStartIdx === -1 ? null : new Date(values[r][trialStartIdx]);
+      let trialStart = null;
+      if (freeMode) {
+        trialStart = values[r][createdIdx] ? new Date(values[r][createdIdx]) : null;
+      } else {
+        const trialEnd = new Date(values[r][trialEndIdx]);
+        if (isNaN(trialEnd.getTime()) || trialEnd < now) continue;
+        trialStart = trialStartIdx === -1 ? null : new Date(values[r][trialStartIdx]);
+      }
       if (!trialStart || isNaN(trialStart.getTime())) continue;
 
       summary.scanned++;
       const dayOfTrial = Math.floor((now.getTime() - trialStart.getTime()) / (24 * 60 * 60 * 1000));
+      if (freeMode && dayOfTrial > 30) continue; // only the first month after joining
       const stageSent = Number(values[r][stageIdx] || 0);
 
       let stage = 0;
@@ -28107,6 +28128,16 @@ function launchResetAllData() {
 const LAUNCH_POSITIONAL_WIDTH = { AppSettings: 4, SupportMessages: 7, ActivityLogs: 6, OTPAttempts: 3, OTP: 6, ChatSafetyEvents: 9,
   ReadingRoomReactions: 5, SavedRecommendations: 6, GeminiPriceEstimates: 13 };
 
+/** Old paid-membership and trial columns. The code still names them, but
+ *  joining is free and nothing expires, so nothing reads them any more. */
+const LAUNCH_DROP_COLUMNS = {
+  Subscriptions: ['userEmail', 'utr', 'utrNumber', 'screenshotUrl', 'originalAmount', 'paymentAmount', 'payableAmount', 'finalAmount',
+    'paymentRequired', 'isPaymentRequired', 'activationType', 'membershipType', 'registrationType', 'paymentStatus', 'couponCode',
+    'couponCodeUsed', 'approvedAt', 'activatedBy', 'subscriptionStartDate', 'subscriptionExpiry', 'trialStartDate', 'trialEndDate',
+    'booksListedCount', 'reminderSent', 'reminderSentAt', 'approvalEmailSent', 'approvalEmailSentAt', 'manualDateOverride',
+    'firstBookApprovedAt', 'notes', 'email_error', 'standardFee', 'amount']
+};
+
 function launchColumnPlan_() {
   const used = {};
   LAUNCH_USED_NAMES.split(',').forEach(function (n) { if (n) used[n] = true; });
@@ -28121,12 +28152,14 @@ function launchColumnPlan_() {
     const values = sh.getRange(1, 1, Math.max(1, lastRow), lastCol).getValues();
     const header = values[0];
     const fixed = LAUNCH_POSITIONAL_WIDTH[name] || 0;
+    const drop = {};
+    (LAUNCH_DROP_COLUMNS[name] || []).forEach(function (n) { drop[normalizeHeader(n)] = true; });
     const cols = [];
     for (let c = fixed; c < header.length; c++) {
       const h = String(header[c] || '').trim();
       let filled = 0;
       for (let r = 1; r < values.length; r++) if (values[r][c] !== '' && values[r][c] !== null) filled++;
-      const isUsed = h ? !!used[normalizeHeader(h)] : filled > 0;
+      const isUsed = h ? (!!used[normalizeHeader(h)] && !drop[normalizeHeader(h)]) : filled > 0;
       if (!isUsed) cols.push({ col: c + 1, header: h || '(no name)', filled: filled });
     }
     if (cols.length) plan.push({ sheet: name, columns: cols });
