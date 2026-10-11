@@ -106,7 +106,7 @@ A deposit is **security, not a fee**.
 
 ## B2. How much may be asked for
 
-The deposit is **65% of the book's printed MRP**, for a swap, a rental or a loan, whatever the book's condition. In a swap, both readers pay one, each on the book they receive. A purchase has no deposit. SwapSutra works the amount out; readers cannot change it.
+The deposit is **65% of the book's printed MRP**, for a swap, a rental or a loan, whatever the book's condition — for a rental, never less than the rent, because the rent is paid to the owner out of it. In a swap, both readers pay one, each on the book they receive. A purchase has no deposit. SwapSutra works the amount out; readers cannot change it.
 
 ## B1a. The exchange room — and the 48-hour rule (Oct 2026)
 

@@ -26,11 +26,26 @@ interface Props {
   ownerEmail?: string;
   requesterDeposit?: number;
   ownerDeposit?: number;
+  /** A purchase (SELL) is decided as a whole: refund the buyer or pay the seller. */
+  serviceType?: string;
 }
 
 type Decision = { outcome: 'REFUND' | 'FORFEIT' | ''; amount: string; reason: string };
 
-export default function AdminVmsReview({ swapId, disputeId, requesterEmail, ownerEmail, requesterDeposit = 0, ownerDeposit = 0 }: Props) {
+export default function AdminVmsReview({ swapId, disputeId, requesterEmail, ownerEmail, requesterDeposit = 0, ownerDeposit = 0, serviceType }: Props) {
+  const isSale = String(serviceType || '').toUpperCase() === 'SELL';
+  const [saleReason, setSaleReason] = useState('');
+  const decideSale = async (outcome: 'REFUND_BUYER' | 'PAY_SELLER') => {
+    if (!saleReason.trim()) { setMsg('Write the reason first — both readers see it.'); return; }
+    if (!window.confirm(outcome === 'REFUND_BUYER' ? 'Refund the buyer in full and close the purchase?' : 'Release the money to the seller and close the purchase?')) return;
+    setBusy(true); setMsg('');
+    try {
+      const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'adminDecideSale', swapId, outcome, reason: saleReason }) });
+      const d = await res.json();
+      setMsg(d.message || (d.success ? 'Saved.' : 'Could not save.'));
+    } catch { setMsg('Network error.'); } finally { setBusy(false); }
+  };
   const [vms, setVms] = useState<VmsState | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -88,6 +103,18 @@ export default function AdminVmsReview({ swapId, disputeId, requesterEmail, owne
         </div>
       )}
 
+      {isSale && (
+        <div className="rounded-xl bg-[var(--bg-surface)] p-3 space-y-2" data-testid="admin-sale-decision">
+          <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">Decide the purchase</p>
+          <p className="text-xs text-[var(--text-secondary)]">SwapSutra holds the buyer's payment. Refund it in full, or release it to the seller.</p>
+          <input value={saleReason} onChange={(e) => setSaleReason(e.target.value)} placeholder="Reason, from the videos — both readers see it"
+            className="input-classic !py-2 text-xs w-full bg-[var(--bg-page)]" />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={busy} onClick={() => decideSale('REFUND_BUYER')} className="rounded-lg border border-brand-border px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-50">Refund the buyer</button>
+            <button type="button" disabled={busy} onClick={() => decideSale('PAY_SELLER')} className="rounded-lg border border-brand-border px-3 py-1.5 text-2xs font-bold uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-50">Pay the seller</button>
+          </div>
+        </div>
+      )}
       <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)] pt-2">Decide the deposits</p>
       {deposits.length === 0 && <p className="text-xs text-[var(--text-secondary)]">No security deposit is held on this exchange.</p>}
       {deposits.map(([role, amt, email]) => (

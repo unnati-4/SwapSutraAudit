@@ -6411,6 +6411,7 @@ function doPostHandler_(e) {
     if (action === 'vmsUploadChunk') return respondJson(vmsUploadChunk(data));
     if (action === 'vmsFinishUpload') return respondJson(vmsFinishUpload(data));
     if (action === 'adminDecideDeposits') return respondJson(adminDecideDeposits(data));
+    if (action === 'adminDecideSale') return respondJson(adminDecideSale(data));
     // Oct 2026 — sales through SwapSutra, payout accounts.
     if (action === 'getPayoutAccount') return respondJson(getPayoutAccount(data));
     if (action === 'savePayoutAccount') return respondJson(savePayoutAccount(data));
@@ -9127,6 +9128,12 @@ function createSwapRequest(data) {
   }
   const rentMonths = serviceType === 'RENT' ? Math.max(1, Math.ceil(durationDays / 30)) : 0;
   const rentCharge = monthlyRent === null ? null : Math.round(monthlyRent * rentMonths * 100) / 100;
+  // Launch check (11 Oct 2026): the rent is paid to the owner out of the
+  // renter's deposit, so the deposit is never smaller than the rent — else
+  // the owner would quietly get less than the price they set.
+  if (serviceType === 'RENT' && rentCharge && deposits.requesterDeposit !== null && Number(deposits.requesterDeposit) < rentCharge) {
+    deposits.requesterDeposit = Math.ceil(rentCharge);
+  }
   const dueDate = (serviceType === 'RENT' || serviceType === 'LEND')
     ? (data.dueDate || new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString())
     : '';
@@ -20639,6 +20646,8 @@ function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
       screenshotUrl: isSelf ? (rec.screenshotUrl || '') : '',
       submittedAt: rec.submittedAt || '',
       approvedAt: rec.approvedAt || '',
+      // When SwapSutra last acted on it (a rejection restarts the payment clock).
+      updatedAt: rec.updatedAt || '',
       rejectedReason: isSelf ? (rec.rejectedReason || '') : ''
     };
   });
@@ -20994,6 +21003,10 @@ function submitSecurityFeePayment(data) {
 
     const role = swapPartyRole(swap, caller);
     if (!role) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    // Launch check (11 Oct 2026): no payments into a request that has closed.
+    if (['expired', 'cancelled', 'declined', 'rejected'].indexOf(String(swap.obj.status || '').toLowerCase()) !== -1) {
+      return { success: false, error: 'REQUEST_CLOSED', message: 'This request has closed, so there is nothing to pay. Please do not send money for it.' };
+    }
 
     ensureSecurityFeeRecords(swap);
     const { sheet, headers, rows } = loadSecurityFeeRows(swapId);
@@ -21070,6 +21083,9 @@ function adminApproveSecurityFeePayment(data) {
     if (!row) return { success: false, message: 'No such security-fee record.' };
     if (row.obj.paymentStatus !== 'SUBMITTED') {
       return { success: false, message: 'This payer has not submitted evidence yet — nothing to approve.' };
+    }
+    if (decision === 'APPROVE' && ['expired', 'cancelled', 'declined', 'rejected'].indexOf(String(swap.obj.status || '').toLowerCase()) !== -1) {
+      return { success: false, error: 'REQUEST_CLOSED', message: 'This request has already closed. Reject this payment and refund it to the reader (Admin → Payouts) instead of approving it.' };
     }
 
     const admin = normalizeEmail(getAuthenticatedEmail());
@@ -24483,6 +24499,16 @@ function runReturnDeadlines() {
           return;
         }
         if (leg.state === 'OVERDUE' || leg.state === 'RETURNED_LATE') {
+          // Launch check (11 Oct 2026): a deposit already refunded, or decided
+          // by SwapSutra in a dispute, is never forfeited on top of that.
+          const settled = forfeits.some(f => String(f.swapId) === id && (String(f.leg) === 'refund:' + leg.borrower
+            || (/^dispute:/.test(String(f.leg)) && String(f.leg).split(':').pop() === leg.borrower)));
+          if (settled) {
+            returnNotify_('swapsutra@gmail.com', 'return_late_settled', 'Late return — deposit already settled',
+              'Exchange ' + id + ': "' + title + '" came back late, but the ' + leg.borrower + '\'s deposit was already refunded or decided. Check it in Admin → Payouts.',
+              id, 'ret_late_settled_' + id + '_' + leg.leg, { whatsapp: false });
+            return;
+          }
           // A swap (9 Oct 2026): SwapSutra's fee comes out of a forfeited deposit too.
           const fullDeposit = Number(o[leg.deposit] || 0);
           const feeKept = Math.min(fullDeposit, feeTakenFromDeposit_(o, borrowerEmail, myFeeRecord_(id, leg.borrower), leg.borrower));
@@ -24935,10 +24961,37 @@ function adminDecideDeposits(data) {
       sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
       existing.push(rec);
     }
-    const refund = held - forfeit;
+    let refund = held - forfeit;
+    // Launch check (11 Oct 2026): the part of a paid deposit that is not
+    // forfeited is actually refunded — queued for the admin to pay — minus
+    // SwapSutra's ₹10 where the swap rule takes it from the deposit.
+    const feeRec = myFeeRecord_(swap.obj.id, payerRole);
+    const paid = feeRec && feeRec.adminStatus === 'ADMIN_APPROVED' && feeRecordBreakdown_(feeRec).depositAmount > 0;
+    if (refund > 0 && paid) {
+      const sid = String(swap.obj.id);
+      const feeCut = Math.min(refund, feeTakenFromDeposit_(swap.obj, payer, feeRec, payerRole));
+      if (feeCut > 0 && !existing.some(f => String(f.swapId) === sid && String(f.leg) === 'fee:' + payerRole)) {
+        const feeRow = { id: generateId('SS_FEE_KEPT_'), swapId: sid, leg: 'fee:' + payerRole, bookTitle: title, defaulterEmail: payer,
+          ownerEmail: 'swapsutra@gmail.com', amount: feeCut, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'KEPT_AS_FEE',
+          note: 'Platform fee taken from the ₹' + held + ' deposit (dispute decision).' };
+        sheet.appendRow(headers.map(k => feeRow[k] !== undefined ? feeRow[k] : ''));
+        existing.push(feeRow);
+        refund -= feeCut;
+      }
+      if (refund > 0 && !existing.some(f => String(f.swapId) === sid && String(f.leg) === 'refund:' + payerRole)) {
+        const refRow = { id: generateId('SS_REFUND_'), swapId: sid, leg: 'refund:' + payerRole, bookTitle: title, defaulterEmail: '',
+          ownerEmail: payer, amount: refund, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'TO_PAY_OWNER',
+          note: 'Deposit refund after the dispute decision' + (forfeit > 0 ? ' (₹' + forfeit + ' forfeited)' : '') + (feeCut > 0 ? ', minus the ₹' + feeCut + ' platform fee' : '') + '. Reason: ' + reason };
+        sheet.appendRow(headers.map(k => refRow[k] !== undefined ? refRow[k] : ''));
+        existing.push(refRow);
+      }
+    } else if (!paid && feeRec) {
+      // A deposit that was never verified as paid has nothing to refund.
+      refund = 0;
+    }
     const message = forfeit > 0
       ? '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
-      : 'The ₹' + held + ' deposit is refunded in full. Reason: ' + reason;
+      : (refund > 0 ? 'The deposit is refunded' + (refund < held ? ' (₹' + refund + ' after the ₹' + (held - refund) + ' platform fee)' : ' in full (₹' + refund + ')') : 'No deposit is kept') + '. Reason: ' + reason;
     [payer, other].forEach(email => returnNotify_(email, 'deposit_decided', 'Decision on the security deposit',
       'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + leg));
     results.push({ payerRole: payerRole, held: held, forfeit: forfeit, refund: refund });
@@ -25028,8 +25081,10 @@ function saleStatusFor_(swap) {
   // A partner seller (9 Oct 2026) pays no ₹10 fee; SwapSutra keeps its commission instead.
   const partnerSeller = approvedPartner_(swap.ownerEmail);
   const sellerFee = isAdminEmail(swap.ownerEmail) || partnerSeller ? 0 : fee;
-  const payout = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj)
-    .find(f => String(f.swapId) === id && String(f.leg) === 'sale') || null;
+  const saleRows = readSheetObjects_(getReturnForfeitSheet_()).rows.map(r => r.obj).filter(f => String(f.swapId) === id);
+  const payout = saleRows.find(f => String(f.leg) === 'sale') || null;
+  // Launch check (11 Oct 2026): SwapSutra may refund the buyer after a dispute.
+  const buyerRefund = saleRows.find(f => String(f.leg) === 'sale_refund') || null;
   const commission = partnerSeller ? partnerCommissionFor_(partnerSeller, price, payout && payout.forfeitedAt ? payout.forfeitedAt : new Date()) : { rate: 0, commission: 0 };
   const events = journeyEventsBySwap_()[id] || [];
   const received = events.some(e => e.leg === 'outbound' && e.event === 'received');
@@ -25041,7 +25096,8 @@ function saleStatusFor_(swap) {
     sellerFee: sellerFee,
     commission: commission.commission, commissionRate: commission.rate, partnerSeller: !!partnerSeller,
     received: received,
-    closed: !!payout,
+    closed: !!payout || !!buyerRefund,
+    refundedToBuyer: buyerRefund ? Number(buyerRefund.amount || 0) : 0,
     payoutStatus: payout ? payout.payoutStatus : '',
     paidAt: payout ? payout.paidAt || '' : '',
     disputeOpen: swapHasOpenDispute(id),
@@ -25087,6 +25143,60 @@ function getSaleStatus(data) {
  * video), no open dispute, and the purchase not already closed.
  * Creates the seller's payout (price − seller's platform fee).
  */
+/**
+ * Admin action: adminDecideSale { swapId, outcome: 'REFUND_BUYER' | 'PAY_SELLER', reason }
+ * (launch check, 11 Oct 2026). After a problem is reported on a purchase,
+ * SwapSutra decides from the videos: refund the buyer in full (price + ₹10)
+ * or release the money to the seller. Either way the purchase is closed and
+ * the payout is queued in Admin → Payouts; both readers are told why.
+ */
+function adminDecideSale(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+  if (!swap) return { success: false, message: 'That exchange could not be found.' };
+  if (String(swap.obj.serviceType || '').toUpperCase() !== 'SELL') return { success: false, message: 'Only a purchase is decided this way.' };
+  const outcome = String((data && data.outcome) || '').toUpperCase();
+  const reason = String((data && data.reason) || '').trim().slice(0, 500);
+  if (['REFUND_BUYER', 'PAY_SELLER'].indexOf(outcome) === -1) return { success: false, message: 'Choose: refund the buyer, or pay the seller.' };
+  if (!reason) return { success: false, message: 'Write the reason — both readers will see it.' };
+  const st = saleStatusFor_(swap);
+  if (!st.escrow) return { success: false, message: 'This sale was paid directly between readers; SwapSutra holds nothing for it.' };
+  if (st.closed) return { success: false, message: 'This purchase has already been closed.' };
+  const paid = loadSecurityFeeRows(String(swap.obj.id)).rows.map(r => r.obj)
+    .find(r => r.payerRole === 'requester' && r.adminStatus === 'ADMIN_APPROVED');
+  if (!paid) return { success: false, message: 'The buyer\'s payment has not been verified, so there is nothing to refund or release.' };
+  const sheet = getReturnForfeitSheet_();
+  const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
+  const title = String(swap.obj.requestedBookTitle || 'the book');
+  if (outcome === 'REFUND_BUYER') {
+    const amount = Number(paid.requiredAmount || st.buyerPays) || st.buyerPays;
+    const rec = { id: generateId('SS_REFUND_'), swapId: swap.obj.id, leg: 'sale_refund', bookTitle: title, defaulterEmail: swap.ownerEmail,
+      ownerEmail: swap.requesterEmail, amount: amount, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'TO_PAY_OWNER',
+      note: 'Purchase refunded to the buyer after a dispute. Reason: ' + reason };
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    returnNotify_(swap.requesterEmail, 'sale_refund_buyer', 'Your purchase is refunded',
+      'After reviewing "' + title + '", SwapSutra is refunding your ₹' + amount + '. Reason: ' + reason, swap.obj.id, 'sale_ref_b_' + swap.obj.id);
+    returnNotify_(swap.ownerEmail, 'sale_refund_seller', 'Purchase refunded to the buyer',
+      'After reviewing "' + title + '", SwapSutra has refunded the buyer. Reason: ' + reason, swap.obj.id, 'sale_ref_s_' + swap.obj.id);
+  } else {
+    const rec = { id: generateId('SS_PAYOUT_'), swapId: swap.obj.id, leg: 'sale', bookTitle: title, defaulterEmail: swap.requesterEmail,
+      ownerEmail: swap.ownerEmail, amount: st.sellerReceives, dueAt: '', forfeitedAt: new Date(),
+      payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
+      note: 'Sale released to the seller after a dispute: price ₹' + st.price + ' − ₹' + st.sellerFee + ' platform fee. Reason: ' + reason };
+    salePartnerPayout_(swap, st, rec, sheet, headers);
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    returnNotify_(swap.ownerEmail, 'sale_payout_due', 'Your sale is complete',
+      'After reviewing "' + title + '", SwapSutra is paying you ₹' + st.sellerReceives + '. Reason: ' + reason, swap.obj.id, 'sale_dec_s_' + swap.obj.id);
+    returnNotify_(swap.requesterEmail, 'sale_decided_buyer', 'Decision on your purchase',
+      'After reviewing "' + title + '", SwapSutra has released the payment to the seller. Reason: ' + reason, swap.obj.id, 'sale_dec_b_' + swap.obj.id);
+  }
+  try {
+    appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'system', actionType: 'sale_decided',
+      actorEmail: normalizeEmail(getAuthenticatedEmail()), note: outcome + ' — ' + reason });
+  } catch (e) { /* the payout record is the source of truth */ }
+  return { success: true, outcome: outcome, message: outcome === 'REFUND_BUYER' ? 'The buyer\'s refund is queued in Payouts.' : 'The seller\'s payout is queued in Payouts.' };
+}
+
 function confirmSaleComplete(data) {
   const caller = normalizeEmail(getAuthenticatedEmail());
   const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
@@ -25488,7 +25598,13 @@ function computeExchangeRoom_(input) {
   const clockStart = Math.max(isFinite(input.acceptedAtMs) ? input.acceptedAtMs : now, t(ROOM_TIMERS_START_ISO));
   const conditionDoneAt = raw[3] ? Math.max.apply(null, out.map(l => t(l.videos.QUALITY.at))) : NaN;
   const conditionBy = clockStart + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
-  const payBy = (isFinite(conditionDoneAt) ? Math.max(conditionDoneAt, clockStart) : NaN) + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
+  // Launch check (11 Oct 2026): a payment SwapSutra rejected gets a fresh
+  // 48 hours from the rejection, so "pay again" is never followed at once by
+  // "request closed".
+  const rejectedTimes = (fee.payers || []).filter(p => p.adminStatus === 'ADMIN_REJECTED')
+    .map(p => t(p.updatedAt || p.submittedAt)).filter(x => isFinite(x));
+  const rejectedAt = rejectedTimes.length ? Math.max.apply(null, rejectedTimes) : NaN;
+  const payBy = (isFinite(conditionDoneAt) ? Math.max(conditionDoneAt, clockStart, isFinite(rejectedAt) ? rejectedAt : -Infinity) : NaN) + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
   const unpaid = (fee.payers || []).filter(p => p.adminStatus === 'NOT_SUBMITTED' || p.adminStatus === 'ADMIN_REJECTED' || !p.adminStatus);
   const paymentPhase = accepted && !done[4];
 
@@ -25948,11 +26064,18 @@ function roomCreateRefunds_(swap) {
   const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
   const existing = readSheetObjects_(sheet).rows.map(r => r.obj).filter(f => String(f.swapId) === id);
   const created = [];
+  // Launch check (11 Oct 2026): a book that came back late is settled by the
+  // forfeit job (runReturnDeadlines), never refunded here as well.
+  const late = {};
+  try {
+    (returnStateForSwap_(swap).legs || []).forEach(l => { if (l.state === 'OVERDUE' || l.state === 'RETURNED_LATE') late[l.borrower] = true; });
+  } catch (e) { /* no return rule on this exchange */ }
   loadSecurityFeeRows(id).rows.map(r => r.obj).forEach(rec => {
     if (rec.adminStatus !== 'ADMIN_APPROVED') return;
     const deposit = feeRecordBreakdown_(rec).depositAmount;
     if (!(deposit > 0)) return;
     const role = rec.payerRole;
+    if (late[role]) return;
     // The deposit that protected a late-returned book is the owner's now.
     const forfeitLeg = role === 'requester' ? 'return' : 'counter_return';
     if (existing.some(f => String(f.leg) === forfeitLeg)) return;

@@ -11743,7 +11743,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         trackOnce('first_request_sent', { serviceType: 'SWAP' });
-        setSuccessMessage('Swap request sent. If the owner accepts, you each pay only your refundable deposit from the Stages tab — SwapSutra’s ₹10 platform fee is taken from it when it is refunded — and your chat opens once both are verified. Track it in My Profile → Swap Requests.');
+        setSuccessMessage('Swap request sent. If the owner accepts, your exchange room opens in Chats: there you each pay your refundable deposit (SwapSutra’s ₹10 fee is kept from it at the end; with no deposit, the ₹10 is paid up front). Track it in Cart → My orders.');
         
         // Dispatch Notification to Book Owner
         if (showSwapModal.ownerEmail) {
@@ -11812,8 +11812,8 @@ export default function App() {
         trackOnce('first_request_sent', { serviceType });
         setSuccessMessage(
           serviceType === 'RENT'
-            ? 'Rent request sent. If the owner accepts, you each pay a ₹10 platform fee and you also pay a refundable deposit (the rent is paid to the owner from it) from the Stages tab, and your chat opens once both are verified. Track it in My Profile → Swap Requests.'
-            : 'Buy request sent. If the owner accepts, you pay SwapSutra the price + ₹10 from the Stages tab; SwapSutra pays the seller after you have the book. Track it in My Profile → Swap Requests.'
+            ? 'Rent request sent. If the owner accepts, your exchange room opens in Chats: you pay the refundable deposit + ₹10 there, and the rent goes to the owner from the deposit. Track it in Cart → My orders.'
+            : 'Buy request sent. If the owner accepts, your exchange room opens in Chats: you pay SwapSutra the price + ₹10 there, and SwapSutra pays the seller after you have the book. Track it in Cart → My orders.'
         );
 
         if (book.ownerEmail) {
@@ -18616,7 +18616,7 @@ export default function App() {
                       <div className="rounded-2xl border border-brand-border bg-[var(--bg-surface)] px-4 py-4 text-center space-y-1">
                         <p className="text-2xs font-bold text-[var(--text-primary)] uppercase tracking-widest">No payment yet</p>
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed italic">
-                          If the owner accepts, you each pay your refundable deposit by UPI from the exchange's Stages tab — no separate fee. When the exchange is complete the deposit comes back minus SwapSutra's ₹10 platform fee. Your chat opens once SwapSutra verifies both payments.
+                          If the owner accepts, your exchange room opens in Chats, where you each pay your refundable deposit by UPI — no separate fee. When the exchange is complete the deposit comes back minus SwapSutra's ₹10 platform fee.
                         </p>
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed">🎥 Every book needs three short videos in the app: its condition and its packing (by the sender) and its opening (by the receiver). If anything is disputed, SwapSutra decides the deposit from these videos.</p>
                       </div>
@@ -18705,7 +18705,7 @@ export default function App() {
                     </div>
                     <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
                       {showServiceModal.serviceType === 'RENT'
-                        ? `This sends the owner a rental request. ${Number(showServiceModal.book.monthlyRent) > 0 ? `Rent is ₹${showServiceModal.book.monthlyRent} a month (the owner's price).` : ''} If they accept, you pay a security deposit of 65% of the MRP plus the ₹10 platform fee, and your chat opens once SwapSutra verifies it.`
+                        ? `This sends the owner a rental request. ${Number(showServiceModal.book.monthlyRent) > 0 ? `Rent is ₹${showServiceModal.book.monthlyRent} a month (the owner's price).` : ''} If they accept, you pay a security deposit of 65% of the MRP (or the rent, if that is more) plus the ₹10 platform fee. The rent goes to the owner from the deposit and the rest comes back to you.`
                         : `This sends the owner a buy request. ${Number(showServiceModal.book.sellPrice) > 0 ? `The price is ₹${showServiceModal.book.sellPrice} (the owner's price).` : ''} If they accept, you pay SwapSutra the price + ₹10 platform fee by UPI. SwapSutra holds the money and pays the seller only after you have the book and close the purchase. No security deposit.`}
                     </p>
                   </div>
