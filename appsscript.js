@@ -357,6 +357,8 @@ const SELF_SCOPED_IDENTITY_FIELDS = {
   joinCurrentReadCircle: ["user_id", "userId", "email"],
   leaveCurrentReadCircle: ["user_id", "userId", "email"],
   addCircleMessage: ["user_id", "userId", "email"],
+  // Launch check (11 Oct 2026): reading a circle's messages is as the caller.
+  getCircleMessages: ["user_id", "userId", "email"],
   postCafeStory: ["user_id", "userId", "userEmail", "email"],
   markCafeStoryViewed: ["user_id", "userId", "userEmail", "email"],
   getCafeStoryViewers: ["user_id", "userId", "userEmail", "email"],
@@ -5412,7 +5414,11 @@ function joinCurrentReadCircle(data) {
 
 function getCircleMessages(data) {
   const circleId = data.circle_id || data.circleId;
-  const userId = normalizeEmail(data.user_id || data.userId || data.email);
+  // Launch check (11 Oct 2026): the reader is whoever is signed in — never
+  // an address sent with the request (that let anyone read a private circle).
+  const sessionEmail = normalizeEmail(getAuthenticatedEmail());
+  if (!sessionEmail) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to read this circle.', data: [] };
+  const userId = isAuthenticatedAdmin() ? normalizeEmail(data.user_id || data.userId || data.email || sessionEmail) : sessionEmail;
   const rows = getCurrentReadRows();
   if (!isCurrentReadMember(circleId, userId, rows.members)) {
     return { success: false, message: "Only circle members can view messages.", data: [] };
@@ -5904,7 +5910,7 @@ function bookHasAnyPublicUse(book) {
 
 function bookHasPublicLibraryVisibility(book) {
   const flags = bookStatusFlags(book);
-  return flags.favourite || flags.bookshelf || flags.permanent_exchange || flags.temporary_exchange || flags.rent || flags.sell;
+  return flags.favourite || flags.bookshelf || flags.permanent_exchange || flags.temporary_exchange || flags.rent || flags.sell || flags.lend;
 }
 
 // Internal plumbing that has no business reaching any reader's browser:
@@ -6798,6 +6804,19 @@ function doPostHandler_(e) {
       if (normalizeEmail(parties.ownerEmail) !== ownerEmail && !isAuthenticatedAdmin()) {
         return respondJson({ success: false, message: "Unauthorized: Only book owner can accept." });
       }
+      // Launch check (11 Oct 2026): only a waiting request can be accepted,
+      // and one copy of a book goes to one reader at a time.
+      const statusNow = String(values[rowIndex][headers.indexOf('status')] || 'Pending').trim();
+      if (statusNow.toLowerCase() !== 'pending') {
+        return respondJson({ success: false, error: 'NOT_PENDING', message: 'This request is already ' + statusNow.toLowerCase() + ', so it can no longer be accepted.' });
+      }
+      const busy = copiesInExchange_(values, headers, parties.requestedBookId, id);
+      if (busy > 0) {
+        const stock = approvedPartner_(parties.ownerEmail) ? partnerBookStock_(parties.requestedBookId) : 1;
+        if (busy >= stock) {
+          return respondJson({ success: false, error: 'BOOK_IN_EXCHANGE', message: 'This book is already in another exchange you accepted. Finish or close that one first, or decline this request.' });
+        }
+      }
 
       sheet.getRange(rowIndex + 1, headers.indexOf('status') + 1).setValue('Accepted');
       sheet.getRange(rowIndex + 1, headers.indexOf('updatedAt') + 1).setValue(new Date());
@@ -6888,6 +6907,12 @@ function doPostHandler_(e) {
       const parties = resolveSwapRequestParties(headers, values[rowIndex]);
       if (normalizeEmail(parties.ownerEmail) !== ownerEmail && !isAuthenticatedAdmin()) {
         return respondJson({ success: false, message: "Unauthorized: Only book owner can decline." });
+      }
+      const statusNowD = String(values[rowIndex][headers.indexOf('status')] || 'Pending').trim();
+      if (statusNowD.toLowerCase() !== 'pending') {
+        return respondJson({ success: false, error: 'NOT_PENDING', message: statusNowD.toLowerCase() === 'accepted'
+          ? 'You already accepted this request. If you cannot go ahead, close it from the exchange room (before payment).'
+          : 'This request is already ' + statusNowD.toLowerCase() + '.' });
       }
 
       sheet.getRange(rowIndex + 1, headers.indexOf('status') + 1).setValue('Declined');
@@ -7315,7 +7340,13 @@ function registerFreeReader(data) {
     try { recordReferralClaim(normEmail, data.referralCode); } catch (referralErr) { Logger.log('Referral claim skipped: ' + referralErr.toString()); }
   }
 
-  const name = data.name || (normEmail ? normEmail.split('@')[0] : 'Reader');
+  // Launch check (11 Oct 2026): starting the free trial right after sign-up
+  // sends only the email — keep the name and mobile the reader typed at
+  // Sign Up instead of replacing them with the start of the email.
+  let known = {};
+  try { known = findRowByEmail_('Subscriptions', normEmail) || findRowByEmail_('Users', normEmail) || {}; } catch (e) { known = {}; }
+  const name = String(data.name || known.name || '').trim() || (normEmail ? normEmail.split('@')[0] : 'Reader');
+  const knownPhone = String(data.phone || known.phone || '').trim();
   const now = new Date();
   const trialEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 1 Month Free Trial
 
@@ -7501,7 +7532,7 @@ function registerFreeReader(data) {
       ensureUserFromPayload({
         name: name,
         email: normEmail,
-        phone: data.phone || '',
+        phone: knownPhone,
         area: data.area || '',
         pincode: data.pincode || '',
         genres: data.genres || '',
@@ -7570,7 +7601,7 @@ function registerFreeReader(data) {
     const userResult = ensureUserFromPayload({
       name: name,
       email: normEmail,
-      phone: data.phone || '',
+      phone: knownPhone,
       area: data.area || '',
       pincode: data.pincode || '',
       genres: data.genres || '',
@@ -7806,6 +7837,14 @@ function createBook(data) {
       message: "An active SwapSutra membership (free trial or Chapters) is required to list books.",
       error: "MEMBERSHIP_REQUIRED"
     };
+  }
+
+  // Launch check (11 Oct 2026): a listing needs a real title and author
+  // (spaces alone used to get through).
+  data.title = String(data.title || '').trim();
+  data.author = String(data.author || '').trim();
+  if (data.title.length < 1 || data.author.length < 1) {
+    return { success: false, error: 'TITLE_REQUIRED', message: 'Add the book\'s title and author.' };
   }
 
   // Backend validation for the transparent-listing fields — never trust the
@@ -8547,10 +8586,48 @@ function updateBookRequestStatus(data) {
   }
 }
 
+/**
+ * May this signed-in reader put a notification in someone's bell? (launch
+ * check, 11 Oct 2026). Only someone they are actually dealing with: the
+ * other reader on a request or chat, or the author of a post they reacted
+ * to or commented on. The admin may notify anyone.
+ */
+function canNotifyReader_(caller, recipient, entityId) {
+  if (!caller) return false;
+  if (isAuthenticatedAdmin() || caller === recipient) return true;
+  const both = (a, b) => (normalizeEmail(a) === caller && normalizeEmail(b) === recipient) || (normalizeEmail(a) === recipient && normalizeEmail(b) === caller);
+  try {
+    const sv = getOrCreateSheet('SwapRequests', []).getDataRange().getValues();
+    for (let r = 1; r < sv.length; r++) { const p = resolveSwapRequestParties(sv[0], sv[r]); if (both(p.requesterEmail, p.ownerEmail)) return true; }
+  } catch (e) { /* keep checking */ }
+  try {
+    const ct = readSheetObjects_(getOrCreateSheet('Chats', []));
+    if (ct.rows.some(r => both(r.obj.requesterEmail, r.obj.ownerEmail))) return true;
+  } catch (e) { /* keep checking */ }
+  try {
+    if (entityId) {
+      const pt = readSheetObjects_(getOrCreateSheet('ReadingRoomPosts', []));
+      if (pt.rows.some(r => String(r.obj.id) === String(entityId) && normalizeEmail(r.obj.authorEmail) === recipient)) return true;
+    }
+  } catch (e) { /* not a post */ }
+  return false;
+}
+
 function handleCreateNotificationApi(data) {
   try {
     const userEmail = normalizeEmail(data.userEmail || data.recipientEmail || data.email);
     if (!userEmail) return { success: false, message: "userEmail required" };
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    if (!canNotifyReader_(caller, userEmail, data.entityId || data.relatedId || '')) {
+      return { success: false, error: 'NOT_ALLOWED', message: 'You can only notify readers you are exchanging or talking with.' };
+    }
+    // A link in a reader-made notification stays on SwapSutra.
+    if (!isAuthenticatedAdmin()) {
+      const link = String(data.targetUrl || data.link || '');
+      if (link && !/^\/(?!\/)/.test(link)) { data.targetUrl = ''; data.link = ''; }
+      data.title = String(data.title || '').slice(0, 120);
+      data.message = String(data.message || '').slice(0, 500);
+    }
     const type = data.type || 'general';
     const title = data.title || 'Notification';
     const message = data.message || '';
@@ -8831,6 +8908,10 @@ function createSupportMessage(data) {
   if (!name || !email || !message) {
     return jsonResponse({ success: false, message: "Missing required fields." });
   }
+  // Launch check (11 Oct 2026): support has to be able to write back.
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    return jsonResponse({ success: false, message: "Enter a valid email address so we can reply." });
+  }
 
   sheet.appendRow([id, name, email, phone, message, "Open", new Date()]);
   
@@ -8980,6 +9061,21 @@ function createSwapRequest(data) {
 
   const requestedBook = {};
   bookHeaders.forEach((h, i) => requestedBook[h] = requestedBookRow[i]);
+  // Launch check (11 Oct 2026): not your own book, and not the same request twice.
+  if (normalizeEmail(requestedBook.ownerEmail) === normalizedEmail) {
+    return { success: false, error: 'OWN_BOOK', message: 'This is your own book.' };
+  }
+  {
+    const rv = sheet.getDataRange().getValues();
+    const rh = rv[0] || [];
+    for (let r = 1; r < rv.length; r++) {
+      const pr = resolveSwapRequestParties(rh, rv[r]);
+      if (String(pr.requestedBookId) === requestedId && normalizeEmail(pr.requesterEmail) === normalizedEmail
+        && ['pending', 'accepted'].indexOf(String(rv[r][rh.indexOf('status')] || '').trim().toLowerCase()) !== -1) {
+        return { success: false, error: 'ALREADY_REQUESTED', message: 'You already have a request open for this book. Track it in Cart → My orders.' };
+      }
+    }
+  }
   // A partner's book with no copies left (9 Oct 2026).
   if (requestedBook.stock !== undefined && requestedBook.stock !== '' && Number(requestedBook.stock) <= 0) {
     return { success: false, error: 'OUT_OF_STOCK', message: 'This book is out of stock right now.' };
@@ -9048,7 +9144,8 @@ function createSwapRequest(data) {
       error: "OFFERED_BOOK_NOT_YOURS"
     };
   }
-  if ((serviceType === 'SWAP' || serviceType === 'LEND') && !offeredBook) {
+  // Launch check (11 Oct 2026): a loan needs no book in return — only a swap does.
+  if (serviceType === 'SWAP' && !offeredBook) {
     return {
       success: false,
       message: "Please choose one of your listed books to offer, so both deposits can be worked out.",
@@ -9203,6 +9300,19 @@ function createSwapRequest(data) {
     `Initiated ${serviceType} request for "${data.requestedBookTitle || requestedBook.title || "Book"}".`,
     { requestId: id, serviceType: serviceType, requestedBookTitle: data.requestedBookTitle || requestedBook.title, offeredBook: data.offeredBook }
   );
+
+  // Launch check (11 Oct 2026): the owner is told by SwapSutra itself — in
+  // the app and by email — with the reader's public name, never their email.
+  try {
+    const ownerEmail = normalizeEmail(requestedBook.ownerEmail);
+    const who = publicReaderName('', normalizedEmail) || 'A reader';
+    const verb = { SWAP: 'wants to swap', RENT: 'wants to rent', SELL: 'wants to buy', LEND: 'wants to borrow' }[serviceType] || 'asked for';
+    const bookTitle = String(data.requestedBookTitle || requestedBook.title || 'your book');
+    const msg = who + ' ' + verb + ' "' + bookTitle + '". Accept or decline it in Cart → My orders → Requests.';
+    createNotification(ownerEmail, 'swap_request_received', 'New request for "' + bookTitle + '"', msg, id, { link: '/cart' });
+    sendSwapSutraEmail({ to: ownerEmail, subject: 'New request for "' + bookTitle + '" on SwapSutra',
+      htmlBody: getBrandedEmailTemplate('A new request', '<p>' + msg + '</p>', 'https://swapsutra.in/cart', 'Open Cart') });
+  } catch (e) { Logger.log('Owner request notice failed: ' + e); }
 
   return { success: true, id: id, requestId: id, serviceType: serviceType, message: `${serviceType} request sent successfully.` };
 }
@@ -14419,6 +14529,12 @@ function togglePostReaction(data) {
     const postId = data.postId;
     const reactionType = data.reactionType || 'like'; // 'like', 'love', 'thoughtful'
     if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
+    // Launch check (11 Oct 2026): only on a post that exists.
+    {
+      const pv = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts).getDataRange().getValues();
+      const pid = (pv[0] || []).map(h => String(h).trim()).indexOf('id');
+      if (!pv.slice(1).some(r => String(r[pid]) === String(postId))) return { success: false, message: "That post is no longer there." };
+    }
 
     const rxSheet = getOrCreateSheet('ReadingRoomReactions', DB_SCHEMA.ReadingRoomReactions);
     const rxValues = rxSheet.getDataRange().getValues();
@@ -14482,6 +14598,12 @@ function addPostComment(data) {
     const audioUrl = data.audioUrl || '';
     if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
     if (!comment && !audioUrl) return { success: false, message: "Comment or voice message required" };
+    // Launch check (11 Oct 2026): only on a post that exists.
+    {
+      const pv = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts).getDataRange().getValues();
+      const pid = (pv[0] || []).map(h => String(h).trim()).indexOf('id');
+      if (!pv.slice(1).some(r => String(r[pid]) === String(postId))) return { success: false, message: "That post is no longer there." };
+    }
 
     const cmSheet = getOrCreateSheet('ReadingRoomComments', DB_SCHEMA.ReadingRoomComments);
     const id = generateId('RR_CMT_');
@@ -26829,6 +26951,41 @@ let __SS_PARTNER_CACHE__ = null;
  * phone, address…) is replaced — the buyer stays with SwapSutra. Book ids
  * and titles stay, so the request still works.
  */
+/**
+ * How many other accepted, still-running exchanges hold this book (launch
+ * check, 11 Oct 2026). A request counts until it is completed or closed.
+ */
+function copiesInExchange_(values, headers, bookId, exceptId) {
+  if (!bookId) return 0;
+  // An exchange stops holding the book once it is done (book back / sale
+  // closed) or its room is closed.
+  const finished = completedSwapIdSet();
+  try {
+    readSheetObjects_(getStageEventsSheet()).rows.forEach(r => {
+      const a = String(r.obj.actionType || '');
+      if (a === 'exchange_done' || a === 'room_closed') finished[String(r.obj.swapId)] = true;
+    });
+  } catch (e) { /* the chat statuses above still count */ }
+  let n = 0;
+  for (let r = 1; r < values.length; r++) {
+    if (finished[String(values[r][headers.indexOf('id')])]) continue;
+    const p = resolveSwapRequestParties(headers, values[r]);
+    if (String(p.requestedBookId) !== String(bookId)) continue;
+    if (String(values[r][headers.indexOf('id')]) === String(exceptId)) continue;
+    if (String(values[r][headers.indexOf('status')] || '').trim().toLowerCase() === 'accepted') n++;
+  }
+  return n;
+}
+/** A partner listing's copies in stock (1 when not set). */
+function partnerBookStock_(bookId) {
+  try {
+    const t = readSheetObjects_(getOrCreateSheet('Books', getBookHeaders()));
+    const hit = t.rows.find(r => String(r.obj.id) === String(bookId));
+    const n = hit ? Number(hit.obj.stock) : NaN;
+    return isFinite(n) && n > 0 ? n : 1;
+  } catch (e) { return 1; }
+}
+
 function maskBuyerForPartner_(row, partnerEmail) {
   if (!row || normalizeEmail(row.ownerEmail || row.receiverEmail || '') !== normalizeEmail(partnerEmail)) return row;
   const out = Object.assign({}, row);
