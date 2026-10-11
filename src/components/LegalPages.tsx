@@ -209,7 +209,7 @@ export const PrivacyPolicyPage = ({ navigateTo }: { navigateTo: Nav }) => (
         <><strong>Optional profile:</strong> photo, short bio and favourite genres.</>,
         <><strong>Listings and exchanges:</strong> book details and photos, an approximate location, agreed terms, condition photos and handover confirmations.</>,
         <><strong>Messages:</strong> exchange chats and voice notes. Admins can read exchange chats to keep readers safe and settle disputes.</>,
-        <><strong>Payments:</strong> payment reference, amount and date. We never see your UPI PIN, card or bank details.</>,
+        <><strong>Payments:</strong> payment reference, amount and date. We never see your UPI PIN, card or net-banking password. <strong>Payouts:</strong> the UPI ID and/or bank account (holder's name, account number, IFSC) you give so SwapSutra can pay you — used only for that, and visible only to you and the SwapSutra admin.</>,
         <><strong>Technical:</strong> IP address and device type, for security.</>,
       ]} />
     </S>

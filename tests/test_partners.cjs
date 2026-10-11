@@ -192,7 +192,8 @@ const app = (o) => Object.assign({
   registeredName: 'Asha Owner', panNumber: 'ABCDE1234F', aadhaarLast4: '1234', showBanner: true, runAds: true,
   typeFields: { storeType: 'New + second-hand', openingHours: '10–8' },
   docs: { aadhaar: PNG, pan: PNG, businessProof: PDF },
-  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-11'
+  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-11',
+  payout: { upiId: 'bookworms@okhdfcbank', payeeName: 'Asha Owner' }
 }, o || {});
 const P = (env) => env.sheets.Partners;
 const pobj = (env) => { const s = P(env); const h = s._data[0]; const o = {}; h.forEach((k, i) => { o[k] = s._data[1][i]; }); return o; };
@@ -528,6 +529,24 @@ console.log('--- library partners (11 Oct 2026) ---');
   C('The admin can run a library ad', ad.success, JSON.stringify(ad));
   const ui = fs.readFileSync(path.join(root, 'src/components/AdminSponsoredAds.tsx'), 'utf8') + fs.readFileSync(path.join(root, 'src/utils/ads.ts'), 'utf8');
   C('...and the console and the shelf know the library kind', /'library'/.test(ui) && /Visit the library/.test(ui));
+}
+
+console.log('--- payout details at registration (11 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  env.as('own@x.com');
+  const none = env.api.submitPartnerApplication(app({ payout: {} }));
+  C('A partner must say where to be paid (UPI or bank)', none.errors && none.errors.payout_upiId, JSON.stringify(none.errors));
+  const badBank = env.api.submitPartnerApplication(app({ payout: { accountName: 'Asha Owner', accountNumber: '12ab', ifsc: 'HDFC1234' } }));
+  C('A wrong account number or IFSC is caught', badBank.errors && badBank.errors.payout_accountNumber && badBank.errors.payout_ifsc, JSON.stringify(badBank.errors));
+  const ok = env.api.submitPartnerApplication(app({ payout: { accountName: 'Bookworms Pvt Ltd', accountNumber: '1234 5678 9012', ifsc: 'hdfc0001234', bankName: 'HDFC Bank' } }));
+  const acct = env.api.getPayoutAccount();
+  C('A bank account alone is enough, and is saved for the payouts', ok.success && acct.account && acct.account.bank && acct.account.bank.accountNumber === '123456789012' && acct.account.bank.ifsc === 'HDFC0001234' && !acct.account.upiId, JSON.stringify(acct));
+  env.as('req@x.com');
+  const r1 = env.api.savePayoutAccount({ accountName: 'Ravi Reader', accountNumber: '998877665544', ifsc: 'SBIN0001234' });
+  const r2 = env.api.savePayoutAccount({ upiId: 'ravi@okaxis', payeeName: 'Ravi Reader', accountName: 'Ravi Reader', accountNumber: '998877665544', ifsc: 'SBIN0001234' });
+  C('Readers can be paid to a bank account too, or both', r1.success && r2.success && r2.account.upiId === 'ravi@okaxis' && r2.account.bank.accountNumber === '998877665544' && /okaxis or a\/c ••••5544/.test(r2.message), JSON.stringify(r2));
+  C('Without either, nothing is saved', env.api.savePayoutAccount({}).success === false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

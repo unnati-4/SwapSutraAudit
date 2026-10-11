@@ -68,7 +68,7 @@ export default function AdminPartners() {
         {p.status === 'APPROVED' && (
           <p className="type-caption">
             Commission now {p.commissionNow}%{p.commissionPlan === 'free_first_year' ? ` (free until ${day(p.commissionFreeUntil)})` : ''} ·
-            Promotion {p.promotion?.active ? `on until ${day(p.promotion.activeUntil)}` : 'off'} · Payout UPI: {p.payoutAccount?.upiId || 'not added'}
+            Promotion {p.promotion?.active ? `on until ${day(p.promotion.activeUntil)}` : 'off'} · Payout: {[p.payoutAccount?.upiId, p.payoutAccount?.bank ? `${p.payoutAccount.bank.accountName} · A/c ${p.payoutAccount.bank.accountNumber} · ${p.payoutAccount.bank.ifsc}` : ''].filter(Boolean).join(' / ') || 'not added'}
           </p>
         )}
         {p.reviewNote && <p className="type-caption">Note: {p.reviewNote}</p>}
@@ -158,7 +158,7 @@ export default function AdminPartners() {
         <ul className="admin-ads__list">{monthly.map((m) => (
           <li key={m.email + m.month} className="admin-ads__item" style={{ gridTemplateColumns: '1fr' }}>
             <p className="admin-ads__title">{m.partnerName} — {m.month}</p>
-            <p className="type-caption">{m.items} order(s) · earned {inr(m.net)} after commission · paid {inr(m.paid)} · <b>due {inr(m.due)}</b> · pay to {m.payTo?.upiId || 'no UPI yet'}{m.payTo?.payeeName ? ` (${m.payTo.payeeName})` : ''}</p>
+            <p className="type-caption">{m.items} order(s) · earned {inr(m.net)} after commission · paid {inr(m.paid)} · <b>due {inr(m.due)}</b> · pay to {[m.payTo?.upiId ? `${m.payTo.upiId}${m.payTo.payeeName ? ` (${m.payTo.payeeName})` : ''}` : '', m.payTo?.bank ? `${m.payTo.bank.accountName} · A/c ${m.payTo.bank.accountNumber} · IFSC ${m.payTo.bank.ifsc}` : ''].filter(Boolean).join(' / ') || 'no UPI or bank yet'}</p>
             {m.due > 0 && (m.payable
               ? <div className="admin-ads__actions"><button type="button" className="mug-btn mug-btn--solid" onClick={() => { const n = ask(`Paid ${inr(m.due)} to ${m.partnerName}? Add the UTR (optional):`); if (n !== null) run('adminMarkPartnerMonthPaid', { email: m.email, month: m.month, note: n }, 'Month marked paid.'); }}>Mark {m.month} paid</button></div>
               : <p className="type-caption">Payable after the month ends.</p>)}

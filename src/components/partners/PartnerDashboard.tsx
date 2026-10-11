@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import PayoutFields, { payoutErrors, payoutFromAccount, type PayoutDetails } from '../PayoutFields';
 import UpiPayBox from '../UpiPayBox';
 import { LocationCard, LocationPinPicker } from '../LocationPin';
 import { PARTNER_CONTRACTS } from '../../data/partnerContracts';
@@ -80,7 +81,7 @@ export default function PartnerDashboard({ dash, reload, onOpenOrders, onListBoo
                 {(dash.nextSteps || []).map((s) => (
                   <li key={s.key} className={s.urgent ? 'is-urgent' : ''}>
                     {s.text}
-                    {s.key === 'payout' && <button type="button" className="pp-link" onClick={() => setTab('account')}>Add UPI ID</button>}
+                    {s.key === 'payout' && <button type="button" className="pp-link" onClick={() => setTab('account')}>Add UPI or bank</button>}
                     {s.key.startsWith('order_') && <button type="button" className="pp-link" onClick={onOpenOrders}>Open the order</button>}
                     {s.key === 'list' && <button type="button" className="pp-link" onClick={onListBook}>List a book</button>}
                     {(s.key.startsWith('promo') || s.key.startsWith('banner')) && <button type="button" className="pp-link" onClick={() => setTab('promo')}>Banner & ads</button>}
@@ -98,7 +99,7 @@ export default function PartnerDashboard({ dash, reload, onOpenOrders, onListBoo
               <div><span>Paid to you</span><b>{inr(e?.total.paid || 0)}</b></div>
               <div><span>Coming to you</span><b>{inr(e?.total.due || 0)}</b></div>
             </div>
-            <p className="pp-hint">Paid monthly: a month's orders are paid after the month ends, to {dash.payoutAccount?.upiId || 'your UPI ID (add it under Payouts)'}. No ₹10 platform fee is taken from you on your own books (buyers pay it as usual).</p>
+            <p className="pp-hint">Paid monthly: a month's orders are paid after the month ends, to {dash.payoutAccount?.upiId || (dash.payoutAccount?.bank ? `your bank account ••••${String(dash.payoutAccount.bank.accountNumber).slice(-4)}` : 'your UPI ID or bank account (add it under Account)')}. No ₹10 platform fee is taken from you on your own books (buyers pay it as usual).</p>
             {e && e.months.length > 0 && (
               <table className="pp-table">
                 <thead><tr><th>Month</th><th>Orders</th><th>Sold</th><th>Commission</th><th>Earned</th><th>Status</th></tr></thead>
@@ -313,7 +314,8 @@ function PromoTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: stri
 
 function AccountTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: string }) {
   const p = dash.partner!;
-  const [upi, setUpi] = useState({ upiId: dash.payoutAccount?.upiId || '', payeeName: dash.payoutAccount?.payeeName || p.registeredName || '' });
+  const [upi, setUpi] = useState<PayoutDetails>(payoutFromAccount(dash.payoutAccount, p.registeredName || ''));
+  const [upiErrs, setUpiErrs] = useState<Partial<Record<string, string>>>({});
   const [prof, setProf] = useState({ phone: p.phone, altPhone: p.altPhone || '', altEmail: p.altEmail || '', website: p.website, instagram: p.instagram, about: p.about });
   const [picking, setPicking] = useState(false);
   const contract = PARTNER_CONTRACTS[p.type];
@@ -322,11 +324,8 @@ function AccountTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: st
     <div className="pp-grid">
       <section className="pp-card">
         <h2 className="pp-h2">Where your payouts go</h2>
-        <label className="pp-field"><span className="pp-label">UPI ID</span>
-          <input className="input-classic pp-input" value={upi.upiId} onChange={(e) => setUpi({ ...upi, upiId: e.target.value })} placeholder="name@okbank" /></label>
-        <label className="pp-field"><span className="pp-label">Name on the account</span>
-          <input className="input-classic pp-input" value={upi.payeeName} onChange={(e) => setUpi({ ...upi, payeeName: e.target.value })} /></label>
-        <button type="button" className="btn-primary pp-btn" disabled={busy === 'upi'} onClick={() => act('upi', 'savePayoutAccount', upi)}>Save payout UPI</button>
+        <PayoutFields value={upi} onChange={setUpi} errors={upiErrs} inputClassName="input-classic pp-input" labelClassName="pp-label" />
+        <button type="button" className="btn-primary pp-btn" disabled={busy === 'upi'} onClick={() => { const e = payoutErrors(upi); setUpiErrs(e); if (!Object.keys(e).length) act('upi', 'savePayoutAccount', upi); }}>Save payout details</button>
         <p className="pp-hint">SwapSutra pays each month's orders after the month ends, minus {p.commissionNow}% commission{p.commissionPlan === 'free_first_year' && p.commissionFreeUntil ? ` (0% until ${dateLabel(p.commissionFreeUntil)})` : ''}.</p>
       </section>
       <section className="pp-card">

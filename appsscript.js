@@ -24732,7 +24732,7 @@ function runReturnDeadlines() {
             bookLabel + ' was not on its way back by ' + due + ', so your ₹' + fullDeposit + ' security deposit has been forfeited' + (feeKept > 0 ? ' (₹' + amount + ' to the owner, ₹' + feeKept + ' platform fee)' : ' and will be paid to the owner') + '. You must still return the book.',
             id, 'ret_forfeit_' + id + '_' + leg.leg);
           returnNotify_(ownerEmail, 'return_forfeited_owner', 'The deposit is coming to you',
-            'Your book was not returned by ' + due + '. The borrower\'s ₹' + amount + ' security deposit has been forfeited and SwapSutra will pay it to you' + (readPayoutAccount_(ownerEmail) ? '' : ' — add your UPI ID in Profile → Settings so we can') + '. SwapSutra will also help you get the book back.',
+            'Your book was not returned by ' + due + '. The borrower\'s ₹' + amount + ' security deposit has been forfeited and SwapSutra will pay it to you' + (readPayoutAccount_(ownerEmail) ? '' : ' — add your UPI ID or bank account in Profile → Settings so we can') + '. SwapSutra will also help you get the book back.',
             id, 'ret_forfeit_owner_' + id + '_' + leg.leg);
           returnNotify_('swapsutra@gmail.com', 'return_forfeit_admin', 'Pay out a forfeited deposit',
             'Exchange ' + id + ': ₹' + amount + ' forfeited by ' + borrowerEmail + ' — pay it to ' + ownerEmail + ' and mark it paid in Admin → Returns.',
@@ -24790,7 +24790,7 @@ function adminMarkForfeitPaid(data) {
     : 'the deposit forfeited when your book was not returned on time';
   const account = readPayoutAccount_(row.obj.ownerEmail);
   returnNotify_(row.obj.ownerEmail, 'return_forfeit_paid', 'SwapSutra has paid you ₹' + row.obj.amount,
-    'SwapSutra has sent you ₹' + row.obj.amount + (account ? ' to ' + account.upiId : '') + ' — ' + kindOfPayout + '.',
+    'SwapSutra has sent you ₹' + row.obj.amount + (account ? ' to ' + payoutDestinationLabel_(account) : '') + ' — ' + kindOfPayout + '.',
     row.obj.swapId, 'ret_paid_' + row.obj.id);
   return { success: true };
 }
@@ -25224,7 +25224,7 @@ function adminDecideDeposits(data) {
       ? rentNote + '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
       : rentNote + (refund > 0 ? 'The deposit is refunded' + (refund < available ? ' (₹' + refund + ' after the ₹' + (available - refund) + ' platform fee)' : rentTaken > 0 ? ' (₹' + refund + ')' : ' in full (₹' + refund + ')') : 'No deposit is kept') + '. Reason: ' + reason;
     [payer, other].forEach(email => returnNotify_(email, 'deposit_decided', 'Decision on the security deposit',
-      'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + swap.obj.id + '_' + leg));
+      'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID or bank account in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + swap.obj.id + '_' + leg));
     results.push({ payerRole: payerRole, held: held, rent: rentTaken, forfeit: forfeit, refund: refund });
   }
   try {
@@ -25257,7 +25257,10 @@ function adminDecideDeposits(data) {
    ════════════════════════════════════════════════════════════════════════ */
 
 const PAYOUT_ACCOUNT_SHEET = 'PayoutAccounts';
-const PAYOUT_ACCOUNT_HEADERS = ['email', 'upiId', 'payeeName', 'qrUrl', 'updatedAt'];
+// 11 Oct 2026 (owner's request): a bank account can be given instead of, or
+// as well as, a UPI ID — partners in particular are often paid to a bank.
+const PAYOUT_ACCOUNT_HEADERS = ['email', 'upiId', 'payeeName', 'qrUrl', 'updatedAt', 'accountName', 'accountNumber', 'ifsc', 'bankName'];
+const PAYOUT_IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const UPI_ID_PATTERN = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,63}$/;
 const GOOGLE_REVIEW_URL = 'https://g.page/r/CTKbe5CpoGNPEAI/review';
 
@@ -25266,7 +25269,10 @@ function getPayoutAccountSheet_() { const s = getOrCreateSheet(PAYOUT_ACCOUNT_SH
 function readPayoutAccount_(email) {
   const norm = normalizeEmail(email);
   const row = readSheetObjects_(getPayoutAccountSheet_()).rows.find(r => normalizeEmail(r.obj.email) === norm);
-  return row ? { upiId: row.obj.upiId || '', payeeName: row.obj.payeeName || '', qrUrl: row.obj.qrUrl || '', updatedAt: row.obj.updatedAt || '' } : null;
+  if (!row) return null;
+  const bank = row.obj.accountNumber ? { accountName: String(row.obj.accountName || ''), accountNumber: String(row.obj.accountNumber || ''),
+    ifsc: String(row.obj.ifsc || ''), bankName: String(row.obj.bankName || '') } : null;
+  return { upiId: row.obj.upiId || '', payeeName: row.obj.payeeName || '', qrUrl: row.obj.qrUrl || '', updatedAt: row.obj.updatedAt || '', bank: bank };
 }
 
 /** Action: getPayoutAccount — your own. */
@@ -25277,31 +25283,72 @@ function getPayoutAccount() {
 }
 
 /** Action: savePayoutAccount { upiId, payeeName, fileData? (QR image) } */
+/**
+ * Checks payout details: a UPI ID (with the name on it) and/or a bank
+ * account (holder, number, IFSC). At least one is needed; whatever is
+ * given must be complete. Returns { errors, clean }.
+ */
+function validatePayoutDetails_(data) {
+  const d = data || {};
+  const errors = {};
+  const upiId = String(d.upiId || '').trim();
+  const payeeName = String(d.payeeName || '').trim().slice(0, 80);
+  const accountName = String(d.accountName || '').trim().slice(0, 80);
+  const accountNumber = String(d.accountNumber || '').replace(/\s+/g, '');
+  const ifsc = String(d.ifsc || '').trim().toUpperCase();
+  const bankName = String(d.bankName || '').trim().slice(0, 80);
+  const wantsBank = !!(accountName || accountNumber || ifsc || bankName);
+  if (!upiId && !wantsBank) errors.upiId = 'Add a UPI ID or a bank account, so SwapSutra can pay you.';
+  if (upiId && !UPI_ID_PATTERN.test(upiId)) errors.upiId = 'Enter a UPI ID like name@okbank or 98xxxxxxxx@upi.';
+  if (upiId && !payeeName) errors.payeeName = 'Enter the name on the UPI account, so SwapSutra can check it before paying.';
+  if (wantsBank) {
+    if (!accountName) errors.accountName = 'Enter the account holder\'s name.';
+    if (!/^\d{9,18}$/.test(accountNumber)) errors.accountNumber = 'Enter the account number (9–18 digits).';
+    if (!PAYOUT_IFSC_PATTERN.test(ifsc)) errors.ifsc = 'Enter the IFSC code, like SBIN0001234.';
+  }
+  return { errors: errors, clean: { upiId: upiId, payeeName: payeeName || accountName, accountName: accountName, accountNumber: accountNumber, ifsc: ifsc, bankName: bankName, hasBank: wantsBank } };
+}
+
+/** Saves the payout details for an email (already validated). */
+function storePayoutAccount_(email, c, qrUrl) {
+  const sheet = getPayoutAccountSheet_();
+  const t = readSheetObjects_(sheet);
+  const existing = t.rows.find(r => normalizeEmail(r.obj.email) === email);
+  const now = new Date();
+  const rec = { email: email, upiId: c.upiId, payeeName: c.payeeName, updatedAt: now,
+    accountName: c.hasBank ? c.accountName : '', accountNumber: c.hasBank ? c.accountNumber : '', ifsc: c.hasBank ? c.ifsc : '', bankName: c.hasBank ? c.bankName : '' };
+  if (qrUrl) rec.qrUrl = qrUrl;
+  if (existing) {
+    const headers = ensureSheetHeaders(sheet, PAYOUT_ACCOUNT_HEADERS);
+    Object.keys(rec).forEach(k => { const i = headers.indexOf(k); if (i !== -1 && k !== 'email') sheet.getRange(existing.rowIndex + 1, i + 1).setValue(rec[k]); });
+  } else {
+    const headers = ensureSheetHeaders(sheet, PAYOUT_ACCOUNT_HEADERS);
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  }
+}
+
+function payoutDestinationLabel_(acct) {
+  if (!acct) return '';
+  const parts = [];
+  if (acct.upiId) parts.push(acct.upiId);
+  if (acct.bank) parts.push((acct.bank.bankName ? acct.bank.bankName + ' ' : '') + 'a/c ••••' + String(acct.bank.accountNumber).slice(-4));
+  return parts.join(' or ');
+}
+
 function savePayoutAccount(data) {
   const caller = normalizeEmail(getAuthenticatedEmail());
   if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in first.' };
-  const upiId = String((data && data.upiId) || '').trim();
-  const payeeName = String((data && data.payeeName) || '').trim().slice(0, 80);
-  if (!UPI_ID_PATTERN.test(upiId)) return { success: false, message: 'Enter a UPI ID like name@okbank or 98xxxxxxxx@upi.' };
-  if (!payeeName) return { success: false, message: 'Enter the name on the account, so SwapSutra can check it before paying.' };
+  const v = validatePayoutDetails_(data);
+  const firstError = Object.keys(v.errors).map(k => v.errors[k])[0];
+  if (firstError) return { success: false, errors: v.errors, message: firstError };
   let qrUrl = '';
   if (data && data.fileData) {
     qrUrl = saveFileToDrive(data.fileData, 'payout_qr_' + caller.split('@')[0] + '.jpg') || '';
     if (!qrUrl) return { success: false, message: 'That QR image could not be saved. Use a JPG or PNG under 10 MB.' };
   }
-  const sheet = getPayoutAccountSheet_();
-  const t = readSheetObjects_(sheet);
-  const existing = t.rows.find(r => normalizeEmail(r.obj.email) === caller);
-  const now = new Date();
-  if (existing) {
-    const set = (k, v) => { const i = t.headers.indexOf(k); if (i !== -1) sheet.getRange(existing.rowIndex + 1, i + 1).setValue(v); };
-    set('upiId', upiId); set('payeeName', payeeName); if (qrUrl) set('qrUrl', qrUrl); set('updatedAt', now);
-  } else {
-    const headers = ensureSheetHeaders(sheet, PAYOUT_ACCOUNT_HEADERS);
-    const rec = { email: caller, upiId: upiId, payeeName: payeeName, qrUrl: qrUrl, updatedAt: now };
-    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
-  }
-  return { success: true, account: readPayoutAccount_(caller), message: 'Saved. Payouts will go to ' + upiId + '.' };
+  storePayoutAccount_(caller, v.clean, qrUrl);
+  const acct = readPayoutAccount_(caller);
+  return { success: true, account: acct, message: 'Saved. Payouts will go to ' + payoutDestinationLabel_(acct) + '.' };
 }
 
 /** The sale's state for the buyer and seller: what was paid, whether it can be closed, the payout. */
@@ -25476,7 +25523,7 @@ function confirmSaleComplete(data) {
     'The buyer has the book and closed the purchase. SwapSutra will send you ₹' + st.sellerReceives + (st.partnerSeller
       ? ' (₹' + st.price + (st.commission ? ' minus ' + Math.round(st.commissionRate * 100) + '% commission' : '') + ') with your monthly payout'
       : ' (₹' + st.price + ' minus the ₹' + st.sellerFee + ' platform fee)') +
-    (account ? ' to ' + account.upiId + '.' : '. Add your UPI ID in the exchange\'s Delivery panel so we can pay you.'),
+    (account ? ' to ' + payoutDestinationLabel_(account) + '.' : '. Add your UPI ID or bank account in the exchange room (or Profile → Settings) so we can pay you.'),
     swap.obj.id, 'sale_closed_seller_' + swap.obj.id);
   returnNotify_(caller, 'sale_closed_buyer', 'Thank you — purchase closed',
     'Enjoy the book!' + (hasRatedPlatform_(caller) ? '' : ' Rate the exchange in its room — it moves to My orders after that.'),
@@ -26351,7 +26398,7 @@ function roomCreateRefunds_(swap) {
         created.push(rentRec);
         try {
           returnNotify_(swap.ownerEmail, 'room_rent_due', 'Your rent is on its way',
-            '"' + title + '" is back with you. SwapSutra will send you the rent, ₹' + rent + (readPayoutAccount_(swap.ownerEmail) ? '.' : ' — add your UPI ID in Profile → Settings so we can pay you.'),
+            '"' + title + '" is back with you. SwapSutra will send you the rent, ₹' + rent + (readPayoutAccount_(swap.ownerEmail) ? '.' : ' — add your UPI ID or bank account in Profile → Settings so we can pay you.'),
             id, 'room_rent_owner_' + id);
           returnNotify_('swapsutra@gmail.com', 'room_rent_admin', 'Pay rent to an owner',
             'Exchange ' + id + ': pay ₹' + rent + ' rent to ' + swap.ownerEmail + ' (from the renter\'s deposit) and mark it paid in Admin → Payouts.', id, 'room_rent_admin_' + id, { whatsapp: false });
@@ -27329,6 +27376,13 @@ function submitPartnerApplication(data) {
   }
   // The verified email comes from the session, never from the form.
   const v = validatePartnerApplication_(Object.assign({}, data, { mainEmail: caller }), prevDocs);
+  // 11 Oct 2026 (owner's request): where SwapSutra pays the partner, asked
+  // at registration (UPI and/or bank account).
+  const pIn = (data || {}).payout || {};
+  const payoutGiven = ['upiId', 'payeeName', 'accountName', 'accountNumber', 'ifsc', 'bankName'].some(k => String(pIn[k] || '').trim());
+  const keepSaved = !payoutGiven && !!readPayoutAccount_(caller);
+  const pv = validatePayoutDetails_(pIn);
+  if (!keepSaved) Object.keys(pv.errors).forEach(k => { v.errors['payout_' + k] = pv.errors[k]; });
   if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
   const c = v.clean;
   const lock = LockService.getScriptLock();
@@ -27355,6 +27409,8 @@ function submitPartnerApplication(data) {
       partnerSheet_().appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
       resetPartnerCache_();
     }
+    try { if (!keepSaved) storePayoutAccount_(caller, pv.clean, ''); }
+    catch (err) { Logger.log('partner payout details not saved: ' + err); }
     try {
       returnNotify_('swapsutra@gmail.com', 'partner_application', 'New partner application',
         PARTNER_TYPE_LABEL[c.type] + ' "' + c.name + '" (' + caller + ') applied. Review it in Management → Partners.', '', 'partner_app_' + id + '_' + now.getTime(), { whatsapp: false });
@@ -27374,7 +27430,7 @@ function partnerNextSteps_(p, promo, ctx) {
   if (st === 'REJECTED') steps.push({ key: 'rejected', text: 'Your application was not approved' + (p.reviewNote ? ': ' + p.reviewNote : '.') });
   if (st === 'SUSPENDED') steps.push({ key: 'suspended', text: 'Your partner account is paused' + (p.reviewNote ? ': ' + p.reviewNote : '.') + ' Write to swapsutra@gmail.com.' });
   if (st !== 'APPROVED') return steps;
-  if (!ctx.payoutAccount) steps.push({ key: 'payout', text: 'Add the UPI ID your monthly payouts should go to.', urgent: true });
+  if (!ctx.payoutAccount) steps.push({ key: 'payout', text: 'Add the UPI ID or bank account your monthly payouts should go to.', urgent: true });
   (ctx.orders || []).filter(o => o.nextStep).forEach(o => steps.push({ key: 'order_' + o.swapId, text: '"' + o.bookTitle + '": ' + o.nextStep, swapId: o.swapId, urgent: !!o.urgent }));
   if (!ctx.books) steps.push({ key: 'list', text: 'List your books — there is no limit, and you can set how many copies you have.' });
   if (truthy_(p.showBanner) && !p.bannerImageUrl) steps.push({ key: 'banner', text: 'Upload your banner for the Library page.' });

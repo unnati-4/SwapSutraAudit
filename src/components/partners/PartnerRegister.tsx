@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import PayoutFields, { EMPTY_PAYOUT, payoutErrors, type PayoutDetails } from '../PayoutFields';
 import { LocationPinPicker, LocationCard } from '../LocationPin';
 import { PARTNER_CONTRACTS, PARTNER_LABEL, type PartnerType } from '../../data/partnerContracts';
 import { fileForUpload, partnerPost, type PartnerView } from './partnerApi';
@@ -94,6 +95,8 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
     showBanner: existing ? existing.showBanner : true, runAds: existing ? existing.runAds : true, typeFields: existing?.typeFields || {},
     agree: false, signedName: '',
   }));
+  // 11 Oct 2026 (owner's request): where SwapSutra pays the partner.
+  const [payout, setPayout] = useState<PayoutDetails>(() => ({ ...EMPTY_PAYOUT, payeeName: existing?.registeredName || '', accountName: '' }));
   const [docs, setDocs] = useState<Record<string, { dataUrl: string; name: string }>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [picking, setPicking] = useState(false);
@@ -136,9 +139,17 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
       setNote('Your documents are too large to send together. Upload photos instead of PDFs (photos are shrunk automatically), or smaller PDFs.');
       return;
     }
+    const pe = existing ? {} : payoutErrors(payout);
+    if (Object.keys(pe).length) {
+      setErrors(Object.fromEntries(Object.entries(pe).map(([k, v]) => ['payout_' + k, String(v)])));
+      setNote('Add where SwapSutra should pay you — a UPI ID or a bank account.');
+      window.setTimeout(() => document.querySelector('.pp-error, [data-testid="payout-fields"] [role="alert"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+      return;
+    }
     setBusy(true); setErrors({}); setNote('');
     try {
       const d = await partnerPost('submitPartnerApplication', {
+        payout: { ...payout, ifsc: payout.ifsc.trim().toUpperCase(), accountNumber: payout.accountNumber.replace(/\s+/g, '') },
         type, ...form, panNumber: form.panNumber.trim().toUpperCase(), gstin: form.gstin.trim().toUpperCase(),
         lat: form.lat ?? '', lng: form.lng ?? '',
         docs: Object.fromEntries(Object.keys(docs).map((k) => [k, docs[k].dataUrl])),
@@ -247,6 +258,13 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
             {errors['doc_' + d.key] && <span className="pp-error" role="alert">{errors['doc_' + d.key]}</span>}
           </div>
         ))}
+      </fieldset>
+
+      <fieldset className="pp-fieldset" data-testid="partner-payout">
+        <legend>Where SwapSutra pays you{existing ? '' : ' *'}</legend>
+        <p className="pp-hint">Your monthly payouts (sales and rent, minus commission) go here. A UPI ID, a bank account, or both. {existing ? 'Leave blank to keep the details you already gave.' : ''}</p>
+        <PayoutFields value={payout} onChange={setPayout} inputClassName="input-classic pp-input" labelClassName="pp-label"
+          errors={Object.fromEntries(Object.entries(errors).filter(([k]) => k.startsWith('payout_')).map(([k, v]) => [k.slice(7), String(v)])) as Record<string, string>} />
       </fieldset>
 
       <fieldset className="pp-fieldset">

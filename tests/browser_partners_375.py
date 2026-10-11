@@ -114,7 +114,12 @@ with sync_playwright() as p:
     ck('...which says shipping and delivery are the partner\'s responsibility', "Shipping and delivery are the partner's responsibility" in pg.locator('[data-testid="partner-contract"]').inner_text())
     ck('Form: no horizontal scroll', no_hscroll(pg))
     shot(pg, 'partners-form')
+    pg.click('text=Send my application'); pg.wait_for_timeout(600)
+    ck('Where SwapSutra pays the partner is asked (UPI or bank), before anything is sent', pg.locator('[data-testid="partner-payout"]').count() == 1
+       and pg.locator('[data-testid="partner-payout"] [role="alert"]').count() >= 1 and 'submitPartnerApplication' not in state["calls"])
+    pg.fill('input[name="payoutUpiId"]', 'bookworms@okhdfcbank'); pg.fill('input[name="payoutPayeeName"]', 'Asha Owner')
     pg.click('text=Send my application'); pg.wait_for_timeout(800)
+    ck('...and sent with the application', state["bodies"].get('submitPartnerApplication', {}).get('payout', {}).get('upiId') == 'bookworms@okhdfcbank')
     ck('Server errors are shown next to the fields', pg.locator('.pp-error:has-text("PAN number")').count() >= 1 and pg.locator('.pp-error:has-text("Aadhaar")').count() >= 1)
     ctx.close()
     # C. approved partner dashboard

@@ -13,7 +13,7 @@ interface Forfeit {
   id: string; swapId: string; leg: string; bookTitle: string;
   defaulterEmail: string; ownerEmail: string; amount: number;
   dueAt: string; forfeitedAt: string; payoutStatus: string; paidAt?: string; note?: string;
-  payTo?: { upiId: string; payeeName: string; qrUrl: string } | null;
+  payTo?: { upiId: string; payeeName: string; qrUrl: string; bank?: { accountName: string; accountNumber: string; ifsc: string; bankName: string } | null } | null;
 }
 
 const when = (v: string) => {
@@ -69,11 +69,12 @@ export default function AdminReturnForfeits() {
           </p>
           {f.payTo ? (
             <p className="text-xs text-[var(--text-primary)]">
-              UPI <strong className="font-mono">{f.payTo.upiId}</strong> · {f.payTo.payeeName}
+              {f.payTo.upiId && <>UPI <strong className="font-mono">{f.payTo.upiId}</strong> · {f.payTo.payeeName}</>}
               {f.payTo.qrUrl && <> · <a href={f.payTo.qrUrl} target="_blank" rel="noopener noreferrer" className="underline text-brand-gold-text">QR</a></>}
+              {f.payTo.bank && <>{f.payTo.upiId ? <br /> : null}Bank: <strong>{f.payTo.bank.accountName}</strong> · A/c <strong className="font-mono">{f.payTo.bank.accountNumber}</strong> · IFSC <strong className="font-mono">{f.payTo.bank.ifsc}</strong>{f.payTo.bank.bankName ? ` · ${f.payTo.bank.bankName}` : ''}</>}
             </p>
           ) : (
-            <p className="text-xs text-amber-700">No UPI ID saved yet — the reader has been asked to add one.</p>
+            <p className="text-xs text-amber-700">No UPI ID or bank account saved yet — the reader has been asked to add one.</p>
           )}
           {f.note && <p className="text-2xs text-[var(--text-secondary)]">{f.note}</p>}
           <p className="text-xs text-[var(--text-secondary)]">

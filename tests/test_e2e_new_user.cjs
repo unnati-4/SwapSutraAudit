@@ -199,7 +199,7 @@ console.log('--- a library partner ---');
   const P = rt.post({ action: 'verifyOTP', email: 'gomti.library@gmail.com', otp: rt.lastOtp('gomti.library@gmail.com'), purpose: 'partner' }).sessionToken;
   const app = rt.post({ action: 'submitPartnerApplication', type: 'library', name: 'Gomti Reading Library', contactName: 'Ramesh Gupta', phone: '9876501234', about: 'Community library',
     address: '14 Gomti Nagar', city: 'Lucknow', pincode: '226010', lat: 26.85, lng: 80.99, placeLabel: 'Gomti', registeredName: 'Ramesh Gupta', panNumber: 'ABCDE1234F', aadhaarLast4: '4321',
-    showBanner: true, runAds: true, typeFields: { libraryType: 'Community' }, docs: { aadhaar: H.PNG, pan: H.PNG, businessProof: H.PDF }, agree: true, signedName: 'Ramesh Gupta', contractVersion: 'library-2026-10-11' }, P);
+    showBanner: true, runAds: true, typeFields: { libraryType: 'Community' }, docs: { aadhaar: H.PNG, pan: H.PNG, businessProof: H.PDF }, agree: true, signedName: 'Ramesh Gupta', contractVersion: 'library-2026-10-11', payout: { accountName: 'Gomti Reading Library Trust', accountNumber: '50100123456789', ifsc: 'HDFC0001234', bankName: 'HDFC Bank' } }, P);
   const ok = rt.post({ action: 'adminReviewPartner', id: app.id, decision: 'approve' }, admin);
   const bk = H.listBook(rt, P, 'gomti.library@gmail.com', { title: 'Wings of Fire', author: 'A P J Abdul Kalam', isbn: '9788173711466', sell: true, sellPrice: 300, stock: 3 });
   C('A library applies on /partners, is approved and lists with stock', app.success && ok.success && bk.success);

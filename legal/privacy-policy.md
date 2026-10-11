@@ -75,6 +75,8 @@ Your bookshelf, TBR list, reading progress, favourites, reading log, streaks, an
 
 Your payment reference (UTR), the amount, the date, and any payment screenshot you upload. **We never see or store your UPI PIN, card number, CVV, or bank credentials** — those never reach us.
 
+**Payout details.** So that SwapSutra can pay you (a sale, rent, a refund, a deposit awarded to you, or a partner's monthly payout), you give a UPI ID and/or a bank account — the account holder's name, account number, IFSC and bank name. These are used only to pay you and are visible only to you and the SwapSutra admin.
+
 ### 3.8 Automatically
 
 Your IP address, browser and device type, pages viewed, and approximate location derived from your IP. Used for security, abuse prevention, and understanding what is working.

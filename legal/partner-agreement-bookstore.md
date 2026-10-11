@@ -48,7 +48,7 @@ SwapSutra keeps a commission of 2% of every payout to the Bookstore (the sale pr
 
 If SwapSutra approves the Bookstore "commission-free", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.
 
-Payouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID the Bookstore saves in the partner dashboard. The dashboard shows every order, the commission kept and what was paid.
+Payouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID or bank account the Bookstore gives at registration (it can be changed in the partner dashboard). The dashboard shows every order, the commission kept and what was paid.
 
 The Bookstore is responsible for its own taxes (including GST where it applies) on its sales. SwapSutra may change the commission rate or the fees with at least 30 days' notice by email; The Bookstore may end this agreement before the change applies.
 

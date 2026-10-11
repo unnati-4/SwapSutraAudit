@@ -88,7 +88,7 @@ function sections(type: PartnerType): ContractSection[] {
       `${you} pays no ₹10 platform fee on its own books (when it sells, lends, rents out or swaps them). The buyer, borrower or renter always pays SwapSutra's ₹10 platform fee on each exchange. When ${you} asks for another reader's book, it pays the ₹10 like any reader.`,
       `SwapSutra keeps a commission of 2% of every payout to ${you} (the sale price of each book sold, and the rent of each book rented). The commission is deducted before payment.`,
       `If SwapSutra approves ${you} "commission-free", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.`,
-      `Payouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID ${you} saves in the partner dashboard. The dashboard shows every order, the commission kept and what was paid.`,
+      `Payouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID or bank account ${you} gives at registration (it can be changed in the partner dashboard). The dashboard shows every order, the commission kept and what was paid.`,
       `${you} is responsible for its own taxes (including GST where it applies) on its sales. SwapSutra may change the commission rate or the fees with at least 30 days' notice by email; ${you} may end this agreement before the change applies.`,
     ] },
     { title: '6. Banner and ads (promotion)', body: [
