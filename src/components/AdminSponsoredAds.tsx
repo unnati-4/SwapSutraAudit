@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { apiUrl } from '../config/runtime';
 import { downscaleImageFile, fileToDataUrl } from '../utils/imageCompress';
-import { AD_KIND_LABEL, adImageSrc, type AdKind } from '../utils/ads';
+import { AD_KIND_LABEL, adCta, adImageSrc, type AdKind, type SponsoredAd } from '../utils/ads';
 
 /**
  * Admin → Ads (9 Oct 2026).
@@ -19,6 +19,11 @@ const EMPTY = {
   ctaLabel: '', placement: 'both', status: 'live', startDate: '', endDate: '',
 };
 type Form = typeof EMPTY;
+
+const SPONSOR_LABEL: Record<string, string> = {
+  bookstore: 'Bookstore name *', author: 'Author name *', publisher: 'Publisher name *',
+  promoter: 'Promoter / agency name *', book: 'Publisher / seller / author *',
+};
 
 const PLACEMENT_LABEL: Record<string, string> = {
   both: 'Library banner + between the books',
@@ -124,7 +129,7 @@ export default function AdminSponsoredAds() {
         <button type="button" className="mug-btn mug-btn--quiet" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
       </div>
       <p className="type-caption">
-        Advertise a bookstore, an author or a particular book. The ad shows on the Library banner and/or between the books on the shelf,
+        Advertise a bookstore, an author, a publisher, a promoter or a particular book. The ad shows on the Library banner and/or between the books on the shelf,
         always marked “Sponsored”. The shelf is shuffled every time someone opens the Library, so ads and mugs land in new places.
       </p>
       {error && <p className="mug-field__error" role="alert">{error}</p>}
@@ -138,11 +143,13 @@ export default function AdminSponsoredAds() {
               <select className="mug-input" value={form.kind} onChange={set('kind')}>
                 <option value="bookstore">A bookstore</option>
                 <option value="author">An author</option>
+                <option value="publisher">A publisher</option>
+                <option value="promoter">A promoter</option>
                 <option value="book">A particular book</option>
               </select>
               {errors.kind && <span className="mug-field__error" role="alert">{errors.kind}</span>}
             </label>
-            {field('sponsor', form.kind === 'bookstore' ? 'Bookstore name *' : form.kind === 'author' ? 'Author name *' : 'Publisher / seller / author *', { maxLength: 80 })}
+            {field('sponsor', SPONSOR_LABEL[form.kind] || 'Name *', { maxLength: 80 })}
           </div>
           {field('headline', 'Headline *', { maxLength: 90, placeholder: form.kind === 'book' ? 'e.g. The new Ruskin Bond is here' : 'e.g. 20% off every Saturday' })}
           <label className="admin-mugp__field">
@@ -163,7 +170,7 @@ export default function AdminSponsoredAds() {
           {field('linkUrl', form.kind === 'book' ? 'Link (optional if you pick the SwapSutra listing)' : 'Link the ad opens *', { type: 'url', inputMode: 'url', placeholder: 'https://… (store website, Instagram, Amazon page…)' })}
           {form.kind === 'book' && field('bookId', 'SwapSutra listing (optional)', { placeholder: 'Paste the book’s SwapSutra link (…/book/…) or its ID' },
             form.bookId && bookIdFromInput(form.bookId) ? <>Opens the listing <strong>{bookIdFromInput(form.bookId)}</strong> on SwapSutra.</> : 'If the book is listed on SwapSutra, the ad opens its page here.')}
-          {field('ctaLabel', 'Button text (optional)', { maxLength: 30, placeholder: form.kind === 'bookstore' ? 'Visit the store' : form.kind === 'author' ? 'Meet the author' : 'See the book' })}
+          {field('ctaLabel', 'Button text (optional)', { maxLength: 30, placeholder: adCta({ kind: form.kind, ctaLabel: '' } as SponsoredAd) })}
 
           <label className="admin-mugp__field">
             <span className="mug-field__label">Where it shows</span>

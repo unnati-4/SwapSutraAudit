@@ -23031,7 +23031,8 @@ const AD_HEADERS = [
   // A partner's own ad (9 Oct 2026): it waits as "pending" until the admin approves it.
   'partnerId', 'reviewNote'
 ];
-const AD_KINDS = ['bookstore', 'author', 'book'];
+// 11 Oct 2026 (owner's request): publishers and promoters too.
+const AD_KINDS = ['bookstore', 'author', 'publisher', 'promoter', 'book'];
 const AD_PLACEMENTS = ['both', 'banner', 'shelf'];
 const AD_STATUSES = ['live', 'paused', 'removed', 'pending', 'rejected'];
 const AD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
@@ -23153,7 +23154,7 @@ function validateSponsoredAd_(data) {
   if (AD_STATUSES.indexOf(status) === -1) errors.status = 'Unknown status.';
   if (status === 'removed') return { errors: errors, clean: clean };
   if (status === 'rejected') { clean.status = 'rejected'; }
-  if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author or book.';
+  if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author, publisher, promoter or book.';
   if (AD_PLACEMENTS.indexOf(clean.placement) === -1) errors.placement = 'Choose where the ad shows.';
   if (!clean.sponsor) errors.sponsor = 'Who is the ad for? (the bookstore, author or publisher)';
   if (!clean.headline) errors.headline = 'Write a short headline.';
@@ -27134,7 +27135,8 @@ function savePartnerAd(data) {
     sheet.getRange(mine.rowIndex + 1, all.headers.indexOf('status') + 1).setValue(wanted);
     return { success: true, id: id };
   }
-  d.kind = p.type === 'author' ? 'author' : p.type === 'bookstore' ? 'bookstore' : (AD_KINDS.indexOf(String(d.kind)) !== -1 ? d.kind : 'book');
+  // A partner advertises itself (its own type) or one particular book.
+  d.kind = String(d.kind) === 'book' ? 'book' : (AD_KINDS.indexOf(p.type) !== -1 ? p.type : 'book');
   d.sponsor = p.name;
   d.status = 'live'; // validated as a live ad; stored as pending below
   const v = validateSponsoredAd_(d);
@@ -27449,7 +27451,7 @@ function partnerBannerAds_() {
       const link = /^https:\/\//i.test(String(p.website || '')) ? String(p.website)
         : (p.lat !== '' && p.lng !== '' && isFinite(Number(p.lat)) ? 'https://www.google.com/maps/search/?api=1&query=' + Number(p.lat) + ',' + Number(p.lng) : '');
       if (!link) return;
-      out.push({ id: 'PB-' + p.id, kind: p.type === 'author' ? 'author' : p.type === 'bookstore' ? 'bookstore' : 'book', sponsor: mugText_(p.name, 80),
+      out.push({ id: 'PB-' + p.id, kind: AD_KINDS.indexOf(p.type) !== -1 ? p.type : 'book', sponsor: mugText_(p.name, 80),
         headline: mugText_(p.bannerHeadline || p.name, 90), tagline: mugText_(p.bannerTagline || (p.city ? PARTNER_TYPE_LABEL[p.type] + ' · ' + p.city : ''), 160),
         imageUrl: String(p.bannerImageUrl), linkUrl: link, bookId: '', ctaLabel: p.type === 'bookstore' && !p.website ? 'Find the store' : '',
         placement: 'banner', partner: true, partnerType: p.type });
