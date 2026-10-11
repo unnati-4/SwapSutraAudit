@@ -65,7 +65,7 @@ const TYPE_FIELDS: Record<PartnerType, { key: string; label: string; required?: 
 };
 
 type Form = {
-  name: string; contactName: string; phone: string; about: string; website: string; instagram: string; address: string; city: string; pincode: string;
+  name: string; contactName: string; phone: string; altPhone: string; altEmail: string; about: string; website: string; instagram: string; address: string; city: string; pincode: string;
   lat: number | null; lng: number | null; placeLabel: string; registeredName: string; gstin: string; panNumber: string; aadhaarLast4: string;
   showBanner: boolean; runAds: boolean; typeFields: Record<string, string>; agree: boolean; signedName: string;
 };
@@ -75,7 +75,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
 }) {
   const [type, setType] = useState<PartnerType | null>(existing?.type || initialType || null);
   const [form, setForm] = useState<Form>(() => ({
-    name: existing?.name || '', contactName: existing?.contactName || '', phone: existing?.phone || '', about: existing?.about || '',
+    name: existing?.name || '', contactName: existing?.contactName || '', phone: existing?.phone || '', altPhone: existing?.altPhone || '', altEmail: existing?.altEmail || '', about: existing?.about || '',
     website: existing?.website || '', instagram: existing?.instagram || '', address: existing?.address || '', city: existing?.city || '',
     pincode: existing?.pincode || '', lat: existing?.lat ?? null, lng: existing?.lng ?? null, placeLabel: existing?.placeLabel || '',
     registeredName: existing?.registeredName || '', gstin: existing?.gstin || '', panNumber: '', aadhaarLast4: existing?.aadhaarLast4 || '',
@@ -166,6 +166,9 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
         {text('name', NAME_LABEL[type] + ' *', { maxLength: 100 })}
         {text('contactName', (type === 'bookstore' || type === 'publisher' ? 'Owner / authorised person — full name' : 'Your full name') + ' *', { maxLength: 80, autoComplete: 'name' })}
         {text('phone', 'Mobile number *', { inputMode: 'tel', autoComplete: 'tel', placeholder: '98xxxxxxxx' })}
+        {/* 11 Oct 2026 (owner's request): a second way to reach the partner. */}
+        {text('altPhone', 'Alternative mobile number (optional)', { inputMode: 'tel', autoComplete: 'off', placeholder: 'Another number we can call' })}
+        {text('altEmail', 'Alternative email (optional)', { type: 'email', inputMode: 'email', autoComplete: 'off', placeholder: 'Another email we can write to' })}
         {TYPE_FIELDS[type].map((f) => (
           <label className="pp-field" key={f.key}>
             <span className="pp-label">{f.label}{f.required ? ' *' : ''}</span>

@@ -217,9 +217,15 @@ console.log('--- registration ---');
   C('An old contract version is refused (they must read the current one)', env.api.submitPartnerApplication(app({ contractVersion: 'bookstore-2020' })).errors.contract);
   C('Not accepting the agreement is refused', env.api.submitPartnerApplication(app({ agree: false })).errors.agree);
   C('A document must be an image or a PDF', env.api.submitPartnerApplication(app({ docs: { aadhaar: 'data:text/html;base64,PGI+', pan: PNG, businessProof: PNG } })).errors.doc_aadhaar);
-  const ok = env.api.submitPartnerApplication(app());
+  // 11 Oct 2026 (owner's request): an alternative mobile and email, optional.
+  const alt = env.api.submitPartnerApplication(app({ altPhone: '12345', altEmail: 'not-an-email' }));
+  C('Alternative mobile and email: a wrong number or address is caught', alt.errors && alt.errors.altPhone && alt.errors.altEmail, JSON.stringify(alt.errors));
+  const same = env.api.submitPartnerApplication(app({ altPhone: '+919876543210', altEmail: 'OWN@x.com', mainEmail: 'someone@else.com' }));
+  C('...and must differ from the main mobile and the verified email (the email comes from the session, not the form)', same.errors && same.errors.altPhone && same.errors.altEmail, JSON.stringify(same.errors));
+  const ok = env.api.submitPartnerApplication(app({ altPhone: '91234 56780', altEmail: 'Shop.Alt@x.com' }));
   C('A complete bookstore application is received', ok.success && /^SS_PARTNER_/.test(ok.id), JSON.stringify(ok));
   const p = pobj(env);
+  C('The alternative mobile and email are saved', p.altPhone === '9123456780' && p.altEmail === 'shop.alt@x.com', JSON.stringify([p.altPhone, p.altEmail]));
   C('...waiting for review, with the contract version, signature and time recorded',
     p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-10b' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
   C('Documents are saved in a private folder — never shared', env.files.length === 3 && env.files.every(f => /SwapSutra_Partner_Documents/.test(f.folder)) && env.shared.length === 0);
@@ -227,12 +233,17 @@ console.log('--- registration ---');
   C('The admin is told', env.notifications.some(x => x[0] === ADMIN && x[1] === 'partner_application'));
   C('Applying again while under review is refused', env.api.submitPartnerApplication(app()).error === 'UNDER_REVIEW');
   const mine = env.api.getMyPartner();
+  C('The partner sees their alternative contact on the dashboard', mine.partner.altPhone === '9123456780' && mine.partner.altEmail === 'shop.alt@x.com');
   C('The partner sees their status and what happens next (no documents links)', mine.partner.status === 'PENDING' && mine.nextSteps[0].key === 'wait' && !JSON.stringify(mine).includes('drive.google.com/file'));
   C('...and their PAN only masked', mine.partner.panMasked === 'AB•••••34F' && mine.partner.panNumber === undefined);
 
   env.as('req@x.com');
   C('A reader cannot review partners', env.api.adminReviewPartner({ id: ok.id, decision: 'approve' }).error === 'ADMIN_ONLY');
   C('A reader cannot list partners', env.api.adminListPartners().error === 'ADMIN_ONLY');
+  env.as('own@x.com');
+  C('The partner can change the alternative contact later', env.api.updatePartnerProfile({ altPhone: '9000011111', altEmail: 'second@x.com' }).success === true
+    && pobj(env).altPhone === '9000011111' && pobj(env).altEmail === 'second@x.com');
+  C('...but not to their main number or sign-in email', (() => { const r = env.api.updatePartnerProfile({ altPhone: '9876543210', altEmail: 'own@x.com' }); return r.success === false && r.errors.altPhone && r.errors.altEmail; })());
   env.as(ADMIN);
   const list = env.api.adminListPartners();
   C('The admin sees the application with links to its documents', list.items.length === 1 && list.items[0].docs.length === 3 && list.items[0].docs.every(d => /drive\.google\.com\/file\/d\//.test(d.url)) && list.items[0].panNumber === 'ABCDE1234F');

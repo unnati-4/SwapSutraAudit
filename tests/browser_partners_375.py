@@ -109,6 +109,8 @@ with sync_playwright() as p:
     ck('Verified: the partner type choice shows', pg.locator('[data-testid="partner-type-pick"]').count() == 1)
     pg.click('.pp-type:has-text("Bookstore")'); pg.wait_for_timeout(500)
     ck('The bookstore form shows with its own agreement', pg.locator('[data-testid="partner-register-form"]').count() == 1 and 'Bookstore Partner Agreement' in pg.locator('[data-testid="partner-register-form"]').inner_text())
+    ft = pg.locator('[data-testid="partner-register-form"]').inner_text()
+    ck('...with an alternative mobile number and email (optional)', 'Alternative mobile number (optional)' in ft and 'Alternative email (optional)' in ft)
     ck('...which says shipping and delivery are the partner\'s responsibility', "Shipping and delivery are the partner's responsibility" in pg.locator('[data-testid="partner-contract"]').inner_text())
     ck('Form: no horizontal scroll', no_hscroll(pg))
     shot(pg, 'partners-form')

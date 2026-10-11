@@ -64,6 +64,7 @@ export default function AdminPartners() {
       <div className="admin-ads__info">
         <p className="admin-ads__title">{p.name} <span className="type-caption">· {p.typeLabel} · {STATUS[p.status] || p.status}</span></p>
         <p className="type-caption">{p.contactName} · {p.email} · {p.phone} · {p.city} {p.pincode}</p>
+        {(p.altPhone || p.altEmail) && <p className="type-caption">Alternative: {[p.altPhone, p.altEmail].filter(Boolean).join(' · ')}</p>}
         {p.status === 'APPROVED' && (
           <p className="type-caption">
             Commission now {p.commissionNow}%{p.commissionPlan === 'free_first_year' ? ` (free until ${day(p.commissionFreeUntil)})` : ''} ·

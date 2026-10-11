@@ -26630,7 +26630,9 @@ const PARTNER_HEADERS = [
   'address', 'city', 'pincode', 'lat', 'lng', 'placeLabel', 'registeredName', 'gstin', 'panNumber', 'aadhaarLast4',
   'docsJson', 'typeFieldsJson', 'showBanner', 'runAds', 'bannerImageUrl', 'bannerHeadline', 'bannerTagline', 'bannerStatus', 'bannerNote',
   'contractVersion', 'contractSignedName', 'contractSignedAt', 'commissionPlan', 'commissionFreeUntil', 'approvedAt', 'approvedBy',
-  'adsFreeUntil', 'reviewNote', 'createdAt', 'updatedAt', 'submittedAt'
+  'adsFreeUntil', 'reviewNote', 'createdAt', 'updatedAt', 'submittedAt',
+  // 11 Oct 2026 (owner's request): an alternative mobile number and email.
+  'altPhone', 'altEmail'
 ];
 const PARTNER_STATUSES = ['PENDING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUSPENDED'];
 const PARTNER_AD_PAYMENT_HEADERS = ['id', 'partnerId', 'email', 'amount', 'months', 'utr', 'screenshotUrl', 'status', 'periodFrom', 'periodTo', 'reviewedBy', 'reviewedAt', 'reason', 'createdAt'];
@@ -26761,6 +26763,8 @@ function validatePartnerApplication_(d, existingDocs) {
     type: type,
     name: cleanPartnerText_(d.name, 100), contactName: cleanPartnerText_(d.contactName, 80),
     phone: String(d.phone || '').replace(/[^\d+]/g, '').slice(0, 15),
+    altPhone: String(d.altPhone || '').replace(/[^\d+]/g, '').slice(0, 15),
+    altEmail: String(d.altEmail || '').trim().toLowerCase().slice(0, 120),
     about: cleanPartnerText_(d.about, 600), website: '', instagram: cleanPartnerText_(d.instagram, 80),
     address: cleanPartnerText_(d.address, 300), city: cleanPartnerText_(d.city, 60), pincode: String(d.pincode || '').trim(),
     lat: Number(d.lat), lng: Number(d.lng), placeLabel: cleanPartnerText_(d.placeLabel, 120),
@@ -26775,6 +26779,15 @@ function validatePartnerApplication_(d, existingDocs) {
   if (clean.name.length < 2) errors.name = nameLabel + ' is required.';
   if (clean.contactName.length < 2) errors.contactName = 'Your full name is required.';
   if (!/^(\+91)?[6-9]\d{9}$/.test(clean.phone)) errors.phone = 'Enter a 10-digit Indian mobile number.';
+  // Alternative contact (optional): a second mobile and a second email.
+  if (clean.altPhone) {
+    if (!/^(\+91)?[6-9]\d{9}$/.test(clean.altPhone)) errors.altPhone = 'Enter a 10-digit Indian mobile number.';
+    else if (clean.altPhone.slice(-10) === clean.phone.slice(-10)) errors.altPhone = 'Give a different number from your main mobile.';
+  }
+  if (clean.altEmail) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(clean.altEmail)) errors.altEmail = 'Enter a valid email address.';
+    else if (d.mainEmail && normalizeEmail(d.mainEmail) === clean.altEmail) errors.altEmail = 'Give a different email from the one you verified.';
+  }
   if (!/^\d{6}$/.test(clean.pincode)) errors.pincode = 'Enter a 6-digit pincode.';
   if (clean.city.length < 2) errors.city = 'City is required.';
   if (type === 'bookstore' || type === 'publisher') {
@@ -26851,7 +26864,8 @@ function submitPartnerApplication(data) {
     // A different type is a different form: documents start again.
     Object.keys(prevDocs).forEach(k => delete prevDocs[k]);
   }
-  const v = validatePartnerApplication_(data, prevDocs);
+  // The verified email comes from the session, never from the form.
+  const v = validatePartnerApplication_(Object.assign({}, data, { mainEmail: caller }), prevDocs);
   if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
   const c = v.clean;
   const lock = LockService.getScriptLock();
@@ -26864,7 +26878,7 @@ function submitPartnerApplication(data) {
     catch (err) { Logger.log('savePartnerDocs_ failed: ' + err); return { success: false, message: 'Your documents could not be saved. Please try again.' }; }
     const now = new Date();
     const rec = {
-      id: id, type: c.type, email: caller, status: 'PENDING', name: c.name, contactName: c.contactName, phone: c.phone, about: c.about,
+      id: id, type: c.type, email: caller, status: 'PENDING', name: c.name, contactName: c.contactName, phone: c.phone, altPhone: c.altPhone, altEmail: c.altEmail, about: c.about,
       website: c.website, instagram: c.instagram, address: c.address, city: c.city, pincode: c.pincode, lat: c.lat, lng: c.lng,
       placeLabel: c.placeLabel, registeredName: c.registeredName, gstin: c.gstin, panNumber: c.panNumber, aadhaarLast4: c.aadhaarLast4,
       docsJson: JSON.stringify(docs), typeFieldsJson: JSON.stringify(c.typeFields), showBanner: c.showBanner ? 'TRUE' : 'FALSE', runAds: c.runAds ? 'TRUE' : 'FALSE',
@@ -26967,7 +26981,7 @@ function partnerPublicView_(p, forAdmin) {
   const docs = parseJson_(p.docsJson, {});
   const out = {
     id: p.id, type: p.type, typeLabel: PARTNER_TYPE_LABEL[p.type] || p.type, email: p.email, status: p.status, name: p.name, contactName: p.contactName,
-    phone: p.phone, about: p.about, website: p.website, instagram: p.instagram, address: p.address, city: p.city, pincode: p.pincode,
+    phone: p.phone, altPhone: p.altPhone || '', altEmail: p.altEmail || '', about: p.about, website: p.website, instagram: p.instagram, address: p.address, city: p.city, pincode: p.pincode,
     lat: p.lat === '' ? null : Number(p.lat), lng: p.lng === '' ? null : Number(p.lng), placeLabel: p.placeLabel,
     registeredName: p.registeredName, gstin: p.gstin,
     panMasked: p.panNumber ? String(p.panNumber).slice(0, 2) + '•••••' + String(p.panNumber).slice(-3) : '', aadhaarLast4: p.aadhaarLast4,
@@ -27048,6 +27062,19 @@ function updatePartnerProfile(data) {
   if (d.phone !== undefined) {
     const ph = String(d.phone || '').replace(/[^\d+]/g, '');
     if (!/^(\+91)?[6-9]\d{9}$/.test(ph)) errors.phone = 'Enter a 10-digit Indian mobile number.'; else fields.phone = ph;
+  }
+  if (d.altPhone !== undefined) {
+    const ap = String(d.altPhone || '').replace(/[^\d+]/g, '');
+    const main = String(fields.phone || hit.obj.phone || '');
+    if (ap && !/^(\+91)?[6-9]\d{9}$/.test(ap)) errors.altPhone = 'Enter a 10-digit Indian mobile number.';
+    else if (ap && ap.slice(-10) === main.slice(-10)) errors.altPhone = 'Give a different number from your main mobile.';
+    else fields.altPhone = ap;
+  }
+  if (d.altEmail !== undefined) {
+    const ae = String(d.altEmail || '').trim().toLowerCase();
+    if (ae && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(ae)) errors.altEmail = 'Enter a valid email address.';
+    else if (ae && ae === caller) errors.altEmail = 'Give a different email from the one you sign in with.';
+    else fields.altEmail = ae.slice(0, 120);
   }
   if (d.lat !== undefined && d.lng !== undefined) {
     const lat = Number(d.lat), lng = Number(d.lng);

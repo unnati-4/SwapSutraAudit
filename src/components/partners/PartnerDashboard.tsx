@@ -314,7 +314,7 @@ function PromoTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: stri
 function AccountTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: string }) {
   const p = dash.partner!;
   const [upi, setUpi] = useState({ upiId: dash.payoutAccount?.upiId || '', payeeName: dash.payoutAccount?.payeeName || p.registeredName || '' });
-  const [prof, setProf] = useState({ phone: p.phone, website: p.website, instagram: p.instagram, about: p.about });
+  const [prof, setProf] = useState({ phone: p.phone, altPhone: p.altPhone || '', altEmail: p.altEmail || '', website: p.website, instagram: p.instagram, about: p.about });
   const [picking, setPicking] = useState(false);
   const contract = PARTNER_CONTRACTS[p.type];
   const [showContract, setShowContract] = useState(false);
@@ -332,6 +332,8 @@ function AccountTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: st
       <section className="pp-card">
         <h2 className="pp-h2">Your details</h2>
         <label className="pp-field"><span className="pp-label">Mobile</span><input className="input-classic pp-input" value={prof.phone} onChange={(e) => setProf({ ...prof, phone: e.target.value })} /></label>
+        <label className="pp-field"><span className="pp-label">Alternative mobile (optional)</span><input className="input-classic pp-input" inputMode="tel" value={prof.altPhone} onChange={(e) => setProf({ ...prof, altPhone: e.target.value })} /></label>
+        <label className="pp-field"><span className="pp-label">Alternative email (optional)</span><input className="input-classic pp-input" type="email" value={prof.altEmail} onChange={(e) => setProf({ ...prof, altEmail: e.target.value })} /></label>
         <label className="pp-field"><span className="pp-label">Website</span><input className="input-classic pp-input" value={prof.website} onChange={(e) => setProf({ ...prof, website: e.target.value })} placeholder="https://…" /></label>
         <label className="pp-field"><span className="pp-label">Instagram</span><input className="input-classic pp-input" value={prof.instagram} onChange={(e) => setProf({ ...prof, instagram: e.target.value })} /></label>
         <label className="pp-field"><span className="pp-label">About</span><textarea className="input-classic pp-input" rows={3} value={prof.about} onChange={(e) => setProf({ ...prof, about: e.target.value })} /></label>
