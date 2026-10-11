@@ -27996,3 +27996,96 @@ function partnerRevenue_() {
   } catch (e) { /* no sheets yet */ }
   return { partnerAdFees: adFees, partnerAdPayments: adPayments, partnerCommission: Math.round(commission * 100) / 100 };
 }
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   LAUNCH CLEANUP (11 Oct 2026, owner's request: "sab fresh chahiye")
+   ────────────────────────────────────────────────────────────────────────
+   Run these from the Apps Script editor (choose the function in the
+   toolbar, press Run, read View → Logs). None of them is reachable from
+   the website. Every one that changes anything first saves a full copy of
+   the spreadsheet in Drive → SwapSutra_Backups.
+
+   1. launchCleanupPreview()      — changes nothing; lists what 2 and 3 would do.
+   2. launchRemoveUnusedSheets()  — deletes sheets the site no longer uses
+                                    (old coupon sheet, test/old tabs).
+   3. launchResetAllData()        — empties every data sheet (users, books,
+                                    requests, chats, payments…) and keeps
+                                    the headers and the settings/catalogue
+                                    sheets. Irreversible except from the
+                                    backup — it asks for a confirmation first.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/** Every sheet the current code reads or writes. */
+const LAUNCH_KEEP_SHEETS = ['ActivityLogs','Ambassadors','AnalyticsEvents','AppSettings','BookPrices','BookRatings','BookRequestResponses','BookRequests','Books','ChatMessages','ChatSafetyEvents','Chats','CurrentReadMessages','CustomMugEnquiries','DeliveryAddresses','DisputeEvents','EventMaster','EventNotifySubscribers','EventRegistrations','ExchangeVideos','GeminiPriceEstimates','GenrePriceDefaults','HostEnquiries','ListingUnlocks','Messages','MonthlyNewsletters','MugProducts','NewsletterSubscribers','Notifications','OTP','OTPAttempts','PartnerAdPayments','Partners','PaymentSettingsLog','PayoutAccounts','PlatformFeedback','PushSubscriptions','ReaderActivityLog','ReaderBadges','ReaderRatings','ReadingRoomComments','ReadingRoomPosts','ReadingRoomReactions','Referrals','ReturnExtensions','ReturnForfeits','SavedRecommendations','SecurityFeePayments','SponsoredAds','Subscriptions','SupportMessages','SwapDisputes','SwapJourney','SwapProofs','SwapRequests','SwapStageEvents','SwapTracking','Testimonials','Users','VmsUploads','Wishlist','cafe_reactions','cafe_stories','cafe_story_views','current_read_circles','current_read_members','current_read_messages','reading_space'];
+/** Used by nothing any more (coupons were removed on 10 Oct 2026). */
+const LAUNCH_DEAD_SHEETS = ['MembershipCoupons'];
+/** Settings and catalogues: kept, with their rows, by launchResetAllData. */
+const LAUNCH_KEEP_DATA_SHEETS = ['AppSettings', 'BookPrices', 'GenrePriceDefaults', 'MugProducts', 'PaymentSettingsLog'];
+
+function launchSheetPlan_() {
+  const ss = getSpreadsheet();
+  const plan = { remove: [], empty: [], keep: [] };
+  ss.getSheets().forEach(function (sh) {
+    const name = sh.getName();
+    const used = LAUNCH_KEEP_SHEETS.indexOf(name) !== -1 && LAUNCH_DEAD_SHEETS.indexOf(name) === -1;
+    if (!used) { plan.remove.push(name); return; }
+    if (LAUNCH_KEEP_DATA_SHEETS.indexOf(name) !== -1) { plan.keep.push(name); return; }
+    plan.empty.push({ name: name, rows: Math.max(0, sh.getLastRow() - 1) });
+  });
+  return plan;
+}
+
+function launchCleanupPreview() {
+  const plan = launchSheetPlan_();
+  Logger.log('Sheets launchRemoveUnusedSheets() would DELETE (' + plan.remove.length + '): ' + (plan.remove.join(', ') || 'none'));
+  Logger.log('Sheets launchResetAllData() would EMPTY (headers kept): ' + plan.empty.map(function (x) { return x.name + ' (' + x.rows + ' rows)'; }).join(', '));
+  Logger.log('Sheets kept exactly as they are: ' + plan.keep.join(', '));
+  return plan;
+}
+
+function launchRemoveUnusedSheets() {
+  const plan = launchSheetPlan_();
+  if (!plan.remove.length) { Logger.log('Nothing to remove — every sheet is in use.'); return { success: true, removed: [] }; }
+  const backup = backupSpreadsheet();
+  if (!backup.success) { Logger.log('Stopped: the backup failed — ' + backup.message); return backup; }
+  Logger.log('Backup saved: ' + backup.url);
+  const ss = getSpreadsheet();
+  const removed = [];
+  plan.remove.forEach(function (name) {
+    const sh = ss.getSheetByName(name);
+    if (!sh || ss.getSheets().length <= 1) return;
+    ss.deleteSheet(sh);
+    removed.push(name);
+  });
+  resetSheetCache();
+  Logger.log('Deleted ' + removed.length + ' unused sheet(s): ' + removed.join(', '));
+  return { success: true, removed: removed, backupUrl: backup.url };
+}
+
+function launchResetAllData() {
+  const props = PropertiesService.getScriptProperties();
+  if (String(props.getProperty('CONFIRM_LAUNCH_RESET') || '') !== 'DELETE-ALL') {
+    Logger.log('Not run. This empties every user, book, request, chat and payment. To go ahead: Project Settings → Script Properties → add CONFIRM_LAUNCH_RESET = DELETE-ALL, then run launchResetAllData() again. Run launchCleanupPreview() first to see the list.');
+    return { success: false, message: 'Confirmation needed (CONFIRM_LAUNCH_RESET = DELETE-ALL).' };
+  }
+  const backup = backupSpreadsheet();
+  if (!backup.success) { Logger.log('Stopped: the backup failed — ' + backup.message); return backup; }
+  Logger.log('Backup saved: ' + backup.url);
+  const ss = getSpreadsheet();
+  const plan = launchSheetPlan_();
+  const emptied = [];
+  plan.empty.forEach(function (x) {
+    const sh = ss.getSheetByName(x.name);
+    if (!sh) return;
+    const last = sh.getLastRow();
+    if (last > 1) { sh.deleteRows(2, last - 1); emptied.push(x.name + ' (' + (last - 1) + ')'); }
+  });
+  props.deleteProperty('CONFIRM_LAUNCH_RESET');
+  resetSheetCache();
+  try { invalidateLibraryCache(); } catch (e) { /* the cache expires by itself */ }
+  try { CacheService.getScriptCache().removeAll(['swapsutra_library_v1']); } catch (e) { /* advisory */ }
+  Logger.log('Emptied ' + emptied.length + ' sheet(s): ' + emptied.join(', '));
+  Logger.log('Done. The confirmation was removed, so this cannot run again by accident.');
+  return { success: true, emptied: emptied, backupUrl: backup.url };
+}

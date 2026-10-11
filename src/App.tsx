@@ -2238,7 +2238,6 @@ const BADGES_POOL = [
   { id: 'b3', name: 'Kindred Spirits 🤝', icon: '🤝', desc: 'Approved a book match or completed a book exchange with a fellow soul.', category: 'community', requirement: '1 Completed Swap' },
   { id: 'b4', name: 'Bookish Confidant 💬', icon: '💬', desc: 'Participated actively inside any Readers Circle discussion room.', category: 'community', requirement: 'Post inside Circle' },
   { id: 'b5', name: 'Neighborly Reader 📍', icon: '📍', desc: 'Offered your local pincode area to search nearby books.', category: 'core', requirement: 'Enter pincode or location' },
-  { id: 'b6', name: 'Verified Premium Reader ✨', icon: '✨', desc: 'Active verified premium member with unlimited book listings, direct chats, and priority matching.', category: 'premium', requirement: 'Premium Membership' },
   { id: 'b7', name: 'Journal Keeper 🎨', icon: '🎨', desc: 'Saved customized description inside your reading space journal.', category: 'core', requirement: 'Customize reading space' },
   { id: 'b8', name: 'Generous Heart 🎁', icon: '🎁', desc: 'Gave away a classic or requested a wanted book.', category: 'community', requirement: 'Gift or Request a Book' },
   { id: 'b9', name: 'Scribe of Honor 📜', icon: '📜', desc: 'Successfully claimed an official attendance certificate.', category: 'community', requirement: 'Claim 1 Certificate' },
@@ -9526,6 +9525,11 @@ export default function App() {
     // connection were told to "Activate your ₹49 membership".
     if (!activeUserEmail || isAdmin || isListerActive) return;
     if (!membershipCheckDone || membershipCheckFailed || isRegisteredMember) return;
+    // 11 Oct 2026 (owner's request): a bookstore / author / publisher /
+    // promoter / library signing in on /partners is not a reader — never
+    // show them the reader "activate membership" popup.
+    if (activeTab === 'partners') return;
+    try { if (localStorage.getItem('swapsutraPartnerAccount') === activeUserEmail) return; } catch { /* private mode */ }
     const key = `swapsutraMembershipNudgeShown:${activeUserEmail}`;
     if (sessionStorage.getItem(key)) return;
     const timer = window.setTimeout(() => {
@@ -9533,7 +9537,7 @@ export default function App() {
       sessionStorage.setItem(key, 'true');
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [activeUserEmail, isAdmin, isListerActive, membershipCheckDone, membershipCheckFailed, isRegisteredMember]);
+  }, [activeUserEmail, isAdmin, isListerActive, membershipCheckDone, membershipCheckFailed, isRegisteredMember, activeTab]);
 
   const handleLogout = async () => {
     try {
@@ -14106,7 +14110,7 @@ export default function App() {
                     ['privacy', 'Privacy'],
                     ['refund-policy', 'Refunds'],
                     ['grievance', 'Grievances'],
-                    ['partners', 'Bookstores & authors'],
+                    ['partners', 'Partners · login & dashboard'],
                   ] as const).map(([tab, label]) => (
                     <button key={tab} type="button" onClick={() => { navigateTo(tab); setIsMobileMenuOpen(false); }} className="hover:text-brand-gold-text">
                       {label}
@@ -17381,7 +17385,7 @@ export default function App() {
                   // signed session as any login.
                   setSessionToken(sess.sessionToken);
                   setActiveUserEmail(sess.email);
-                  try { localStorage.setItem('swapsutraUserEmail', sess.email); } catch { /* private mode */ }
+                  try { localStorage.setItem('swapsutraUserEmail', sess.email); localStorage.setItem('swapsutraPartnerAccount', sess.email); } catch { /* private mode */ }
                   if (sess.role) { setUserRole(sess.role); try { localStorage.setItem('swapsutraUserRole', sess.role); } catch { /* ignore */ } }
                   setSessionVerified(true);
                 }}
