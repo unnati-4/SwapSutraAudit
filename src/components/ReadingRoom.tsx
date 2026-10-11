@@ -614,6 +614,8 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
         }
 
         fetchFeed();
+      } else {
+        alert(data.message || 'Your comment could not be posted. Please try again.');
       }
     } catch (err) {
       console.error(err);

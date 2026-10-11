@@ -13513,7 +13513,12 @@ function findHeaderIndex(headers, candidates) {
   // lower-cased headers — so, for one, a reader whose request expired was
   // never told.
   const wanted = (candidates || []).map(c => normalizeHeader(c));
-  return normalized.findIndex(h => wanted.includes(h));
+  // In the caller's order of preference, not the sheet's column order.
+  for (let i = 0; i < wanted.length; i++) {
+    const idx = normalized.indexOf(wanted[i]);
+    if (idx !== -1) return idx;
+  }
+  return -1;
 }
 
 function isTruthyValue(value) {
@@ -16427,7 +16432,8 @@ function runSwapRequestSla() {
       const ageHours = (now - created.getTime()) / (60 * 60 * 1000);
       const sheetRow = r + 1;
       const ownerEmail = normalizeEmail(values[r][ownerIdx]);
-      const requesterEmail = requesterIdx === -1 ? '' : normalizeEmail(values[r][requesterIdx]);
+      // Old rows keep the requester under senderEmail; resolve per row.
+      const requesterEmail = normalizeEmail((requesterIdx === -1 ? '' : values[r][requesterIdx]) || resolveSwapRequestParties(hdr, values[r]).requesterEmail || '');
       const bookTitle = titleIdx === -1 ? 'a book' : String(values[r][titleIdx] || 'a book');
       const requestId = String(values[r][idIdx]);
 
@@ -25127,18 +25133,26 @@ function adminDecideDeposits(data) {
     // Final check (11 Oct 2026): on a rental the rent is the owner's whatever
     // the dispute decides — it comes out of the renter's deposit first, and
     // only the rest is refunded or forfeited.
+    // Only once the renter actually received the book — a rental that never
+    // reached them owes no rent.
     let rentTaken = 0;
     if (payerRole === 'requester' && String(swap.obj.serviceType || '').toUpperCase() === 'RENT') {
       const rentFee = myFeeRecord_(swap.obj.id, 'requester');
       if (rentFee && rentFee.adminStatus === 'ADMIN_APPROVED' && feeRecordBreakdown_(rentFee).depositAmount > 0) {
         const prior = existing.find(f => String(f.swapId) === String(swap.obj.id) && String(f.leg) === 'rent');
-        rentTaken = prior ? Number(prior.grossAmount || prior.amount || 0) : Math.min(held, rentChargeFor_(swap.obj));
+        let received = false;
+        try {
+          const rm = computeExchangeRoom_(roomInputFor_(swap, swap.ownerEmail));
+          received = (rm.legs.out || []).some(l => l.leg === 'outbound' && !!l.receivedAt);
+        } catch (e) { received = false; }
+        rentTaken = prior ? Number(prior.grossAmount || prior.amount || 0) : (received ? Math.min(held, rentChargeFor_(swap.obj)) : 0);
       }
     }
     const available = held - rentTaken;
     let forfeit = 0;
     if (outcome === 'FORFEIT') {
       forfeit = d.amount === undefined || d.amount === '' || d.amount === null ? available : Math.round(Number(d.amount));
+      if (!(available > 0)) return { success: false, message: 'The whole ₹' + held + ' deposit is the rent, which goes to the owner — there is nothing left to forfeit. Choose "Refund" to record the decision.' };
       if (!(forfeit > 0) || forfeit > available) return { success: false, message: 'The amount to forfeit must be between ₹1 and ₹' + available + (rentTaken > 0 ? ' (the ₹' + rentTaken + ' rent goes to the owner first)' : '') + '.' };
     } else if (outcome !== 'REFUND') {
       return { success: false, message: 'Each deposit is either refunded or forfeited.' };
@@ -25210,7 +25224,7 @@ function adminDecideDeposits(data) {
       ? rentNote + '₹' + forfeit + ' of the ₹' + held + ' deposit is forfeited to the other reader' + (refund > 0 ? ' and ₹' + refund + ' is refunded' : '') + '. Reason: ' + reason
       : rentNote + (refund > 0 ? 'The deposit is refunded' + (refund < available ? ' (₹' + refund + ' after the ₹' + (available - refund) + ' platform fee)' : rentTaken > 0 ? ' (₹' + refund + ')' : ' in full (₹' + refund + ')') : 'No deposit is kept') + '. Reason: ' + reason;
     [payer, other].forEach(email => returnNotify_(email, 'deposit_decided', 'Decision on the security deposit',
-      'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + leg));
+      'After reviewing the exchange videos for "' + title + '": ' + message + (email === other && forfeit > 0 && !readPayoutAccount_(other) ? ' Add your UPI ID in Profile → Settings so SwapSutra can pay you.' : ''), swap.obj.id, 'dep_dec_' + swap.obj.id + '_' + leg));
     results.push({ payerRole: payerRole, held: held, rent: rentTaken, forfeit: forfeit, refund: refund });
   }
   try {
@@ -25919,9 +25933,10 @@ function computeExchangeRoom_(input) {
           }
         });
         // Final check (11 Oct 2026): the receiver is asked for the unboxing
-        // video only once the sender has handed the book over (or to the
-        // courier) — never while it is still on the sender's shelf.
-        legs.filter(l => l.youReceive && !l.receivedAt && has(l, 'HANDOVER')).forEach(l => {
+        // video only once the sender has handed the book over (handover
+        // video, a tracking ID, or marked delivered) — never while it is
+        // still on the sender's shelf.
+        legs.filter(l => l.youReceive && !l.receivedAt && (has(l, 'HANDOVER') || !!l.awb || !!l.senderMarkedAt)).forEach(l => {
           if (!has(l, 'RECEIVING')) push({ type: 'video', step: isBack ? 14 : 9, leg: l.leg, kind: 'RECEIVING' });
           else push({ type: 'markReceived', step: isBack ? 14 : 9, leg: l.leg, sale: sale && l.leg === 'outbound' && input.saleEscrow !== false });
         });
@@ -25952,7 +25967,7 @@ function computeExchangeRoom_(input) {
             push({ type: 'markDelivered', step: 14, leg: l.leg, method: backRoute.method });
           }
         });
-        legsB.filter(l => l.youReceive && !l.receivedAt && has(l, 'HANDOVER')).forEach(l => {
+        legsB.filter(l => l.youReceive && !l.receivedAt && (has(l, 'HANDOVER') || !!l.awb || !!l.senderMarkedAt)).forEach(l => {
           if (!has(l, 'RECEIVING')) push({ type: 'video', step: 14, leg: l.leg, kind: 'RECEIVING' });
           else push({ type: 'markReceived', step: 14, leg: l.leg, sale: false });
         });

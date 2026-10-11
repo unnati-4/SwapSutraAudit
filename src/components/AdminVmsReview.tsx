@@ -134,6 +134,9 @@ export default function AdminVmsReview({ swapId, disputeId, requesterEmail, owne
               onChange={(e) => setDec(s => ({ ...s, [role]: { ...s[role], amount: e.target.value } }))}
               placeholder={`Amount to forfeit (blank = all ₹${amt})`} className="input-classic !py-2 text-xs w-full bg-[var(--bg-page)]" />
           )}
+          {dec[role].outcome === 'FORFEIT' && role === 'requester' && String(serviceType || '').toUpperCase() === 'RENT' && (
+            <p className="text-2xs text-[var(--text-secondary)]">On a rental the rent goes to the owner first (if the renter received the book); only the rest of the deposit can be forfeited — blank forfeits all of that rest.</p>
+          )}
           <input value={dec[role].reason} onChange={(e) => setDec(s => ({ ...s, [role]: { ...s[role], reason: e.target.value } }))}
             placeholder="Reason, from the videos — both readers see it" className="input-classic !py-2 text-xs w-full bg-[var(--bg-page)]" />
         </div>

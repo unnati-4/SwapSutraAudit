@@ -146,6 +146,22 @@ console.log('--- a rental returned damaged ---');
   C('My orders shows each side what they get', mo.awarded && mo.awarded.amount === 150 && mo.payout.kind === 'rent' && /₹38 coming back/.test(ao.deposit.note));
 }
 
+console.log('--- review fixes ---');
+{
+  const { rt, m, a, admin, people } = world();
+  const b = H.listBook(rt, m.token, 'meera@gmail.com', { rent: true, rentPerMonth: 40 });
+  const req = rt.post({ action: 'createSwapRequest', serviceType: 'RENT', receiverBookId: b.id, requestedBookTitle: 'The Alchemist', policy_accepted: 'TRUE' }, a.token);
+  rt.post({ action: 'acceptSwapRequest', requestId: req.id }, m.token);
+  // Courier: the owner adds the tracking ID but has not recorded the hand-over video yet.
+  H.playRoom(rt, req.id, people, { admin, route: 'courier', until: (o) => o.actions.some(x => x.type === 'video' && x.kind === 'HANDOVER') && !o.actions.some(x => x.type === 'courier') });
+  const r = rt.post({ action: 'getExchangeRoom', swapId: req.id }, a.token);
+  C('Once a tracking ID is in, the receiver can record the unboxing even before the sender\'s hand-over video', r.actions.some(x => x.type === 'video' && x.kind === 'RECEIVING'));
+  // The book never arrives: the renter reports it, and no rent is taken.
+  const d = rt.post({ action: 'disputeSwapRequest', swapId: req.id, category: 'NOT_RECEIVED', reason: 'Book not received', details: 'Nothing came.', evidenceFiles: [] }, a.token);
+  const dec = rt.post({ action: 'adminDecideDeposits', swapId: req.id, disputeId: d.disputeId, decisions: [{ payerRole: 'requester', outcome: 'REFUND', reason: 'Never delivered.' }] }, admin);
+  C('A rental that never reached the renter takes no rent in a dispute (full ₹228 back)', dec.success && dec.results[0].rent === 0 && ledger(rt) === 'dispute:' + d.disputeId + ':requester:0 refund:requester:228', ledger(rt));
+}
+
 console.log('--- things a new reader runs into ---');
 {
   const { rt, m, a } = world();
@@ -222,7 +238,7 @@ console.log('--- the routine jobs over 40 days ---');
 {
   const gs = require('fs').readFileSync(require('path').join(__dirname, '..', 'appsscript.js'), 'utf8');
   C('Header lookups match "requesterEmail" / "createdAt" (candidates are normalised too)', vm.runInNewContext(gs.slice(gs.indexOf('function normalizeHeader('), gs.indexOf('\n}\n', gs.indexOf('function normalizeHeader(')) + 3) +
-    gs.slice(gs.indexOf('function findHeaderIndex('), gs.indexOf('\n}\n', gs.indexOf('function findHeaderIndex(')) + 3) + ';findHeaderIndex(["id","requesterEmail"],["requesterEmail"])') === 1);
+    gs.slice(gs.indexOf('function findHeaderIndex('), gs.indexOf('\n}\n', gs.indexOf('function findHeaderIndex(')) + 3) + ';[findHeaderIndex(["id","requesterEmail"],["requesterEmail"]), findHeaderIndex(["id","senderEmail","requesterEmail"],["requesterEmail","senderEmail"])].join()') === '1,2');
 }
 
 console.log(`\n${out.pass} passed, ${out.fail} failed`);
