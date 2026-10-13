@@ -67,7 +67,7 @@ export default function AdminPartners() {
         {(p.altPhone || p.altEmail) && <p className="type-caption">Alternative: {[p.altPhone, p.altEmail].filter(Boolean).join(' · ')}</p>}
         {(p.sellsFrom === 'online' || p.sellsFrom === 'both' || p.registered === false) && (
           <p className="type-caption" data-testid="admin-partner-how">
-            {p.sellsFrom === 'online' && <b>Online only (no shop) · </b>}
+            {p.sellsFrom === 'online' && <b>Online only (no shop) — only the Aadhaar was taken, do a short video call before approving · </b>}
             {p.sellsFrom === 'both' && <b>Shop + online · </b>}
             {p.typeFields?.storeLink && <><a href={p.typeFields.storeLink} target="_blank" rel="noopener noreferrer">online shop</a> · </>}
             {p.registered === false && <b>Not registered — check the photo with the books, and do a short video call before approving</b>}

@@ -559,7 +559,10 @@ console.log('--- online-only and unregistered partners (13 Oct 2026) ---');
   C('An online-only bookstore needs no shop address or map pin…', noLink.errors && !noLink.errors.address && !noLink.errors.location, JSON.stringify(noLink.errors));
   C('…but must give the link where readers find it', noLink.errors && /Instagram/.test(noLink.errors.storeLink || ''), JSON.stringify(noLink.errors));
   C('A store link must be https', env.api.submitPartnerApplication(online({ typeFields: { sellsFrom: 'online', storeLink: 'amazon.in/shop' } })).errors.storeLink);
-  const ok = env.api.submitPartnerApplication(online({ instagram: '@instabooks' }));
+  const aOnly = env.api.submitPartnerApplication(online({ instagram: '@instabooks', panNumber: '', docs: { aadhaar: PNG }, typeFields: { sellsFrom: 'online' } }));
+  C('An online-only bookseller needs only the Aadhaar — no PAN, no other document', aOnly.success, JSON.stringify(aOnly));
+  C('…and no Aadhaar is still refused', (() => { const e2 = partnerEnv(); e2.as('noaadhaar@x.com'); const r = e2.api.submitPartnerApplication(online({ instagram: '@x', panNumber: '', docs: {} })); return r.errors && r.errors.doc_aadhaar && !r.errors.doc_pan && !r.errors.panNumber && !r.errors.doc_businessProof && !r.errors.doc_stockPhoto; })());
+  const ok = aOnly;
   C('With an Instagram handle, the online bookstore is received', ok.success, JSON.stringify(ok));
   C('…and is recorded as online only', JSON.parse(pobj(env).typeFieldsJson).sellsFrom === 'online');
   const shop = partnerEnv(); shop.as('shop@x.com');
@@ -586,6 +589,10 @@ console.log('--- online-only and unregistered partners (13 Oct 2026) ---');
     typeFields: { libraryType: 'Community', registered: 'no', declared: 'yes' }, docs: { aadhaar: PNG, pan: PNG, stockPhoto: PNG } }));
   C('A home or community library that is not registered can join too', okLib.success, JSON.stringify(okLib));
   const ui = fs.readFileSync(path.join(root, 'src/components/partners/PartnerRegister.tsx'), 'utf8');
+  const pubOnline = partnerEnv(); pubOnline.as('pub@x.com');
+  const pr = pubOnline.api.submitPartnerApplication(app({ type: 'publisher', name: 'Home Press', contractVersion: 'publisher-2026-10-13', address: '', lat: '', lng: '', instagram: '@homepress',
+    panNumber: '', typeFields: { sellsFrom: 'online' }, docs: { aadhaar: PNG } }));
+  C('A publisher (not a bookseller) still gives its PAN', pr.errors && pr.errors.panNumber && pr.errors.doc_pan, JSON.stringify(pr.errors));
   C('The form offers both choices', /Online only/.test(ui) && /Not registered/.test(ui) && /partner-declare/.test(ui));
   C('The agreement covers unregistered and online-only partners', /if the business is not registered/.test(fs.readFileSync(path.join(root, 'legal/partner-agreement-bookstore.md'), 'utf8')));
 }

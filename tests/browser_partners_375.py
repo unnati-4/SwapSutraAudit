@@ -120,6 +120,12 @@ with sync_playwright() as p:
     pg.click('[data-testid="partner-sellsFrom"] label:has-text("Online only")'); pg.wait_for_timeout(300)
     ck('Online only: no address or map pin needed, the online link is asked', form.locator('text=Full address *').count() == 0
        and pg.locator('input[name="storeLink"]').count() == 1 and 'City you ship from' in form.inner_text() and 'Google location (optional)' in form.inner_text())
+    ft1 = form.inner_text()
+    ck('Online-only bookseller: only the Aadhaar — no PAN, no registration question, no other documents',
+       pg.locator('[data-testid="partner-aadhaar-only"]').count() == 1 and 'PAN number' not in ft1 and "Owner's PAN card" not in ft1
+       and pg.locator('[data-testid="partner-registered"]').count() == 0 and 'Any other document' not in ft1 and 'Shop registration / GST certificate' not in ft1
+       and "Owner's Aadhaar" in ft1)
+    pg.click('[data-testid="partner-sellsFrom"] label:has-text("Both")'); pg.wait_for_timeout(300)
     pg.click('[data-testid="partner-registered"] label:has-text("Not registered")'); pg.wait_for_timeout(300)
     ft2 = form.inner_text()
     ck('Not registered: a photo with the books and a declaration instead of the business proof',

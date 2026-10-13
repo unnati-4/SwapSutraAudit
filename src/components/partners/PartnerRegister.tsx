@@ -135,9 +135,11 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
   const contract = type ? PARTNER_CONTRACTS[type] : null;
   const sameType = !!existing && existing.type === type;
   const onlineOnly = !!type && !!SELLS_FROM[type] && form.typeFields.sellsFrom === 'online';
-  const registered = !type || !REGISTRATION[type] || form.typeFields.registered !== 'no';
+  // 13 Oct 2026 (owner's request): an online-only bookseller gives only the Aadhaar.
+  const aadhaarOnly = type === 'bookstore' && onlineOnly;
+  const registered = aadhaarOnly || !type || !REGISTRATION[type] || form.typeFields.registered !== 'no';
   const needsLocation = !!type && NEEDS_LOCATION[type] && !onlineOnly;
-  const docList = type ? docsFor(type, registered) : [];
+  const docList = !type ? [] : aadhaarOnly ? DOCS.bookstore.filter((d) => d.key === 'aadhaar') : docsFor(type, registered);
   const setTf = (k: string, v: string) => setForm((f) => ({ ...f, typeFields: { ...f.typeFields, [k]: v } }));
   const choice = (k: string, legend: string, options: [string, string][]) => (
     <div className="pp-field" role="radiogroup" aria-label={legend} data-testid={'partner-' + k}>
@@ -171,7 +173,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
   const missing = useMemo(() => {
     if (!type) return [];
     return docList.filter((d) => d.required && !docs[d.key] && !(sameType && onFile.has(d.key))).map((d) => d.label);
-  }, [type, docs, sameType, registered]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [type, docs, sameType, registered, aadhaarOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -192,9 +194,9 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
     try {
       const d = await partnerPost('submitPartnerApplication', {
         payout: { ...payout, ifsc: payout.ifsc.trim().toUpperCase(), accountNumber: payout.accountNumber.replace(/\s+/g, '') },
-        type, ...form, panNumber: form.panNumber.trim().toUpperCase(), gstin: form.gstin.trim().toUpperCase(),
+        type, ...form, panNumber: aadhaarOnly ? '' : form.panNumber.trim().toUpperCase(), gstin: aadhaarOnly ? '' : form.gstin.trim().toUpperCase(),
+        docs: Object.fromEntries(Object.keys(docs).filter((k) => docList.some((d) => d.key === k)).map((k) => [k, docs[k].dataUrl])),
         lat: form.lat ?? '', lng: form.lng ?? '',
-        docs: Object.fromEntries(Object.keys(docs).map((k) => [k, docs[k].dataUrl])),
         contractVersion: contract.version,
       });
       if (d?.success) { setNote(d.message); onDone(); }
@@ -273,7 +275,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
               {errors.storeLink && <span className="pp-error" role="alert">{errors.storeLink}</span>}
             </label>
           )}
-          {REGISTRATION[type] && choice('registered', type === 'library' ? 'Is the library registered?' : 'Is the business registered?', REGISTRATION[type]!)}
+          {REGISTRATION[type] && !aadhaarOnly && choice('registered', type === 'library' ? 'Is the library registered?' : 'Is the business registered?', REGISTRATION[type]!)}
           {!registered && (
             <p className="pp-hint">
               That is fine — many {type === 'library' ? 'community libraries' : 'book sellers'} are not registered{type !== 'library' ? ' (printed books need no GST)' : ''}.
@@ -311,12 +313,13 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
       <fieldset className="pp-fieldset">
         <legend>Documents</legend>
         <p className="pp-hint">Kept in SwapSutra's private storage and used only to verify you and to pay you. Readers never see them. Cover the first 8 digits of the Aadhaar before you photograph it.</p>
-        {text('registeredName', (registered ? REGISTERED_LABEL[type] : 'Your name as on your PAN card') + ' *', { maxLength: 120 })}
+        {aadhaarOnly && <p className="pp-hint" data-testid="partner-aadhaar-only">You sell online only, so we need just your Aadhaar — no PAN or business documents.</p>}
+        {text('registeredName', (aadhaarOnly ? 'Your name as on your Aadhaar card' : registered ? REGISTERED_LABEL[type] : 'Your name as on your PAN card') + ' *', { maxLength: 120 })}
         <div className="pp-row">
-          {text('panNumber', 'PAN number *', { maxLength: 10, autoComplete: 'off', placeholder: existing?.panMasked ? `On file: ${existing.panMasked} — type it again` : 'ABCDE1234F', style: { textTransform: 'uppercase' } })}
+          {!aadhaarOnly && text('panNumber', 'PAN number *', { maxLength: 10, autoComplete: 'off', placeholder: existing?.panMasked ? `On file: ${existing.panMasked} — type it again` : 'ABCDE1234F', style: { textTransform: 'uppercase' } })}
           {text('aadhaarLast4', 'Aadhaar — last 4 digits only *', { inputMode: 'numeric', maxLength: 4, autoComplete: 'off' })}
         </div>
-        {(type === 'bookstore' || type === 'publisher' || type === 'library') && registered && text('gstin', 'GSTIN (if registered)', { maxLength: 15, style: { textTransform: 'uppercase' } })}
+        {(type === 'bookstore' || type === 'publisher' || type === 'library') && registered && !aadhaarOnly && text('gstin', 'GSTIN (if registered)', { maxLength: 15, style: { textTransform: 'uppercase' } })}
         {docList.map((d) => (
           <div className="pp-field" key={d.key}>
             <span className="pp-label">{d.label}{d.required ? ' *' : ''}</span>

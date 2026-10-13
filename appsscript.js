@@ -27139,12 +27139,16 @@ function partnerSellsFrom_(type, tf) {
   const v = String((tf || {}).sellsFrom || '').toLowerCase();
   return ['shop', 'online', 'both'].indexOf(v) !== -1 ? v : 'shop';
 }
+/** 13 Oct 2026 (owner's request): an online-only bookseller gives only the Aadhaar — no PAN, no other document. */
+function partnerAadhaarOnly_(type, tf) { return type === 'bookstore' && partnerSellsFrom_(type, tf) === 'online'; }
 function partnerIsRegistered_(type, tf) {
+  if (partnerAadhaarOnly_(type, tf)) return true;
   if (PARTNER_REGISTRATION_TYPES.indexOf(type) === -1) return true;
   return String((tf || {}).registered || 'yes').toLowerCase() !== 'no';
 }
 /** The documents this application must include, given how the partner works. */
 function partnerRequiredDocs_(type, tf) {
+  if (partnerAadhaarOnly_(type, tf)) return { aadhaar: "Owner's Aadhaar (masked)" };
   const base = Object.assign({}, PARTNER_DOCS[type] || {});
   if (!partnerIsRegistered_(type, tf)) {
     delete base.businessProof;
@@ -27360,9 +27364,12 @@ function validatePartnerApplication_(d, existingDocs) {
   }
   if (!(isFinite(clean.lat) && isFinite(clean.lng)) || (!clean.lat && !clean.lng)) { clean.lat = ''; clean.lng = ''; }
   const registered = partnerIsRegistered_(type, tfIn);
-  if (clean.registeredName.length < 2) errors.registeredName = (type === 'bookstore' || type === 'publisher' || type === 'library') && registered
+  if (clean.registeredName.length < 2) errors.registeredName = partnerAadhaarOnly_(type, tfIn) ? 'Your name as on your Aadhaar card.'
+    : (type === 'bookstore' || type === 'publisher' || type === 'library') && registered
     ? 'Whose name is the business registered in?' : 'Your name as on your PAN card.';
-  if (!validPan_(clean.panNumber)) errors.panNumber = 'Enter the PAN number (like ABCDE1234F).';
+  const aadhaarOnly = partnerAadhaarOnly_(type, tfIn);
+  if (aadhaarOnly) { if (clean.panNumber && !validPan_(clean.panNumber)) errors.panNumber = 'Enter the PAN number (like ABCDE1234F).'; clean.gstin = ''; }
+  else if (!validPan_(clean.panNumber)) errors.panNumber = 'Enter the PAN number (like ABCDE1234F).';
   if (!/^\d{4}$/.test(clean.aadhaarLast4)) errors.aadhaarLast4 = 'Enter the last 4 digits of the Aadhaar.';
   if (clean.gstin && !validGstin_(clean.gstin)) errors.gstin = 'That GSTIN does not look right (15 characters).';
   // Type-specific details.
@@ -27382,7 +27389,7 @@ function validatePartnerApplication_(d, existingDocs) {
       errors.storeLink = 'Selling online only? Give the link where readers find you — your Instagram, website, or Amazon / Flipkart / Meesho / WhatsApp store.';
     }
   }
-  if (PARTNER_REGISTRATION_TYPES.indexOf(type) !== -1) {
+  if (PARTNER_REGISTRATION_TYPES.indexOf(type) !== -1 && !aadhaarOnly) {
     clean.typeFields.registered = registered ? 'yes' : 'no';
     if (!registered && !truthy_(tfIn.declared)) errors.declared = 'Confirm that the details and the photo are true.';
     clean.typeFields.declared = registered ? '' : 'yes';
@@ -27597,6 +27604,7 @@ function partnerPublicView_(p, forAdmin) {
   const tfv = out.typeFields || {};
   out.sellsFrom = partnerSellsFrom_(p.type, tfv);
   out.registered = partnerIsRegistered_(p.type, tfv);
+  out.aadhaarOnly = partnerAadhaarOnly_(p.type, tfv);
   if (forAdmin) {
     out.panNumber = p.panNumber;
     out.docs = Object.keys(docs).map(k => ({ key: k, label: (PARTNER_DOCS[p.type] || {})[k] || PARTNER_OPTIONAL_DOCS[k] || k, at: docs[k].at || '',
