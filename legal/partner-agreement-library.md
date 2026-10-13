@@ -1,6 +1,6 @@
 # SwapSutra Library Partner Agreement
 
-**Version:** library-2026-10-11
+**Version:** library-2026-10-13
 
 > Drafted for SwapSutra. Have an advocate review it before relying on it.
 
@@ -18,7 +18,9 @@ The Library uses a partner account that is separate from any reader account, and
 
 ## 2. Registration, documents and verification
 
-The Library gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), a proof of the library (trust, society or shop registration, or a letter from the school or college), contact details and the business location.
+The Library gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), a proof of the library (trust, society or shop registration, or a letter from the school or college) — or, if the library is not registered, a photo of the library with the librarian and a declaration that the details are true — contact details and the library location.
+
+If the Library is not registered, it sells or lends in the owner's own name and under the owner's PAN, and SwapSutra may verify it by a video call before approving. The Library must tell SwapSutra if it registers later, and upload the proof.
 
 SwapSutra keeps these documents in private storage, uses them only to verify the partner, to pay them and to meet legal requirements, and does not show them to readers. Only the last 4 digits of the Aadhaar number are kept as text.
 

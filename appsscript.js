@@ -27100,7 +27100,7 @@ function toggleWishlist(data) {
 const PARTNER_TYPES = ['bookstore', 'author', 'publisher', 'promoter', 'library'];
 const PARTNER_TYPE_LABEL = { bookstore: 'Bookstore', author: 'Author', publisher: 'Publisher', promoter: 'Promoter', library: 'Library' };
 /** Bump a type's version when its contract text changes; partners sign the current one. */
-const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-11', author: 'author-2026-10-11', publisher: 'publisher-2026-10-11', promoter: 'promoter-2026-10-11', library: 'library-2026-10-11' };
+const PARTNER_CONTRACT_VERSIONS = { bookstore: 'bookstore-2026-10-13', author: 'author-2026-10-13', publisher: 'publisher-2026-10-13', promoter: 'promoter-2026-10-13', library: 'library-2026-10-13' };
 const PARTNER_HEADERS = [
   'id', 'type', 'email', 'status', 'name', 'contactName', 'phone', 'about', 'website', 'instagram',
   'address', 'city', 'pincode', 'lat', 'lng', 'placeLabel', 'registeredName', 'gstin', 'panNumber', 'aadhaarLast4',
@@ -27121,7 +27121,37 @@ const PARTNER_DOCS = {
   promoter: { aadhaar: 'Aadhaar (masked)', pan: 'PAN card' },
   library: { aadhaar: "Librarian's / authorised person's Aadhaar (masked)", pan: 'PAN card (library, trust or authorised person)', businessProof: 'Library registration — trust / society / shop registration, or the school or college letter' }
 };
-const PARTNER_OPTIONAL_DOCS = { businessProof: 'Business proof (optional)', other: 'Any other document (optional)' };
+const PARTNER_OPTIONAL_DOCS = { businessProof: 'Business proof (optional)', stockPhoto: 'Photo with the books (not registered)', other: 'Any other document (optional)' };
+
+/*
+ * 13 Oct 2026 (owner's request): not every bookstore has a shop or a
+ * registration. A bookstore or publisher may sell online only (Instagram,
+ * WhatsApp, Amazon…) — then no shop address or map pin is needed, but an
+ * online link is. A bookstore, publisher or library that is not registered
+ * (no GST — printed books are GST-exempt — no shop licence, no Udyam) gives
+ * a photo of themselves with their books instead of a business proof, and
+ * SwapSutra checks them, e.g. with a video call, before approving.
+ */
+const PARTNER_SELLS_FROM_TYPES = ['bookstore', 'publisher'];
+const PARTNER_REGISTRATION_TYPES = ['bookstore', 'publisher', 'library'];
+function partnerSellsFrom_(type, tf) {
+  if (PARTNER_SELLS_FROM_TYPES.indexOf(type) === -1) return '';
+  const v = String((tf || {}).sellsFrom || '').toLowerCase();
+  return ['shop', 'online', 'both'].indexOf(v) !== -1 ? v : 'shop';
+}
+function partnerIsRegistered_(type, tf) {
+  if (PARTNER_REGISTRATION_TYPES.indexOf(type) === -1) return true;
+  return String((tf || {}).registered || 'yes').toLowerCase() !== 'no';
+}
+/** The documents this application must include, given how the partner works. */
+function partnerRequiredDocs_(type, tf) {
+  const base = Object.assign({}, PARTNER_DOCS[type] || {});
+  if (!partnerIsRegistered_(type, tf)) {
+    delete base.businessProof;
+    base.stockPhoto = type === 'library' ? 'A photo of the library with you in it' : 'A photo of you with your books';
+  }
+  return base;
+}
 
 function partnerCommissionRate_() {
   const raw = readScriptProperty_('PARTNER_COMMISSION_PERCENT');
@@ -27320,12 +27350,17 @@ function validatePartnerApplication_(d, existingDocs) {
   }
   if (!/^\d{6}$/.test(clean.pincode)) errors.pincode = 'Enter a 6-digit pincode.';
   if (clean.city.length < 2) errors.city = 'City is required.';
-  if (type === 'bookstore' || type === 'publisher' || type === 'library') {
+  // Online-only bookstores and publishers have no address readers visit.
+  const tfIn = d.typeFields || {};
+  const sellsFrom = partnerSellsFrom_(type, tfIn);
+  const onlineOnly = sellsFrom === 'online';
+  if ((type === 'bookstore' || type === 'publisher' || type === 'library') && !onlineOnly) {
     if (clean.address.length < 8) errors.address = 'Enter the full address.';
     if (!(isFinite(clean.lat) && isFinite(clean.lng) && Math.abs(clean.lat) <= 90 && Math.abs(clean.lng) <= 180 && (clean.lat || clean.lng))) errors.location = 'Pin your location on Google Maps.';
   }
   if (!(isFinite(clean.lat) && isFinite(clean.lng)) || (!clean.lat && !clean.lng)) { clean.lat = ''; clean.lng = ''; }
-  if (clean.registeredName.length < 2) errors.registeredName = type === 'bookstore' || type === 'publisher' || type === 'library'
+  const registered = partnerIsRegistered_(type, tfIn);
+  if (clean.registeredName.length < 2) errors.registeredName = (type === 'bookstore' || type === 'publisher' || type === 'library') && registered
     ? 'Whose name is the business registered in?' : 'Your name as on your PAN card.';
   if (!validPan_(clean.panNumber)) errors.panNumber = 'Enter the PAN number (like ABCDE1234F).';
   if (!/^\d{4}$/.test(clean.aadhaarLast4)) errors.aadhaarLast4 = 'Enter the last 4 digits of the Aadhaar.';
@@ -27338,11 +27373,26 @@ function validatePartnerApplication_(d, existingDocs) {
   if (type === 'publisher') { pick('imprints', 200); pick('yearEstablished', 4); pick('genres', 200); }
   if (type === 'promoter') { if (!pick('promotes', 300)) errors.promotes = 'What do you promote (books, authors, events)?'; pick('clients', 300); }
   if (type === 'library') { if (!pick('libraryType', 60)) errors.libraryType = 'What kind of library is it (public, private, school, college, community)?'; pick('openingHours', 120); pick('membership', 200); pick('collectionSize', 40); }
+  if (PARTNER_SELLS_FROM_TYPES.indexOf(type) !== -1) {
+    clean.typeFields.sellsFrom = sellsFrom;
+    const link = String(tfIn.storeLink || '').trim();
+    clean.typeFields.storeLink = '';
+    if (link) { if (/^https:\/\/[^\s]+$/i.test(link)) clean.typeFields.storeLink = link.slice(0, 300); else errors.storeLink = 'The link must start with https://.'; }
+    if (onlineOnly && !clean.website && !clean.instagram && !clean.typeFields.storeLink && !errors.website && !errors.storeLink) {
+      errors.storeLink = 'Selling online only? Give the link where readers find you — your Instagram, website, or Amazon / Flipkart / Meesho / WhatsApp store.';
+    }
+  }
+  if (PARTNER_REGISTRATION_TYPES.indexOf(type) !== -1) {
+    clean.typeFields.registered = registered ? 'yes' : 'no';
+    if (!registered && !truthy_(tfIn.declared)) errors.declared = 'Confirm that the details and the photo are true.';
+    clean.typeFields.declared = registered ? '' : 'yes';
+  }
   // Documents: new uploads (data URLs) or ones already on file.
   const have = existingDocs || {};
   const docs = d.docs || {};
-  Object.keys(PARTNER_DOCS[type] || {}).forEach(k => {
-    if (!have[k] && !docs[k]) errors['doc_' + k] = 'Upload: ' + PARTNER_DOCS[type][k] + '.';
+  const requiredDocs = partnerRequiredDocs_(type, clean.typeFields);
+  Object.keys(requiredDocs).forEach(k => {
+    if (!have[k] && !docs[k]) errors['doc_' + k] = 'Upload: ' + requiredDocs[k] + '.';
   });
   Object.keys(docs).forEach(k => {
     if (!(PARTNER_DOCS[type] || {})[k] && !PARTNER_OPTIONAL_DOCS[k]) return;
@@ -27544,6 +27594,9 @@ function partnerPublicView_(p, forAdmin) {
     submittedAt: p.submittedAt ? new Date(p.submittedAt).toISOString() : '',
     docs: Object.keys(docs).map(k => ({ key: k, label: (PARTNER_DOCS[p.type] || {})[k] || PARTNER_OPTIONAL_DOCS[k] || k, at: docs[k].at || '' }))
   };
+  const tfv = out.typeFields || {};
+  out.sellsFrom = partnerSellsFrom_(p.type, tfv);
+  out.registered = partnerIsRegistered_(p.type, tfv);
   if (forAdmin) {
     out.panNumber = p.panNumber;
     out.docs = Object.keys(docs).map(k => ({ key: k, label: (PARTNER_DOCS[p.type] || {})[k] || PARTNER_OPTIONAL_DOCS[k] || k, at: docs[k].at || '',

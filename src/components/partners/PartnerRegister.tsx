@@ -77,6 +77,34 @@ const TYPE_FIELDS: Record<PartnerType, { key: string; label: string; required?: 
   ],
 };
 
+/*
+ * 13 Oct 2026 (owner's request): a bookstore or publisher may sell online
+ * only (no shop address or map pin, but a link where it sells), and a
+ * bookstore, publisher or library may not be registered at all (a photo with
+ * the books and a declaration instead of a business proof). The server
+ * applies the same rules (partnerRequiredDocs_ in appsscript.js).
+ */
+const SELLS_FROM: Partial<Record<PartnerType, [string, string][]>> = {
+  bookstore: [['shop', 'A shop readers can visit'], ['online', 'Online only — Instagram, WhatsApp, website, Amazon…'], ['both', 'Both — a shop and online']],
+  publisher: [['shop', 'An office or warehouse'], ['online', 'From home / online only'], ['both', 'Both']],
+};
+const REGISTRATION: Partial<Record<PartnerType, [string, string][]>> = {
+  bookstore: [['yes', 'Registered — GST, shop licence, Udyam or trade licence'], ['no', 'Not registered — I sell on my own']],
+  publisher: [['yes', 'Registered — company, firm, GST or Udyam'], ['no', 'Not registered — independent / self-publisher']],
+  library: [['yes', 'Registered — trust, society, shop, or a school / college library'], ['no', 'Not registered — a home or community library']],
+};
+const STOCK_PHOTO: Record<PartnerType, string> = {
+  bookstore: 'A photo of you with your books — your face and the books in one photo', publisher: 'A photo of you with books you have published',
+  library: 'A photo of the library — the shelves, with you in it', author: '', promoter: '',
+};
+function docsFor(type: PartnerType, registered: boolean) {
+  if (registered || !REGISTRATION[type]) return DOCS[type];
+  const list = DOCS[type].map((d) => (d.key === 'businessProof' ? { ...d, label: 'Udyam certificate, trade licence or any registration (optional — it speeds up approval)', required: false } : d));
+  const at = list.findIndex((d) => d.key === 'other');
+  list.splice(at === -1 ? list.length : at, 0, { key: 'stockPhoto', label: STOCK_PHOTO[type], required: true });
+  return list;
+}
+
 type Form = {
   name: string; contactName: string; phone: string; altPhone: string; altEmail: string; about: string; website: string; instagram: string; address: string; city: string; pincode: string;
   lat: number | null; lng: number | null; placeLabel: string; registeredName: string; gstin: string; panNumber: string; aadhaarLast4: string;
@@ -92,7 +120,8 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
     website: existing?.website || '', instagram: existing?.instagram || '', address: existing?.address || '', city: existing?.city || '',
     pincode: existing?.pincode || '', lat: existing?.lat ?? null, lng: existing?.lng ?? null, placeLabel: existing?.placeLabel || '',
     registeredName: existing?.registeredName || '', gstin: existing?.gstin || '', panNumber: '', aadhaarLast4: existing?.aadhaarLast4 || '',
-    showBanner: existing ? existing.showBanner : true, runAds: existing ? existing.runAds : true, typeFields: existing?.typeFields || {},
+    showBanner: existing ? existing.showBanner : true, runAds: existing ? existing.runAds : true,
+    typeFields: { sellsFrom: 'shop', registered: 'yes', ...(existing?.typeFields || {}), declared: '' },
     agree: false, signedName: '',
   }));
   // 11 Oct 2026 (owner's request): where SwapSutra pays the partner.
@@ -105,6 +134,19 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
   const onFile = existing ? new Set(existing.docs.map((d) => d.key)) : new Set<string>();
   const contract = type ? PARTNER_CONTRACTS[type] : null;
   const sameType = !!existing && existing.type === type;
+  const onlineOnly = !!type && !!SELLS_FROM[type] && form.typeFields.sellsFrom === 'online';
+  const registered = !type || !REGISTRATION[type] || form.typeFields.registered !== 'no';
+  const needsLocation = !!type && NEEDS_LOCATION[type] && !onlineOnly;
+  const docList = type ? docsFor(type, registered) : [];
+  const setTf = (k: string, v: string) => setForm((f) => ({ ...f, typeFields: { ...f.typeFields, [k]: v } }));
+  const choice = (k: string, legend: string, options: [string, string][]) => (
+    <div className="pp-field" role="radiogroup" aria-label={legend} data-testid={'partner-' + k}>
+      <span className="pp-label">{legend} *</span>
+      {options.map(([v, l]) => (
+        <label key={v} className="pp-check"><input type="radio" name={'pp-' + k} value={v} checked={form.typeFields[k] === v} onChange={() => setTf(k, v)} /> {l}</label>
+      ))}
+    </div>
+  );
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
   const text = (k: keyof Form, label: string, props: React.InputHTMLAttributes<HTMLInputElement> = {}, hint?: string) => (
@@ -128,8 +170,8 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
 
   const missing = useMemo(() => {
     if (!type) return [];
-    return DOCS[type].filter((d) => d.required && !docs[d.key] && !(sameType && onFile.has(d.key))).map((d) => d.label);
-  }, [type, docs, sameType]); // eslint-disable-line react-hooks/exhaustive-deps
+    return docList.filter((d) => d.required && !docs[d.key] && !(sameType && onFile.has(d.key))).map((d) => d.label);
+  }, [type, docs, sameType, registered]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,7 +215,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
           {(Object.keys(PARTNER_LABEL) as PartnerType[]).map((t) => (
             <button key={t} type="button" className="pp-type" onClick={() => setType(t)}>
               <b>{PARTNER_LABEL[t]}</b>
-              <span>{t === 'bookstore' ? 'A shop selling new or second-hand books' : t === 'author' ? 'You wrote the books you want to sell or promote' : t === 'publisher' ? 'You publish or distribute books' : 'You promote books, authors or literary events'}</span>
+              <span>{t === 'bookstore' ? 'You sell new or second-hand books — from a shop, online, or both' : t === 'author' ? 'You wrote the books you want to sell or promote' : t === 'publisher' ? 'You publish or distribute books' : t === 'library' ? 'You lend books — a public, school, private or community library' : 'You promote books, authors or literary events'}</span>
             </button>
           ))}
         </div>
@@ -199,7 +241,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
         {/* 11 Oct 2026 (owner's request): a second way to reach the partner. */}
         {text('altPhone', 'Alternative mobile number (optional)', { inputMode: 'tel', autoComplete: 'off', placeholder: 'Another number we can call' })}
         {text('altEmail', 'Alternative email (optional)', { type: 'email', inputMode: 'email', autoComplete: 'off', placeholder: 'Another email we can write to' })}
-        {TYPE_FIELDS[type].map((f) => (
+        {TYPE_FIELDS[type].filter((f) => !(onlineOnly && f.key === 'openingHours')).map((f) => (
           <label className="pp-field" key={f.key}>
             <span className="pp-label">{f.label}{f.required ? ' *' : ''}</span>
             {f.long
@@ -218,15 +260,40 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
         </div>
       </fieldset>
 
+      {(SELLS_FROM[type] || REGISTRATION[type]) && (
+        <fieldset className="pp-fieldset" data-testid="partner-how">
+          <legend>How you work</legend>
+          {SELLS_FROM[type] && choice('sellsFrom', type === 'publisher' ? 'Where do you work from?' : 'Where do you sell?', SELLS_FROM[type]!)}
+          {SELLS_FROM[type] && form.typeFields.sellsFrom !== 'shop' && (
+            <label className="pp-field">
+              <span className="pp-label">Where readers find you online{onlineOnly ? ' *' : ' (optional)'}</span>
+              <input className="input-classic pp-input" type="url" name="storeLink" value={form.typeFields.storeLink || ''} placeholder="https://… — Amazon, Flipkart, Meesho, WhatsApp catalogue, Facebook page"
+                onChange={(e) => setTf('storeLink', e.target.value)} />
+              <span className="pp-hint">{onlineOnly ? 'This link, your Instagram or your website — at least one is needed, so we can see your shop.' : 'Your online shop, if you have one.'}</span>
+              {errors.storeLink && <span className="pp-error" role="alert">{errors.storeLink}</span>}
+            </label>
+          )}
+          {REGISTRATION[type] && choice('registered', type === 'library' ? 'Is the library registered?' : 'Is the business registered?', REGISTRATION[type]!)}
+          {!registered && (
+            <p className="pp-hint">
+              That is fine — many {type === 'library' ? 'community libraries' : 'book sellers'} are not registered{type !== 'library' ? ' (printed books need no GST)' : ''}.
+              Instead of a business proof, upload a photo {type === 'library' ? 'of the library with you in it' : 'of yourself with your books'} below.
+              SwapSutra may also check with a short video call before approving. A free Udyam certificate (udyamregistration.gov.in) makes approval faster.
+            </p>
+          )}
+        </fieldset>
+      )}
+
       <fieldset className="pp-fieldset">
         <legend>Where you are</legend>
-        {NEEDS_LOCATION[type] && text('address', 'Full address *', { maxLength: 300, autoComplete: 'street-address' })}
+        {onlineOnly && <p className="pp-hint">You sell online only, so no shop address or map pin is needed — just the city and pincode you ship from. Readers see only the city.</p>}
+        {needsLocation && text('address', 'Full address *', { maxLength: 300, autoComplete: 'street-address' })}
         <div className="pp-row">
-          {text('city', 'City *', { maxLength: 60, autoComplete: 'address-level2' })}
+          {text('city', onlineOnly ? 'City you ship from *' : 'City *', { maxLength: 60, autoComplete: 'address-level2' })}
           {text('pincode', 'Pincode *', { inputMode: 'numeric', maxLength: 6, autoComplete: 'postal-code' })}
         </div>
         <div className="pp-field">
-          <span className="pp-label">Google location{NEEDS_LOCATION[type] ? ' *' : ' (optional)'}</span>
+          <span className="pp-label">Google location{needsLocation ? ' *' : ' (optional)'}</span>
           {form.lat !== null && form.lng !== null && !picking
             ? (<>
                 <LocationCard lat={form.lat} lng={form.lng} label={form.placeLabel || form.name} compact />
@@ -244,13 +311,13 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
       <fieldset className="pp-fieldset">
         <legend>Documents</legend>
         <p className="pp-hint">Kept in SwapSutra's private storage and used only to verify you and to pay you. Readers never see them. Cover the first 8 digits of the Aadhaar before you photograph it.</p>
-        {text('registeredName', REGISTERED_LABEL[type] + ' *', { maxLength: 120 })}
+        {text('registeredName', (registered ? REGISTERED_LABEL[type] : 'Your name as on your PAN card') + ' *', { maxLength: 120 })}
         <div className="pp-row">
           {text('panNumber', 'PAN number *', { maxLength: 10, autoComplete: 'off', placeholder: existing?.panMasked ? `On file: ${existing.panMasked} — type it again` : 'ABCDE1234F', style: { textTransform: 'uppercase' } })}
           {text('aadhaarLast4', 'Aadhaar — last 4 digits only *', { inputMode: 'numeric', maxLength: 4, autoComplete: 'off' })}
         </div>
-        {(type === 'bookstore' || type === 'publisher' || type === 'library') && text('gstin', 'GSTIN (if registered)', { maxLength: 15, style: { textTransform: 'uppercase' } })}
-        {DOCS[type].map((d) => (
+        {(type === 'bookstore' || type === 'publisher' || type === 'library') && registered && text('gstin', 'GSTIN (if registered)', { maxLength: 15, style: { textTransform: 'uppercase' } })}
+        {docList.map((d) => (
           <div className="pp-field" key={d.key}>
             <span className="pp-label">{d.label}{d.required ? ' *' : ''}</span>
             <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => pickDoc(d.key, e.target.files?.[0])} aria-label={d.label} />
@@ -258,6 +325,13 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
             {errors['doc_' + d.key] && <span className="pp-error" role="alert">{errors['doc_' + d.key]}</span>}
           </div>
         ))}
+        {!registered && (
+          <label className="pp-check" data-testid="partner-declare">
+            <input type="checkbox" checked={form.typeFields.declared === 'yes'} onChange={(e) => setTf('declared', e.target.checked ? 'yes' : '')} />
+            {' '}I confirm that {type === 'library' ? 'I run this library' : 'I sell these books'} in my own name, under my own PAN, and that these details and the photo are true.
+            {errors.declared && <span className="pp-error" role="alert">{errors.declared}</span>}
+          </label>
+        )}
       </fieldset>
 
       <fieldset className="pp-fieldset" data-testid="partner-payout">

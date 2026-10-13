@@ -65,6 +65,14 @@ export default function AdminPartners() {
         <p className="admin-ads__title">{p.name} <span className="type-caption">· {p.typeLabel} · {STATUS[p.status] || p.status}</span></p>
         <p className="type-caption">{p.contactName} · {p.email} · {p.phone} · {p.city} {p.pincode}</p>
         {(p.altPhone || p.altEmail) && <p className="type-caption">Alternative: {[p.altPhone, p.altEmail].filter(Boolean).join(' · ')}</p>}
+        {(p.sellsFrom === 'online' || p.sellsFrom === 'both' || p.registered === false) && (
+          <p className="type-caption" data-testid="admin-partner-how">
+            {p.sellsFrom === 'online' && <b>Online only (no shop) · </b>}
+            {p.sellsFrom === 'both' && <b>Shop + online · </b>}
+            {p.typeFields?.storeLink && <><a href={p.typeFields.storeLink} target="_blank" rel="noopener noreferrer">online shop</a> · </>}
+            {p.registered === false && <b>Not registered — check the photo with the books, and do a short video call before approving</b>}
+          </p>
+        )}
         {p.status === 'APPROVED' && (
           <p className="type-caption">
             Commission now {p.commissionNow}%{p.commissionPlan === 'free_first_year' ? ` (free until ${day(p.commissionFreeUntil)})` : ''} ·
@@ -77,7 +85,7 @@ export default function AdminPartners() {
           <div className="admin-partner__detail">
             <p className="type-caption"><b>Registered in the name of:</b> {p.registeredName} · <b>PAN:</b> {p.panNumber} · <b>Aadhaar (last 4):</b> {p.aadhaarLast4}{p.gstin ? <> · <b>GSTIN:</b> {p.gstin}</> : null}</p>
             {p.address && <p className="type-caption"><b>Address:</b> {p.address}</p>}
-            {Object.keys(p.typeFields || {}).filter((k) => p.typeFields[k]).map((k) => <p key={k} className="type-caption"><b>{k}:</b> {p.typeFields[k]}</p>)}
+            {Object.keys(p.typeFields || {}).filter((k) => p.typeFields[k] && !['sellsFrom', 'registered', 'declared', 'storeLink'].includes(k)).map((k) => <p key={k} className="type-caption"><b>{k}:</b> {p.typeFields[k]}</p>)}
             {p.about && <p className="type-caption"><b>About:</b> {p.about}</p>}
             {(p.website || p.instagram) && <p className="type-caption">{p.website && <a href={p.website} target="_blank" rel="noopener noreferrer">{p.website}</a>} {p.instagram}</p>}
             {p.lat !== null && p.lng !== null && <div style={{ maxWidth: 360 }}><LocationCard lat={p.lat} lng={p.lng} label={p.placeLabel || p.name} compact /></div>}

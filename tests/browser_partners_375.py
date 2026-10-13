@@ -114,6 +114,20 @@ with sync_playwright() as p:
     ck('...which says shipping and delivery are the partner\'s responsibility', "Shipping and delivery are the partner's responsibility" in pg.locator('[data-testid="partner-contract"]').inner_text())
     ck('Form: no horizontal scroll', no_hscroll(pg))
     shot(pg, 'partners-form')
+    # 13 Oct 2026: online-only and unregistered bookstores
+    form = pg.locator('[data-testid="partner-register-form"]')
+    ck('A shop needs its address; no online-link field yet', form.locator('text=Full address *').count() == 1 and pg.locator('input[name="storeLink"]').count() == 0)
+    pg.click('[data-testid="partner-sellsFrom"] label:has-text("Online only")'); pg.wait_for_timeout(300)
+    ck('Online only: no address or map pin needed, the online link is asked', form.locator('text=Full address *').count() == 0
+       and pg.locator('input[name="storeLink"]').count() == 1 and 'City you ship from' in form.inner_text() and 'Google location (optional)' in form.inner_text())
+    pg.click('[data-testid="partner-registered"] label:has-text("Not registered")'); pg.wait_for_timeout(300)
+    ft2 = form.inner_text()
+    ck('Not registered: a photo with the books and a declaration instead of the business proof',
+       'A photo of you with your books' in ft2 and pg.locator('[data-testid="partner-declare"]').count() == 1 and 'printed books need no GST' in ft2
+       and 'GSTIN' not in ft2 and 'optional — it speeds up approval' in ft2)
+    ck('Still no horizontal scroll', no_hscroll(pg))
+    shot(pg, 'partners-form-online-unregistered')
+    pg.click('[data-testid="partner-registered"] label:has-text("Registered")'); pg.click('[data-testid="partner-sellsFrom"] label:has-text("A shop readers can visit")'); pg.wait_for_timeout(300)
     pg.click('text=Send my application'); pg.wait_for_timeout(600)
     ck('Where SwapSutra pays the partner is asked (UPI or bank), before anything is sent', pg.locator('[data-testid="partner-payout"]').count() == 1
        and pg.locator('[data-testid="partner-payout"] [role="alert"]').count() >= 1 and 'submitPartnerApplication' not in state["calls"])
