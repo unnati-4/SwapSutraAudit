@@ -86,4 +86,4 @@ This agreement is governed by the laws of India. Disputes are first raised with 
 
 ## 10. Signature
 
-By typing the owner's or authorised person's full name and submitting the registration, the Publisher signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and the Publisher can see them in the partner dashboard.
+By typing the owner's or authorised person's full name and submitting the registration, the Publisher signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and the Publisher can see them in the partner dashboard. A signed copy of this agreement is emailed to the Publisher and to SwapSutra, and SwapSutra keeps a copy in its records.

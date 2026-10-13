@@ -91,7 +91,8 @@ export default function AdminPartners() {
             {p.lat !== null && p.lng !== null && <div style={{ maxWidth: 360 }}><LocationCard lat={p.lat} lng={p.lng} label={p.placeLabel || p.name} compact /></div>}
             <p className="type-caption"><b>Documents</b> (private — open while signed in to the SwapSutra Google account):</p>
             <ul className="type-caption">{(p.docs || []).map((d: Row) => <li key={d.key}><a href={d.url} target="_blank" rel="noopener noreferrer">{d.label}</a> · {day(d.at)}</li>)}</ul>
-            <p className="type-caption"><b>Agreement:</b> signed by {p.contractSignedName} on {day(p.contractSignedAt)} · {p.contractVersion}</p>
+            <p className="type-caption"><b>Agreement:</b> signed by {p.contractSignedName} on {day(p.contractSignedAt)} · {p.contractVersion}
+              {p.agreementUrl ? <> · <a href={p.agreementUrl} target="_blank" rel="noopener noreferrer" data-testid="admin-partner-agreement">Signed copy (PDF)</a></> : null}</p>
             <p className="type-caption"><b>Wants:</b> {p.showBanner ? 'banner' : 'no banner'} · {p.runAds ? 'ads' : 'no ads'}</p>
           </div>
         )}

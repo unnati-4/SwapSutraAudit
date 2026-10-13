@@ -122,7 +122,7 @@ function boot(options) {
   const blob = (bytes, type, name) => chain({
     _bytes: bytesOf(bytes), getBytes: () => signed(bytesOf(bytes)), getContentType: () => type, getName: () => name,
     getDataAsString: () => bytesOf(bytes).toString('utf8'), setName: (n) => { name = n; return blob(bytes, type, n); },
-    getSize: () => bytesOf(bytes).length,
+    getSize: () => bytesOf(bytes).length, getAs: (t) => blob(bytes, t, name),
   });
   const makeFile = (b, folderName) => {
     const id = 'FILE' + (++fileSeq);

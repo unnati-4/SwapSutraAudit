@@ -113,7 +113,7 @@ function sections(type: PartnerType): ContractSection[] {
       'This agreement is governed by the laws of India. Disputes are first raised with SwapSutra\'s grievance officer (swapsutra@gmail.com); if not resolved in 30 days, the courts at Saharanpur, Uttar Pradesh have jurisdiction.',
     ] },
     { title: '10. Signature', body: [
-      `By typing ${type === 'bookstore' || type === 'publisher' || type === 'library' ? 'the owner\'s or authorised person\'s' : 'their'} full name and submitting the registration, ${you} signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and ${you} can see them in the partner dashboard.`,
+      `By typing ${type === 'bookstore' || type === 'publisher' || type === 'library' ? 'the owner\'s or authorised person\'s' : 'their'} full name and submitting the registration, ${you} signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and ${you} can see them in the partner dashboard. A signed copy of this agreement is emailed to ${you} and to SwapSutra, and SwapSutra keeps a copy in its records.`,
     ] },
   ];
 }

@@ -177,9 +177,14 @@ function partnerEnv() {
     createFile: (blob) => { const id = 'F' + env.files.length; env.files.push({ folder: name, blob }); return { getId: () => id, setSharing: () => env.shared.push(id) }; }
   });
   env.ctx.getOrCreateFolder = (name) => folder(name);
-  env.ctx.DriveApp = { Access: { ANYONE_WITH_LINK: 'A' }, Permission: { VIEW: 'V' } };
+  env.topFolders = {};
+  env.ctx.DriveApp = { Access: { ANYONE_WITH_LINK: 'A' }, Permission: { VIEW: 'V' },
+    getFoldersByName: (n) => { const f = env.topFolders[n]; let done = !f; return { hasNext: () => !done, next: () => { done = true; return f; } }; },
+    createFolder: (n) => (env.topFolders[n] = folder(n)) };
   env.ctx.Utilities.base64Decode = (s) => Buffer.from(s, 'base64');
-  env.ctx.Utilities.newBlob = (bytes, type, name) => ({ bytes, type, name });
+  const blob = (bytes, type, name) => ({ bytes, type, name, getName: () => name, getBytes: () => Buffer.from(String(bytes)), getContentType: () => type,
+    getAs: (t) => blob(bytes, t, name), setName: (n) => blob(bytes, type, n) });
+  env.ctx.Utilities.newBlob = blob;
   env.ctx.invalidateLibraryCache = () => {};
   env.ctx.emailExistsInUsersSheet = (e) => !!(env.sheets.Users && env.sheets.Users._data.some(r => r.includes(e)));
   env.ctx.sendSwapSutraEmail = (m) => { env.emails.push(m); return true; };
@@ -196,6 +201,7 @@ const app = (o) => Object.assign({
   payout: { upiId: 'bookworms@okhdfcbank', payeeName: 'Asha Owner' }
 }, o || {});
 const P = (env) => env.sheets.Partners;
+const docFiles = (env) => env.files.filter(f => f.folder !== 'SwapSutra Partner Agreements');
 const pobj = (env) => { const s = P(env); const h = s._data[0]; const o = {}; h.forEach((k, i) => { o[k] = s._data[1][i]; }); return o; };
 function approve(env, decision) {
   env.as('own@x.com');
@@ -229,7 +235,7 @@ console.log('--- registration ---');
   C('The alternative mobile and email are saved', p.altPhone === '9123456780' && p.altEmail === 'shop.alt@x.com', JSON.stringify([p.altPhone, p.altEmail]));
   C('...waiting for review, with the contract version, signature and time recorded',
     p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-13' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
-  C('Documents are saved in a private folder — never shared', env.files.length === 3 && env.files.every(f => /SwapSutra_Partner_Documents/.test(f.folder)) && env.shared.length === 0);
+  C('Documents are saved in a private folder — never shared', docFiles(env).length === 3 && docFiles(env).every(f => /SwapSutra_Partner_Documents/.test(f.folder)) && env.shared.length === 0);
   C('Only the last 4 digits of the Aadhaar are kept as text', p.aadhaarLast4 === '1234' && !JSON.stringify(p).includes('aadhaarNumber'));
   C('The admin is told', env.notifications.some(x => x[0] === ADMIN && x[1] === 'partner_application'));
   C('Applying again while under review is refused', env.api.submitPartnerApplication(app()).error === 'UNDER_REVIEW');
@@ -254,7 +260,7 @@ console.log('--- registration ---');
   const ch = env.api.getMyPartner();
   C('The partner is told what to change', ch.partner.status === 'CHANGES_REQUESTED' && ch.nextSteps.some(s => /PAN photo is blurred/.test(s.text)));
   const re = env.api.submitPartnerApplication(app({ docs: { pan: PNG } }));
-  C('Resubmitting keeps the documents already sent (only the new PAN is uploaded)', re.success && env.files.length === 4 && pobj(env).status === 'PENDING', JSON.stringify(re));
+  C('Resubmitting keeps the documents already sent (only the new PAN is uploaded)', re.success && docFiles(env).length === 4 && pobj(env).status === 'PENDING', JSON.stringify(re));
 }
 
 console.log('--- approval ---');
@@ -547,6 +553,30 @@ console.log('--- payout details at registration (11 Oct 2026) ---');
   const r2 = env.api.savePayoutAccount({ upiId: 'ravi@okaxis', payeeName: 'Ravi Reader', accountName: 'Ravi Reader', accountNumber: '998877665544', ifsc: 'SBIN0001234' });
   C('Readers can be paid to a bank account too, or both', r1.success && r2.success && r2.account.upiId === 'ravi@okaxis' && r2.account.bank.accountNumber === '998877665544' && /okaxis or a\/c ••••5544/.test(r2.message), JSON.stringify(r2));
   C('Without either, nothing is saved', env.api.savePayoutAccount({}).success === false);
+}
+
+console.log('--- the signed agreement copy (13 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  env.as('copy@x.com');
+  const ok = env.api.submitPartnerApplication(app({ name: 'Copy Books', altEmail: 'second@x.com' }));
+  const pdf = env.files.find(f => f.folder === 'SwapSutra Partner Agreements');
+  C('Signing saves a PDF of the agreement in the owner\'s Drive folder', ok.success && pdf && pdf.blob.type === 'application/pdf' && /Bookstore Agreement - Copy Books - \d{4}-\d{2}-\d{2}/.test(pdf.blob.name), JSON.stringify(env.files.map(f => [f.folder, f.blob && f.blob.name])));
+  const html = String(pdf && pdf.blob.bytes || '');
+  C('…with the full agreement text, the partner\'s details and the typed signature', /Selling, orders and stock/.test(html) && /Copy Books/.test(html) && /Asha Owner/.test(html) && /bookstore-2026-10-13/.test(html) && /Signed electronically/.test(html) && /On .+, from the account copy@x.com/.test(html));
+  C('…never the full PAN number', !/ABCDE1234F/.test(html) && /AB•••••34F/.test(html));
+  const sent = env.emails.filter(m => /signed SwapSutra Bookstore agreement/.test(m.subject || ''));
+  C('A copy is emailed to the partner, their alternative email, and SwapSutra — with the PDF attached',
+    ['copy@x.com', 'second@x.com', 'swapsutra@gmail.com'].every(t => sent.some(m => m.to === t && m.attachments && m.attachments[0] && m.attachments[0].type === 'application/pdf')), JSON.stringify(sent.map(m => m.to)));
+  env.as(ADMIN);
+  const row = env.api.adminListPartners().items.find(x => x.name === 'Copy Books');
+  C('The admin console links to the saved agreement', row && /drive\.google\.com\/file\/d\//.test(row.agreementUrl || ''), JSON.stringify(row && row.agreementUrl));
+  const gs = fs.readFileSync(path.join(root, 'appsscript.js'), 'utf8');
+  const embedded = vm.runInContext('PARTNER_AGREEMENT_TEXT', env.ctx);
+  C('The agreement in the email is exactly the one on the website (legal/*.md)', ['bookstore', 'author', 'publisher', 'promoter', 'library'].every(t => embedded[t] === fs.readFileSync(path.join(root, 'legal/partner-agreement-' + t + '.md'), 'utf8')) && /gen-partner-agreements/.test(gs));
+  env.ctx.sendSwapSutraEmail = () => { throw new Error('mail down'); };
+  env.as('copy2@x.com');
+  C('If the email fails, the application still goes through', env.api.submitPartnerApplication(app({ name: 'Copy Two' })).success);
 }
 
 console.log('--- online-only and unregistered partners (13 Oct 2026) ---');
