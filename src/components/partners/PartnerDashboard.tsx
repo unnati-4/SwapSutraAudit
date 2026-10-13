@@ -351,7 +351,7 @@ function AccountTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: st
       </section>
       <section className="pp-card">
         <h2 className="pp-h2">Your agreement</h2>
-        <p className="pp-hint">Signed by <b>{p.contractSignedName}</b> on {dateLabel(p.contractSignedAt)} · version {p.contractVersion}{p.contractVersion !== p.currentContractVersion ? ' (a newer version exists — SwapSutra will ask you to sign it)' : ''}.</p>
+        <p className="pp-hint">Signed by <b>{p.contractSignedName}</b> on {dateLabel(p.contractSignedAt)} · version {p.contractVersion}{p.contractVersion !== p.currentContractVersion ? ' (a newer version exists — SwapSutra will ask you to sign it)' : ''}.{p.agreementSaved ? ' A signed copy (PDF) was emailed to you.' : ''}</p>
         <p className="pp-hint">Documents on file: {p.docs.map((d) => d.label).join(' · ') || '—'}</p>
         <button type="button" className="pp-link" onClick={() => setShowContract((v) => !v)}>{showContract ? 'Hide the agreement' : 'Read the agreement'}</button>
         {showContract && (

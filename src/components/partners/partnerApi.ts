@@ -39,7 +39,7 @@ export interface PartnerView {
   about: string; website: string; instagram: string; address: string; city: string; pincode: string; lat: number | null; lng: number | null;
   placeLabel: string; registeredName: string; gstin: string; panMasked: string; aadhaarLast4: string; typeFields: Record<string, string>; sellsFrom?: string; registered?: boolean; aadhaarOnly?: boolean;
   showBanner: boolean; runAds: boolean; bannerImageUrl: string; bannerHeadline: string; bannerTagline: string; bannerStatus: string; bannerNote: string;
-  contractVersion: string; contractSignedName: string; contractSignedAt: string; currentContractVersion: string;
+  contractVersion: string; contractSignedName: string; contractSignedAt: string; currentContractVersion: string; agreementSaved?: boolean; agreementUrl?: string;
   commissionPlan: string; commissionFreeUntil: string; commissionNow: number; approvedAt: string; reviewNote: string; submittedAt: string;
   docs: { key: string; label: string; at: string; url?: string; mime?: string }[];
 }
