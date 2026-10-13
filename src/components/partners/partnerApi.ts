@@ -37,7 +37,7 @@ export const monthLabel = (ym: string) => {
 export interface PartnerView {
   id: string; type: PartnerType; typeLabel: string; email: string; status: string; name: string; contactName: string; phone: string; altPhone?: string; altEmail?: string; bannerClicks?: number;
   about: string; website: string; instagram: string; address: string; city: string; pincode: string; lat: number | null; lng: number | null;
-  placeLabel: string; registeredName: string; gstin: string; panMasked: string; aadhaarLast4: string; typeFields: Record<string, string>;
+  placeLabel: string; registeredName: string; gstin: string; panMasked: string; aadhaarLast4: string; typeFields: Record<string, string>; sellsFrom?: string; registered?: boolean; aadhaarOnly?: boolean;
   showBanner: boolean; runAds: boolean; bannerImageUrl: string; bannerHeadline: string; bannerTagline: string; bannerStatus: string; bannerNote: string;
   contractVersion: string; contractSignedName: string; contractSignedAt: string; currentContractVersion: string;
   commissionPlan: string; commissionFreeUntil: string; commissionNow: number; approvedAt: string; reviewNote: string; submittedAt: string;

@@ -192,7 +192,7 @@ const app = (o) => Object.assign({
   registeredName: 'Asha Owner', panNumber: 'ABCDE1234F', aadhaarLast4: '1234', showBanner: true, runAds: true,
   typeFields: { storeType: 'New + second-hand', openingHours: '10–8' },
   docs: { aadhaar: PNG, pan: PNG, businessProof: PDF },
-  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-11',
+  agree: true, signedName: 'Asha Owner', contractVersion: 'bookstore-2026-10-13',
   payout: { upiId: 'bookworms@okhdfcbank', payeeName: 'Asha Owner' }
 }, o || {});
 const P = (env) => env.sheets.Partners;
@@ -228,7 +228,7 @@ console.log('--- registration ---');
   const p = pobj(env);
   C('The alternative mobile and email are saved', p.altPhone === '9123456780' && p.altEmail === 'shop.alt@x.com', JSON.stringify([p.altPhone, p.altEmail]));
   C('...waiting for review, with the contract version, signature and time recorded',
-    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-11' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
+    p.status === 'PENDING' && p.contractVersion === 'bookstore-2026-10-13' && p.contractSignedName === 'Asha Owner' && !!p.contractSignedAt);
   C('Documents are saved in a private folder — never shared', env.files.length === 3 && env.files.every(f => /SwapSutra_Partner_Documents/.test(f.folder)) && env.shared.length === 0);
   C('Only the last 4 digits of the Aadhaar are kept as text', p.aadhaarLast4 === '1234' && !JSON.stringify(p).includes('aadhaarNumber'));
   C('The admin is told', env.notifications.some(x => x[0] === ADMIN && x[1] === 'partner_application'));
@@ -512,16 +512,16 @@ console.log('--- library partners (11 Oct 2026) ---');
 {
   const env = partnerEnv();
   env.as('lib@x.com');
-  const lib = (o) => app(Object.assign({ type: 'library', name: 'Gomti Reading Library', contractVersion: 'library-2026-10-11',
+  const lib = (o) => app(Object.assign({ type: 'library', name: 'Gomti Reading Library', contractVersion: 'library-2026-10-13',
     typeFields: { libraryType: 'Community', openingHours: '9–7', membership: '₹200 a month', collectionSize: '5000' } }, o || {}));
   const noKind = env.api.submitPartnerApplication(lib({ typeFields: {} }));
   C('A library must say what kind of library it is', noKind.errors && noKind.errors.libraryType, JSON.stringify(noKind.errors));
   const noLoc = env.api.submitPartnerApplication(lib({ lat: '', lng: '', docs: { aadhaar: PNG, pan: PNG } }));
   C('...needs its Google location and its registration proof, like a bookstore', noLoc.errors && noLoc.errors.location && noLoc.errors.doc_businessProof, JSON.stringify(noLoc.errors));
-  C('...and signs the library agreement, not another type\'s', env.api.submitPartnerApplication(lib({ contractVersion: 'bookstore-2026-10-11' })).errors.contract);
+  C('...and signs the library agreement, not another type\'s', env.api.submitPartnerApplication(lib({ contractVersion: 'bookstore-2026-10-13' })).errors.contract);
   const ok = env.api.submitPartnerApplication(lib());
   const p = pobj(env);
-  C('A complete library application is received', ok.success && p.type === 'library' && p.contractVersion === 'library-2026-10-11' && /Community/.test(p.typeFieldsJson), JSON.stringify(ok));
+  C('A complete library application is received', ok.success && p.type === 'library' && p.contractVersion === 'library-2026-10-13' && /Community/.test(p.typeFieldsJson), JSON.stringify(ok));
   C('The library agreement is published', fs.existsSync(path.join(root, 'legal/partner-agreement-library.md')) && /Library/.test(fs.readFileSync(path.join(root, 'src/data/partnerContracts.ts'), 'utf8')));
   env.as(ADMIN);
   const ad = env.api.saveSponsoredAd({ kind: 'library', sponsor: 'Gomti Reading Library', headline: 'Join for ₹200', tagline: 'Quiet seats, 5000 books',
@@ -547,6 +547,54 @@ console.log('--- payout details at registration (11 Oct 2026) ---');
   const r2 = env.api.savePayoutAccount({ upiId: 'ravi@okaxis', payeeName: 'Ravi Reader', accountName: 'Ravi Reader', accountNumber: '998877665544', ifsc: 'SBIN0001234' });
   C('Readers can be paid to a bank account too, or both', r1.success && r2.success && r2.account.upiId === 'ravi@okaxis' && r2.account.bank.accountNumber === '998877665544' && /okaxis or a\/c ••••5544/.test(r2.message), JSON.stringify(r2));
   C('Without either, nothing is saved', env.api.savePayoutAccount({}).success === false);
+}
+
+console.log('--- online-only and unregistered partners (13 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  env.as('insta@x.com');
+  const online = (o) => app(Object.assign({ name: 'Insta Books', address: '', lat: '', lng: '', placeLabel: '', website: '', instagram: '',
+    typeFields: { sellsFrom: 'online' } }, o || {}));
+  const noLink = env.api.submitPartnerApplication(online());
+  C('An online-only bookstore needs no shop address or map pin…', noLink.errors && !noLink.errors.address && !noLink.errors.location, JSON.stringify(noLink.errors));
+  C('…but must give the link where readers find it', noLink.errors && /Instagram/.test(noLink.errors.storeLink || ''), JSON.stringify(noLink.errors));
+  C('A store link must be https', env.api.submitPartnerApplication(online({ typeFields: { sellsFrom: 'online', storeLink: 'amazon.in/shop' } })).errors.storeLink);
+  const aOnly = env.api.submitPartnerApplication(online({ instagram: '@instabooks', panNumber: '', docs: { aadhaar: PNG }, typeFields: { sellsFrom: 'online' } }));
+  C('An online-only bookseller needs only the Aadhaar — no PAN, no other document', aOnly.success, JSON.stringify(aOnly));
+  C('…and no Aadhaar is still refused', (() => { const e2 = partnerEnv(); e2.as('noaadhaar@x.com'); const r = e2.api.submitPartnerApplication(online({ instagram: '@x', panNumber: '', docs: {} })); return r.errors && r.errors.doc_aadhaar && !r.errors.doc_pan && !r.errors.panNumber && !r.errors.doc_businessProof && !r.errors.doc_stockPhoto; })());
+  const ok = aOnly;
+  C('With an Instagram handle, the online bookstore is received', ok.success, JSON.stringify(ok));
+  C('…and is recorded as online only', JSON.parse(pobj(env).typeFieldsJson).sellsFrom === 'online');
+  const shop = partnerEnv(); shop.as('shop@x.com');
+  const shopNoPin = shop.api.submitPartnerApplication(app({ address: '', lat: '', lng: '' }));
+  C('A bookstore with a shop still needs the address and the pin', shopNoPin.errors && shopNoPin.errors.address && shopNoPin.errors.location);
+
+  const un = partnerEnv(); un.as('chhota@x.com');
+  const unreg = (o) => app(Object.assign({ name: 'Footpath Books', registeredName: 'Asha Owner', typeFields: { registered: 'no', declared: 'yes' },
+    docs: { aadhaar: PNG, pan: PNG } }, o || {}));
+  const noPhoto = un.api.submitPartnerApplication(unreg());
+  C('An unregistered bookstore needs no business proof…', noPhoto.errors && !noPhoto.errors.doc_businessProof, JSON.stringify(noPhoto.errors));
+  C('…but a photo with the books', noPhoto.errors && /photo/i.test(noPhoto.errors.doc_stockPhoto || ''), JSON.stringify(noPhoto.errors));
+  const noDecl = un.api.submitPartnerApplication(unreg({ typeFields: { registered: 'no' }, docs: { aadhaar: PNG, pan: PNG, stockPhoto: PNG } }));
+  C('…and a declaration that the details are true', noDecl.errors && noDecl.errors.declared, JSON.stringify(noDecl.errors));
+  const okUn = un.api.submitPartnerApplication(unreg({ docs: { aadhaar: PNG, pan: PNG, stockPhoto: PNG } }));
+  C('A complete unregistered application is received', okUn.success, JSON.stringify(okUn));
+  un.as(ADMIN);
+  const list = un.api.adminListPartners();
+  const row = (list.items || []).find(x => x.name === 'Footpath Books');
+  C('The admin sees it is not registered, with the photo among the documents', row && row.registered === false && row.docs.some(d => d.key === 'stockPhoto' && /photo/i.test(d.label)), JSON.stringify(row && { registered: row.registered, docs: row.docs }));
+
+  const lib = partnerEnv(); lib.as('mohalla@x.com');
+  const okLib = lib.api.submitPartnerApplication(app({ type: 'library', name: 'Mohalla Library', contractVersion: 'library-2026-10-13',
+    typeFields: { libraryType: 'Community', registered: 'no', declared: 'yes' }, docs: { aadhaar: PNG, pan: PNG, stockPhoto: PNG } }));
+  C('A home or community library that is not registered can join too', okLib.success, JSON.stringify(okLib));
+  const ui = fs.readFileSync(path.join(root, 'src/components/partners/PartnerRegister.tsx'), 'utf8');
+  const pubOnline = partnerEnv(); pubOnline.as('pub@x.com');
+  const pr = pubOnline.api.submitPartnerApplication(app({ type: 'publisher', name: 'Home Press', contractVersion: 'publisher-2026-10-13', address: '', lat: '', lng: '', instagram: '@homepress',
+    panNumber: '', typeFields: { sellsFrom: 'online' }, docs: { aadhaar: PNG } }));
+  C('A publisher (not a bookseller) still gives its PAN', pr.errors && pr.errors.panNumber && pr.errors.doc_pan, JSON.stringify(pr.errors));
+  C('The form offers both choices', /Online only/.test(ui) && /Not registered/.test(ui) && /partner-declare/.test(ui));
+  C('The agreement covers unregistered and online-only partners', /if the business is not registered/.test(fs.readFileSync(path.join(root, 'legal/partner-agreement-bookstore.md'), 'utf8')));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

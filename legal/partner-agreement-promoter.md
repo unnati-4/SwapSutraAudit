@@ -1,6 +1,6 @@
 # SwapSutra Promoter Partner Agreement
 
-**Version:** promoter-2026-10-11
+**Version:** promoter-2026-10-13
 
 > Drafted for SwapSutra. Have an advocate review it before relying on it.
 

@@ -1,6 +1,6 @@
 # SwapSutra Bookstore Partner Agreement
 
-**Version:** bookstore-2026-10-11
+**Version:** bookstore-2026-10-13
 
 > Drafted for SwapSutra. Have an advocate review it before relying on it.
 
@@ -16,7 +16,11 @@ The Bookstore uses a partner account that is separate from any reader account, a
 
 ## 2. Registration, documents and verification
 
-The Bookstore gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), a business proof (GST certificate, shop & establishment registration, Udyam or trade licence), contact details and the business location.
+The Bookstore gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), a business proof (GST certificate, shop & establishment registration, Udyam or trade licence) — or, if the business is not registered, a photo of the owner with the books and a declaration that the details are true — contact details and the business location (or, if it sells online only, the city it ships from and the link where it sells).
+
+A Bookstore that sells online only gives just the owner's masked Aadhaar, its contact details, the city it ships from and the link where it sells; it does not need a PAN or business documents, and SwapSutra may verify it by a video call before approving.
+
+If the Bookstore is not registered, it sells or lends in the owner's own name and under the owner's PAN, and SwapSutra may verify it by a video call before approving. The Bookstore must tell SwapSutra if it registers later, and upload the proof.
 
 SwapSutra keeps these documents in private storage, uses them only to verify the partner, to pay them and to meet legal requirements, and does not show them to readers. Only the last 4 digits of the Aadhaar number are kept as text.
 

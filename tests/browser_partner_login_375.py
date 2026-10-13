@@ -46,7 +46,7 @@ with sync_playwright() as pw:
     app = api({'action': 'submitPartnerApplication', 'type': 'library', 'name': 'Gomti Reading Library', 'contactName': 'Ramesh Gupta', 'phone': '9876501234', 'about': 'Community library',
                'address': '14 Gomti Nagar', 'city': 'Lucknow', 'pincode': '226010', 'lat': 26.85, 'lng': 80.99, 'placeLabel': 'Gomti', 'registeredName': 'Ramesh Gupta', 'panNumber': 'ABCDE1234F',
                'aadhaarLast4': '4321', 'showBanner': True, 'runAds': True, 'typeFields': {'libraryType': 'Community'}, 'docs': {'aadhaar': PNG, 'pan': PNG, 'businessProof': PNG}, 'agree': True,
-               'signedName': 'Ramesh Gupta', 'contractVersion': 'library-2026-10-11', 'payout': {'upiId': 'gomti@okhdfcbank', 'payeeName': 'Ramesh Gupta'}}, tok)
+               'signedName': 'Ramesh Gupta', 'contractVersion': 'library-2026-10-13', 'payout': {'upiId': 'gomti@okhdfcbank', 'payeeName': 'Ramesh Gupta'}}, tok)
     api({'action': 'sendOTP', 'email': 'swapsutra@gmail.com'})
     atok = api({'action': 'verifyOTP', 'email': 'swapsutra@gmail.com', 'otp': otp('swapsutra@gmail.com')})['sessionToken']
     ok = api({'action': 'adminReviewPartner', 'id': app.get('id'), 'decision': 'approve'}, atok)
