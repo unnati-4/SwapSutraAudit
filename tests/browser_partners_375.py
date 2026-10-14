@@ -74,7 +74,7 @@ def ck(label, cond, detail=''):
 def no_hscroll(pg): return pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
 def shot(pg, name):
     if SHOTS: pg.screenshot(path=os.path.join(SHOTS, name + '.png'), full_page=True)
-SPLASH = "sessionStorage.setItem('swapsutraSplashShown','true');"
+SPLASH = "try{sessionStorage.setItem('swapsutraSplashShown','true');}catch(e){}"
 with sync_playwright() as p:
     b = p.chromium.launch()
     # A. Library
@@ -112,6 +112,8 @@ with sync_playwright() as p:
     ft = pg.locator('[data-testid="partner-register-form"]').inner_text()
     ck('...with an alternative mobile number and email (optional)', 'Alternative mobile number (optional)' in ft and 'Alternative email (optional)' in ft)
     ck('...which says shipping and delivery are the partner\'s responsibility', "Shipping and delivery are the partner's responsibility" in pg.locator('[data-testid="partner-contract"]').inner_text())
+    ck('Form: who can buy or rent from you (all of India, or nearby with a distance)', pg.locator('[data-testid="partner-service-area"]').count() == 1
+       and 'Readers all over India' in pg.locator('[data-testid="partner-service-area"]').inner_text())
     ck('Form: no horizontal scroll', no_hscroll(pg))
     shot(pg, 'partners-form')
     # 13 Oct 2026: online-only and unregistered bookstores
@@ -145,7 +147,7 @@ with sync_playwright() as p:
     # C. approved partner dashboard
     state["dash"] = DASH
     ctx = b.new_context(viewport={'width': 375, 'height': 812}, is_mobile=True, has_touch=True)
-    ctx.add_init_script(SPLASH + "localStorage.setItem('swapsutraUserEmail','shop@e.com');localStorage.setItem('swapsutraSessionToken','tok');")
+    ctx.add_init_script(SPLASH + "try{localStorage.setItem('swapsutraUserEmail','shop@e.com');localStorage.setItem('swapsutraSessionToken','tok');}catch(e){}")
     pg = ctx.new_page(); pg.on('pageerror', lambda e: errs.append(str(e) + ' @ ' + pg.url + ' ' + str(getattr(e, 'stack', ''))[:400]))
     pg.route("**/api/swapsutra**", api); pg.route("https://drive.google.com/**", drive)
     pg.goto(BASE + '/partners'); pg.wait_for_timeout(2500)
@@ -163,10 +165,20 @@ with sync_playwright() as p:
     pg.click('.pp-tabs >> text=Books & stock'); pg.wait_for_timeout(300)
     ck('Books & stock: copies can be changed', pg.locator('input[aria-label="Copies of Dune"]').count() == 1)
     ck('The buyer is never named on the dashboard', 'req@' not in pg.content())
+    # 14 Oct 2026: all of India, or only nearby
+    pg.click('.pp-tabs >> text=Account'); pg.wait_for_timeout(400)
+    reach = pg.locator('[data-testid="partner-reach"]')
+    ck('Account: who can buy or rent — all of India by default', reach.count() == 1 and 'readers all over India' in reach.inner_text())
+    reach.locator('label:has-text("Only readers near me")').click(); pg.wait_for_timeout(200)
+    reach.locator('select[name="serviceRadiusKm"]').select_option('25')
+    reach.locator('button:has-text("Save")').click(); pg.wait_for_timeout(600)
+    sent = state["bodies"].get('updatePartnerProfile', {})
+    ck('..."Only readers near me, within 25 km" is saved', sent.get('serviceArea') == 'nearby' and sent.get('serviceRadiusKm') == 25, str(sent))
+    ck('Account: no horizontal scroll', no_hscroll(pg))
     ctx.close()
     # D. admin consoles
     ctx = b.new_context(viewport={'width': 375, 'height': 812}, is_mobile=True, has_touch=True)
-    ctx.add_init_script(SPLASH + "localStorage.setItem('swapsutraUserEmail','swapsutra@gmail.com');localStorage.setItem('swapsutraSessionToken','tok');localStorage.setItem('swapsutraUserRole','admin');")
+    ctx.add_init_script(SPLASH + "try{localStorage.setItem('swapsutraUserEmail','swapsutra@gmail.com');localStorage.setItem('swapsutraSessionToken','tok');localStorage.setItem('swapsutraUserRole','admin');}catch(e){}")
     pg = ctx.new_page(); pg.on('pageerror', lambda e: errs.append(str(e) + ' @ ' + pg.url + ' ' + str(getattr(e, 'stack', ''))[:400]))
     pg.route("**/api/swapsutra**", api); pg.route("https://drive.google.com/**", drive)
     pg.goto(BASE + '/management'); pg.wait_for_timeout(2500)

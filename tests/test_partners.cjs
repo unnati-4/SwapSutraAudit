@@ -555,6 +555,27 @@ console.log('--- payout details at registration (11 Oct 2026) ---');
   C('Without either, nothing is saved', env.api.savePayoutAccount({}).success === false);
 }
 
+console.log('--- where a partner sells: all of India or nearby (14 Oct 2026) ---');
+{
+  const env = partnerEnv();
+  env.as('reach@x.com');
+  const noPin = env.api.submitPartnerApplication(app({ name: 'Reach Books', address: '', lat: '', lng: '', instagram: '@reach', typeFields: { sellsFrom: 'online' }, panNumber: '', docs: { aadhaar: PNG },
+    serviceArea: 'nearby', serviceRadiusKm: 10 }));
+  C('"Only nearby" needs a Google pin to measure from', noPin.errors && /Pin your location/.test(noPin.errors.location || ''), JSON.stringify(noPin.errors));
+  const ok = env.api.submitPartnerApplication(app({ name: 'Reach Books', serviceArea: 'nearby', serviceRadiusKm: 15 }));
+  C('A shop can choose "within 15 km"', ok.success && pobj(env).serviceArea === 'nearby' && Number(pobj(env).serviceRadiusKm) === 15, JSON.stringify(ok));
+  const pdf = env.files.filter(f => f.folder === 'SwapSutra Partner Agreements').pop();
+  C('…and the signed agreement records it', /Readers within 15 km/.test(String(pdf && pdf.blob.bytes)));
+  const e2 = partnerEnv(); e2.as('india@x.com');
+  e2.api.submitPartnerApplication(app({ name: 'India Books' }));
+  C('Without a choice, a partner sells all over India', pobj(e2).serviceArea === 'india');
+  const ui = fs.readFileSync(path.join(root, 'src/components/partners/ServiceAreaFields.tsx'), 'utf8');
+  C('The form and the dashboard offer the choice', /all over India/.test(ui) && /Only readers near me/.test(ui)
+    && /ServiceAreaFields/.test(fs.readFileSync(path.join(root, 'src/components/partners/PartnerRegister.tsx'), 'utf8'))
+    && /ServiceAreaFields/.test(fs.readFileSync(path.join(root, 'src/components/partners/PartnerDashboard.tsx'), 'utf8')));
+  C('The radius choices match on both sides', JSON.stringify(getv(env, 'PARTNER_RADIUS_CHOICES_KM')) === (ui.match(/RADIUS_CHOICES_KM = (\[[^\]]+\])/) || [])[1].replace(/\s/g, ''));
+}
+
 console.log('--- the signed agreement copy (13 Oct 2026) ---');
 {
   const env = partnerEnv();

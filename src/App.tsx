@@ -3802,6 +3802,13 @@ const BookDetailModal = memo(({
                       {' '}{(book as any).sellerName}{Number((book as any).stock) > 0 ? ` · ${(book as any).stock} in stock` : ''}
                     </p>
                   )}
+                  {(book as any).sellerType && (book as any).serviceArea && (
+                    <p className="text-xs text-[var(--text-secondary)]" data-testid="partner-reach-label">
+                      {(book as any).serviceArea === 'nearby'
+                        ? `📍 Sells and rents only within ${(book as any).serviceRadiusKm} km${(book as any).serviceCity ? ` of ${(book as any).serviceCity}` : ''} — you'll be asked for your location when you request it.`
+                        : '🚚 Sells and rents to readers all over India.'}
+                    </p>
+                  )}
                   <span className={`inline-block px-3 py-1 rounded-full text-2xs font-bold uppercase tracking-widest border ${book.genre ? 'border-brand-gold/30 bg-brand-gold/10 text-brand-gold-text' : 'border-brand-border/60 text-[var(--text-secondary)] italic'}`}>
                     {book.genre || 'Genre not specified'}
                   </span>
@@ -11704,6 +11711,22 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [activeTab, notifications.length]);
 
+  // 14 Oct 2026 (owner's request): a partner may sell and rent only within
+  // N km. For its books the request carries the reader's location, which the
+  // server checks (createSwapRequest → OUT_OF_AREA / LOCATION_NEEDED).
+  const readerLocationFor = async (book: any): Promise<{ readerLat?: number; readerLng?: number }> => {
+    if (!book || book.serviceArea !== 'nearby') return {};
+    if (userCoords) return { readerLat: userCoords.lat, readerLng: userCoords.lng };
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return {};
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { setUserCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }); resolve({ readerLat: pos.coords.latitude, readerLng: pos.coords.longitude }); },
+        () => resolve({}),
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 10 * 60 * 1000 }
+      );
+    });
+  };
+
   const handleCreateSwapRequest = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (userTier === 'expired' && !isAdmin) {
@@ -11738,7 +11761,8 @@ export default function App() {
       swapPreference: swapFormPreference,
       message: formData.get('notes'),
       policy_accepted: 'TRUE',
-      policy_accepted_at: new Date().toISOString()
+      policy_accepted_at: new Date().toISOString(),
+      ...(await readerLocationFor(showSwapModal)),
       // No UTR/payment is sent at request time. Security-fee payment is
       // collected AFTER acceptance, through submitSecurityFeePayment /
       // SecurityFeePayments — the only path with any authority over
@@ -11804,6 +11828,7 @@ export default function App() {
       message: formData.get('notes'),
       policy_accepted: 'TRUE',
       policy_accepted_at: new Date().toISOString(),
+      ...(await readerLocationFor(book)),
     };
 
     try {

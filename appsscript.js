@@ -9103,6 +9103,22 @@ function createSwapRequest(data) {
   const requestedBook = {};
   bookHeaders.forEach((h, i) => requestedBook[h] = requestedBookRow[i]);
   // Launch check (11 Oct 2026): not your own book, and not the same request twice.
+  // 14 Oct 2026 (owner's request): a partner that serves only nearby readers.
+  {
+    const partner = approvedPartner_(requestedBook.ownerEmail);
+    const sa = partner ? partnerServiceArea_(partner) : null;
+    if (sa && sa.area === 'nearby') {
+      const rLat = Number(data.readerLat), rLng = Number(data.readerLng);
+      const where = sa.radiusKm + ' km of ' + (sa.city || 'their store');
+      if (data.readerLat === undefined || data.readerLat === '' || !isFinite(rLat) || !isFinite(rLng) || (!rLat && !rLng)) {
+        return { success: false, error: 'LOCATION_NEEDED', radiusKm: sa.radiusKm, message: partner.name + ' sells and rents only within ' + where + '. Allow your location so SwapSutra can check you are in range.' };
+      }
+      const km = distanceKm_(rLat, rLng, sa.lat, sa.lng);
+      if (km > sa.radiusKm) {
+        return { success: false, error: 'OUT_OF_AREA', radiusKm: sa.radiusKm, distanceKm: Math.round(km), message: partner.name + ' sells and rents only within ' + where + ' — you are about ' + Math.round(km) + ' km away.' };
+      }
+    }
+  }
   if (normalizeEmail(requestedBook.ownerEmail) === normalizedEmail) {
     return { success: false, error: 'OWN_BOOK', message: 'This is your own book.' };
   }
@@ -17618,8 +17634,8 @@ function getBooksResponse(params) {
   if (!payload) {
     const built = buildLibraryPayload();
     payload = audience === 'admin'
-      ? built.all
-      : built.publicBooks.map(redactBookForAudience);
+      ? built.all.map(withPartnerServiceArea_)
+      : built.publicBooks.map(withPartnerServiceArea_).map(redactBookForAudience);
     libraryCacheWrite(cacheName, payload);
   }
 
@@ -27116,8 +27132,56 @@ const PARTNER_HEADERS = [
   // 11 Oct 2026 (owner's request): an alternative mobile number and email.
   'altPhone', 'altEmail', 'bannerClicks',
   // 13 Oct 2026 (owner's request): the signed agreement (PDF) saved in Drive.
-  'agreementFileId'
+  'agreementFileId',
+  // 14 Oct 2026 (owner's request): all of India, or only within N km.
+  'serviceArea', 'serviceRadiusKm'
 ];
+
+/*
+ * Where a partner sells and rents (14 Oct 2026, owner's request): all over
+ * India (by courier), or only nearby — within serviceRadiusKm of the
+ * partner's Google pin. A reader outside that circle cannot request the
+ * partner's books; the Library shows each partner book's reach.
+ */
+const PARTNER_RADIUS_CHOICES_KM = [2, 5, 10, 15, 25, 50, 100];
+function partnerServiceArea_(p) {
+  const nearby = String((p || {}).serviceArea || '').toLowerCase() === 'nearby';
+  const r = Number((p || {}).serviceRadiusKm);
+  const lat = Number((p || {}).lat), lng = Number((p || {}).lng);
+  const pinned = (p || {}).lat !== '' && (p || {}).lat !== undefined && isFinite(lat) && isFinite(lng) && (lat || lng);
+  if (!nearby || !pinned) return { area: 'india', radiusKm: 0, city: String((p || {}).city || ''), lat: null, lng: null };
+  return { area: 'nearby', radiusKm: PARTNER_RADIUS_CHOICES_KM.indexOf(r) !== -1 ? r : 10, city: String(p.city || ''), lat: lat, lng: lng };
+}
+function distanceKm_(lat1, lng1, lat2, lng2) {
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+/** Validates the form's choice. Returns { fields, errors }. */
+function cleanPartnerServiceArea_(d, hasPin) {
+  const out = { fields: {}, errors: {} };
+  if (d.serviceArea === undefined) return out;
+  const area = String(d.serviceArea || '').toLowerCase() === 'nearby' ? 'nearby' : 'india';
+  out.fields.serviceArea = area;
+  if (area === 'nearby') {
+    const r = Number(d.serviceRadiusKm);
+    if (PARTNER_RADIUS_CHOICES_KM.indexOf(r) === -1) out.errors.serviceRadiusKm = 'Choose how far you deliver (' + PARTNER_RADIUS_CHOICES_KM.join(', ') + ' km).';
+    else out.fields.serviceRadiusKm = r;
+    if (!hasPin) out.errors.location = 'Pin your location on Google Maps — the distance is measured from it.';
+  } else out.fields.serviceRadiusKm = '';
+  return out;
+}
+/** Adds a partner book's reach to a Library book (and the partner's pin, for members, when the book has none). */
+function withPartnerServiceArea_(book) {
+  if (!book || !book.sellerType) return book;
+  const partner = approvedPartner_(book.ownerEmail);
+  if (!partner) return book;
+  const sa = partnerServiceArea_(partner);
+  const out = Object.assign({}, book, { serviceArea: sa.area, serviceRadiusKm: sa.radiusKm, serviceCity: sa.city });
+  if (sa.area === 'nearby' && !(book.latitude && book.longitude)) { out.latitude = sa.lat; out.longitude = sa.lng; }
+  return out;
+}
 const PARTNER_STATUSES = ['PENDING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUSPENDED'];
 const PARTNER_AD_PAYMENT_HEADERS = ['id', 'partnerId', 'email', 'amount', 'months', 'utr', 'screenshotUrl', 'status', 'periodFrom', 'periodTo', 'reviewedBy', 'reviewedAt', 'reason', 'createdAt'];
 const PARTNER_DOC_MAX_BYTES = 4 * 1024 * 1024;
@@ -27371,6 +27435,11 @@ function validatePartnerApplication_(d, existingDocs) {
     if (!(isFinite(clean.lat) && isFinite(clean.lng) && Math.abs(clean.lat) <= 90 && Math.abs(clean.lng) <= 180 && (clean.lat || clean.lng))) errors.location = 'Pin your location on Google Maps.';
   }
   if (!(isFinite(clean.lat) && isFinite(clean.lng)) || (!clean.lat && !clean.lng)) { clean.lat = ''; clean.lng = ''; }
+  {
+    const sa = cleanPartnerServiceArea_({ serviceArea: d.serviceArea || 'india', serviceRadiusKm: d.serviceRadiusKm }, clean.lat !== '');
+    Object.assign(clean, sa.fields);
+    Object.keys(sa.errors).forEach(k => { if (!errors[k]) errors[k] = sa.errors[k]; });
+  }
   const registered = partnerIsRegistered_(type, tfIn);
   if (clean.registeredName.length < 2) errors.registeredName = partnerAadhaarOnly_(type, tfIn) ? 'Your name as on your Aadhaar card.'
     : (type === 'bookstore' || type === 'publisher' || type === 'library') && registered
@@ -27484,6 +27553,7 @@ function partnerAgreementHtml_(rec) {
     + row('PAN', rec.panNumber ? String(rec.panNumber).slice(0, 2) + '•••••' + String(rec.panNumber).slice(-3) : '')
     + row('Aadhaar (last 4 digits)', rec.aadhaarLast4)
     + row('Sells', tf.sellsFrom === 'online' ? 'Online only' : tf.sellsFrom === 'both' ? 'Shop and online' : '')
+    + row('Sells and rents to', rec.serviceArea === 'nearby' ? 'Readers within ' + rec.serviceRadiusKm + ' km' : 'Readers all over India')
     + row('Registration', tf.registered === 'no' ? 'Not registered (declared)' : '')
     + '</table>'
     + agreementMdToHtml_(md)
@@ -27568,6 +27638,7 @@ function submitPartnerApplication(data) {
       id: id, type: c.type, email: caller, status: 'PENDING', name: c.name, contactName: c.contactName, phone: c.phone, altPhone: c.altPhone, altEmail: c.altEmail, about: c.about,
       website: c.website, instagram: c.instagram, address: c.address, city: c.city, pincode: c.pincode, lat: c.lat, lng: c.lng,
       placeLabel: c.placeLabel, registeredName: c.registeredName, gstin: c.gstin, panNumber: c.panNumber, aadhaarLast4: c.aadhaarLast4,
+      serviceArea: c.serviceArea, serviceRadiusKm: c.serviceRadiusKm,
       docsJson: JSON.stringify(docs), typeFieldsJson: JSON.stringify(c.typeFields), showBanner: c.showBanner ? 'TRUE' : 'FALSE', runAds: c.runAds ? 'TRUE' : 'FALSE',
       contractVersion: PARTNER_CONTRACT_VERSIONS[c.type], contractSignedName: c.signedName, contractSignedAt: now, reviewNote: '',
       updatedAt: now, submittedAt: now
@@ -27702,6 +27773,10 @@ function partnerPublicView_(p, forAdmin) {
   out.sellsFrom = partnerSellsFrom_(p.type, tfv);
   out.registered = partnerIsRegistered_(p.type, tfv);
   out.aadhaarOnly = partnerAadhaarOnly_(p.type, tfv);
+  const sav = partnerServiceArea_(p);
+  out.serviceArea = sav.area;
+  out.serviceRadiusKm = sav.radiusKm;
+  out.radiusChoices = PARTNER_RADIUS_CHOICES_KM;
   if (forAdmin) {
     out.panNumber = p.panNumber;
     out.agreementUrl = p.agreementFileId ? 'https://drive.google.com/file/d/' + p.agreementFileId + '/view' : '';
@@ -27787,6 +27862,12 @@ function updatePartnerProfile(data) {
     if (isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) { fields.lat = lat; fields.lng = lng; fields.placeLabel = cleanPartnerText_(d.placeLabel, 120); }
     else errors.location = 'Pin your location on Google Maps.';
   }
+  if (d.serviceArea !== undefined) {
+    const pinned = fields.lat !== undefined || (hit.obj.lat !== '' && hit.obj.lat !== undefined && hit.obj.lat !== null);
+    const sa = cleanPartnerServiceArea_(d, pinned);
+    Object.assign(fields, sa.fields);
+    Object.assign(errors, sa.errors);
+  }
   if (d.showBanner !== undefined) fields.showBanner = truthy_(d.showBanner) ? 'TRUE' : 'FALSE';
   if (d.runAds !== undefined) fields.runAds = truthy_(d.runAds) ? 'TRUE' : 'FALSE';
   if (d.bannerHeadline !== undefined || d.bannerTagline !== undefined) {
@@ -27797,6 +27878,7 @@ function updatePartnerProfile(data) {
   if (Object.keys(errors).length) return { success: false, errors: errors, message: 'Please fix the highlighted fields.' };
   fields.updatedAt = new Date();
   setPartnerFields_(hit.rowIndex, partnerRows_().headers, fields);
+  if (fields.serviceArea !== undefined || fields.lat !== undefined) { try { invalidateLibraryCache(); } catch (e) { /* expires by itself */ } }
   return { success: true, message: 'Saved.' };
 }
 

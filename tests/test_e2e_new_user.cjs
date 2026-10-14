@@ -213,6 +213,23 @@ console.log('--- a library partner ---');
   const res = H.playRoom(rt, req.id, { owner: { token: P }, requester: { token: a.token } }, { admin, route: 'courier' });
   C('The sale runs to the end; the partner is paid ₹294 (2% commission), no seller fee', res.done && ledger(rt) === 'commission:6 sale:294', ledger(rt));
   C('...and one copy leaves the stock (3 → 2), the book stays listed', rt.get({ action: 'getBooks' }).find(x => x.id === bk.id).stock === 2);
+  // 14 Oct 2026: a partner may sell and rent only nearby.
+  C('A partner sells all over India unless it says otherwise', rt.get({ action: 'getBooks' }).find(x => x.id === bk.id).serviceArea === 'india');
+  const bad = rt.post({ action: 'updatePartnerProfile', serviceArea: 'nearby', serviceRadiusKm: 7 }, P);
+  C('Only the offered distances can be chosen', bad.success === false && bad.errors.serviceRadiusKm);
+  const near = rt.post({ action: 'updatePartnerProfile', serviceArea: 'nearby', serviceRadiusKm: 5 }, P);
+  const lb = rt.get({ action: 'getBooks' }).find(x => x.id === bk.id);
+  C('The partner switches to "within 5 km" and the Library shows it', near.success && lb.serviceArea === 'nearby' && lb.serviceRadiusKm === 5 && lb.serviceCity === 'Lucknow', JSON.stringify(near));
+  const sell = (extra) => rt.post(Object.assign({ action: 'createSwapRequest', serviceType: 'SELL', receiverBookId: bk.id, requestedBookTitle: 'Wings of Fire', policy_accepted: 'TRUE' }, extra), a.token);
+  const noLoc = sell({});
+  C('A reader who gives no location is asked for it', noLoc.success === false && noLoc.error === 'LOCATION_NEEDED' && /within 5 km of Lucknow/.test(noLoc.message), JSON.stringify(noLoc));
+  const far = sell({ readerLat: 28.61, readerLng: 77.21 });
+  C('A reader in Delhi (~420 km away) cannot request it', far.success === false && far.error === 'OUT_OF_AREA' && far.distanceKm > 400, JSON.stringify(far));
+  const neha = H.signup(rt, 'Neha Lucknow', 'neha.lko@gmail.com', '9812312312').token;
+  const inRange = rt.post({ action: 'createSwapRequest', serviceType: 'SELL', receiverBookId: bk.id, requestedBookTitle: 'Wings of Fire', policy_accepted: 'TRUE', readerLat: 26.87, readerLng: 80.97 }, neha);
+  C('A reader 3 km away can', inRange.success === true, JSON.stringify(inRange));
+  const back = rt.post({ action: 'updatePartnerProfile', serviceArea: 'india' }, P);
+  C('…and the partner can go back to all of India', back.success && rt.get({ action: 'getBooks' }).find(x => x.id === bk.id).serviceArea === 'india');
   const appr = rt.mailTo('gomti.library@gmail.com').filter(e => /partner/.test(e.subject));
   C('Partner emails link to the live site', appr.length > 0 && rt.mailTo('gomti.library@gmail.com').every(e => !/run\.app/.test(String(e.body || e.htmlBody))));
 }
