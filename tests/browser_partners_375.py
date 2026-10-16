@@ -53,6 +53,8 @@ def api(route):
     u = req.url; act = body.get('action') or (u.split('action=')[1].split('&')[0] if 'action=' in u else '')
     state["calls"].append(act); state["bodies"][act] = body
     if act == 'getBooks': return route.fulfill(json={"success": True, "data": BOOKS})
+    if act == 'partnerBulkAddBooks': return route.fulfill(json={"success": True, "added": len(body.get('rows', [])) - 1, "failed": 1,
+        "results": [dict(line=int(r['line']), title=r.get('title', ''), ok=(i > 0), message=(None if i > 0 else 'Already on your shelf — change its copies in Books & stock.')) for i, r in enumerate(body.get('rows', []))]})
     if act == 'getSponsoredAds': return route.fulfill(json={"success": True, "items": ADS})
     if act == 'getMugProducts': return route.fulfill(json={"success": True, "items": MUGS})
     if act == 'sendOTP': return route.fulfill(json={"success": True})
@@ -74,7 +76,7 @@ def ck(label, cond, detail=''):
 def no_hscroll(pg): return pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
 def shot(pg, name):
     if SHOTS: pg.screenshot(path=os.path.join(SHOTS, name + '.png'), full_page=True)
-SPLASH = "sessionStorage.setItem('swapsutraSplashShown','true');"
+SPLASH = "try{sessionStorage.setItem('swapsutraSplashShown','true');}catch(e){}"
 with sync_playwright() as p:
     b = p.chromium.launch()
     # A. Library
@@ -112,6 +114,8 @@ with sync_playwright() as p:
     ft = pg.locator('[data-testid="partner-register-form"]').inner_text()
     ck('...with an alternative mobile number and email (optional)', 'Alternative mobile number (optional)' in ft and 'Alternative email (optional)' in ft)
     ck('...which says shipping and delivery are the partner\'s responsibility', "Shipping and delivery are the partner's responsibility" in pg.locator('[data-testid="partner-contract"]').inner_text())
+    ck('Form: who can buy or rent from you (all of India, or nearby with a distance)', pg.locator('[data-testid="partner-service-area"]').count() == 1
+       and 'Readers all over India' in pg.locator('[data-testid="partner-service-area"]').inner_text())
     ck('Form: no horizontal scroll', no_hscroll(pg))
     shot(pg, 'partners-form')
     # 13 Oct 2026: online-only and unregistered bookstores
@@ -145,7 +149,7 @@ with sync_playwright() as p:
     # C. approved partner dashboard
     state["dash"] = DASH
     ctx = b.new_context(viewport={'width': 375, 'height': 812}, is_mobile=True, has_touch=True)
-    ctx.add_init_script(SPLASH + "localStorage.setItem('swapsutraUserEmail','shop@e.com');localStorage.setItem('swapsutraSessionToken','tok');")
+    ctx.add_init_script(SPLASH + "try{localStorage.setItem('swapsutraUserEmail','shop@e.com');localStorage.setItem('swapsutraSessionToken','tok');}catch(e){}")
     pg = ctx.new_page(); pg.on('pageerror', lambda e: errs.append(str(e) + ' @ ' + pg.url + ' ' + str(getattr(e, 'stack', ''))[:400]))
     pg.route("**/api/swapsutra**", api); pg.route("https://drive.google.com/**", drive)
     pg.goto(BASE + '/partners'); pg.wait_for_timeout(2500)
@@ -162,11 +166,39 @@ with sync_playwright() as p:
     shot(pg, 'partner-promo')
     pg.click('.pp-tabs >> text=Books & stock'); pg.wait_for_timeout(300)
     ck('Books & stock: copies can be changed', pg.locator('input[aria-label="Copies of Dune"]').count() == 1)
+    # 16 Oct 2026: many books at once
+    pg.click('[data-testid="bulk-open"]'); pg.wait_for_timeout(200)
+    tsv = "isbn\ttitle\tauthor\tcopies\tsell_price\tlend\n9780143440048\tIgnited Minds\tA P J Abdul Kalam\t4\t250\tno\n9780062315007\t\"The Alchemist, 25th\"\tPaulo Coelho\t\t\tyes\n12345\tBad\tNobody\t\t10\t\n9780140449136\tNo mode\tDostoevsky\t\t\t\n"
+    pg.fill('[data-testid="bulk-paste"]', tsv); pg.wait_for_timeout(300)
+    ck('Bulk: rows pasted from a spreadsheet are read, problems shown before sending', '4 books found' in pg.locator('[data-testid="bulk-summary"]').inner_text()
+       and '2 ready' in pg.locator('[data-testid="bulk-summary"]').inner_text() and 'The Alchemist, 25th' in pg.locator('[data-testid="bulk-add"]').inner_text()
+       and 'ISBN must have 10 or 13 digits' in pg.locator('[data-testid="bulk-add"]').inner_text())
+    ck('…nothing is sent until the copies are confirmed original', pg.locator('[data-testid="bulk-send"]').is_disabled())
+    ck('Bulk: no horizontal page scroll', no_hscroll(pg))
+    shot(pg, 'partner-bulk')
+    pg.check('[data-testid="bulk-declare"]'); pg.click('[data-testid="bulk-send"]'); pg.wait_for_timeout(1200)
+    sent = state["bodies"].get('partnerBulkAddBooks', {})
+    rows_sent = sent.get('rows', [])
+    ck('…only the ready rows are sent, with the columns mapped', len(rows_sent) == 2 and rows_sent[0].get('sellPrice') == '250' and rows_sent[0].get('copies') == '4'
+       and rows_sent[1].get('lend') == 'yes' and sent.get('originalDeclared') is True, str(sent)[:300])
+    res = pg.locator('[data-testid="bulk-result"]').inner_text() if pg.locator('[data-testid="bulk-result"]').count() else ''
+    fails = pg.locator('[data-testid="bulk-failures"]').inner_text() if pg.locator('[data-testid="bulk-failures"]').count() else ''
+    ck('…and the result says what was listed and what to fix, by line', '1 book listed' in res and 'Line 2' in fails and 'Already on your shelf' in fails and 'Line 4' in fails and 'Line 5' in fails, res + ' | ' + fails)
     ck('The buyer is never named on the dashboard', 'req@' not in pg.content())
+    # 14 Oct 2026: all of India, or only nearby
+    pg.click('.pp-tabs >> text=Account'); pg.wait_for_timeout(400)
+    reach = pg.locator('[data-testid="partner-reach"]')
+    ck('Account: who can buy or rent — all of India by default', reach.count() == 1 and 'readers all over India' in reach.inner_text())
+    reach.locator('label:has-text("Only readers near me")').click(); pg.wait_for_timeout(200)
+    reach.locator('select[name="serviceRadiusKm"]').select_option('25')
+    reach.locator('button:has-text("Save")').click(); pg.wait_for_timeout(600)
+    sent = state["bodies"].get('updatePartnerProfile', {})
+    ck('..."Only readers near me, within 25 km" is saved', sent.get('serviceArea') == 'nearby' and sent.get('serviceRadiusKm') == 25, str(sent))
+    ck('Account: no horizontal scroll', no_hscroll(pg))
     ctx.close()
     # D. admin consoles
     ctx = b.new_context(viewport={'width': 375, 'height': 812}, is_mobile=True, has_touch=True)
-    ctx.add_init_script(SPLASH + "localStorage.setItem('swapsutraUserEmail','swapsutra@gmail.com');localStorage.setItem('swapsutraSessionToken','tok');localStorage.setItem('swapsutraUserRole','admin');")
+    ctx.add_init_script(SPLASH + "try{localStorage.setItem('swapsutraUserEmail','swapsutra@gmail.com');localStorage.setItem('swapsutraSessionToken','tok');localStorage.setItem('swapsutraUserRole','admin');}catch(e){}")
     pg = ctx.new_page(); pg.on('pageerror', lambda e: errs.append(str(e) + ' @ ' + pg.url + ' ' + str(getattr(e, 'stack', ''))[:400]))
     pg.route("**/api/swapsutra**", api); pg.route("https://drive.google.com/**", drive)
     pg.goto(BASE + '/management'); pg.wait_for_timeout(2500)

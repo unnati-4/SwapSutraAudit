@@ -6392,6 +6392,7 @@ function doPostHandler_(e) {
     if (action === 'uploadPartnerAdImage') return respondJson(uploadPartnerAdImage(data));
     if (action === 'submitPartnerAdPayment') return respondJson(submitPartnerAdPayment(data));
     if (action === 'setPartnerBookStock') return respondJson(setPartnerBookStock(data));
+    if (action === 'partnerBulkAddBooks') return respondJson(partnerBulkAddBooks(data));
     if (action === 'adminListPartners') return respondJson(adminListPartners());
     if (action === 'adminReviewPartner') return respondJson(adminReviewPartner(data));
     if (action === 'adminReviewPartnerBanner') return respondJson(adminReviewPartnerBanner(data));
@@ -7983,7 +7984,11 @@ function createBook(data) {
   // inside page just as happily as a correct one — the server never knew
   // which slot any file belonged to, because the client sent an unlabelled
   // array and the order was taken on trust.
-  const mediaCheck = validateRequiredBookMedia(data);
+  // A partner's bulk upload (16 Oct 2026) has no photos: the cover comes
+  // from the ISBN. Only partnerBulkAddBooks sets __SS_PARTNER_BULK__ — a
+  // field in the request cannot.
+  const bulkCover = __SS_PARTNER_BULK__ && approvedPartner_(ownerEmail) ? partnerBulkCoverUrl_(data) : '';
+  const mediaCheck = bulkCover ? { ok: true, accepted: {}, imagesForLegacyArray: [] } : validateRequiredBookMedia(data);
   if (!mediaCheck.ok) {
     return {
       success: false,
@@ -8029,7 +8034,7 @@ function createBook(data) {
   // The four required media go up as four known slots, so the row can
   // record which file is which. The joined imageUrls string is derived
   // from the same uploads afterwards, for the screens that still read it.
-  const mediaUpload = uploadRequiredBookMedia(id, mediaCheck.accepted);
+  const mediaUpload = bulkCover ? { folderId: '', urls: {} } : uploadRequiredBookMedia(id, mediaCheck.accepted);
   const uploadResult = {
     folderId: mediaUpload.folderId,
     imageUrls: REQUIRED_BOOK_MEDIA
@@ -8123,7 +8128,7 @@ function createBook(data) {
     else if (h === 'sell') row[i] = flags.sell ? "TRUE" : "FALSE";
     else if (h === 'available_for_swap') row[i] = flags.available_for_swap ? "TRUE" : "FALSE";
     else if (h === 'rent_sale_mode') row[i] = flags.rent_sale_mode;
-    else if (h === 'imageUrls') row[i] = uploadResult.imageUrls;
+    else if (h === 'imageUrls') row[i] = bulkCover || uploadResult.imageUrls;
     else if (h === 'driveFolderId') row[i] = uploadResult.folderId;
     else if (h === 'notes') row[i] = data.notes;
     // A partner (bookstore, publisher…) keeps a stock count; readers have one copy.
@@ -9103,6 +9108,22 @@ function createSwapRequest(data) {
   const requestedBook = {};
   bookHeaders.forEach((h, i) => requestedBook[h] = requestedBookRow[i]);
   // Launch check (11 Oct 2026): not your own book, and not the same request twice.
+  // 14 Oct 2026 (owner's request): a partner that serves only nearby readers.
+  {
+    const partner = approvedPartner_(requestedBook.ownerEmail);
+    const sa = partner ? partnerServiceArea_(partner) : null;
+    if (sa && sa.area === 'nearby') {
+      const rLat = Number(data.readerLat), rLng = Number(data.readerLng);
+      const where = sa.radiusKm + ' km of ' + (sa.city || 'their store');
+      if (data.readerLat === undefined || data.readerLat === '' || !isFinite(rLat) || !isFinite(rLng) || (!rLat && !rLng)) {
+        return { success: false, error: 'LOCATION_NEEDED', radiusKm: sa.radiusKm, message: partner.name + ' sells and rents only within ' + where + '. Allow your location so SwapSutra can check you are in range.' };
+      }
+      const km = distanceKm_(rLat, rLng, sa.lat, sa.lng);
+      if (km > sa.radiusKm) {
+        return { success: false, error: 'OUT_OF_AREA', radiusKm: sa.radiusKm, distanceKm: Math.round(km), message: partner.name + ' sells and rents only within ' + where + ' — you are about ' + Math.round(km) + ' km away.' };
+      }
+    }
+  }
   if (normalizeEmail(requestedBook.ownerEmail) === normalizedEmail) {
     return { success: false, error: 'OWN_BOOK', message: 'This is your own book.' };
   }
@@ -17618,8 +17639,8 @@ function getBooksResponse(params) {
   if (!payload) {
     const built = buildLibraryPayload();
     payload = audience === 'admin'
-      ? built.all
-      : built.publicBooks.map(redactBookForAudience);
+      ? built.all.map(withPartnerServiceArea_)
+      : built.publicBooks.map(withPartnerServiceArea_).map(redactBookForAudience);
     libraryCacheWrite(cacheName, payload);
   }
 
@@ -27116,8 +27137,56 @@ const PARTNER_HEADERS = [
   // 11 Oct 2026 (owner's request): an alternative mobile number and email.
   'altPhone', 'altEmail', 'bannerClicks',
   // 13 Oct 2026 (owner's request): the signed agreement (PDF) saved in Drive.
-  'agreementFileId'
+  'agreementFileId',
+  // 14 Oct 2026 (owner's request): all of India, or only within N km.
+  'serviceArea', 'serviceRadiusKm'
 ];
+
+/*
+ * Where a partner sells and rents (14 Oct 2026, owner's request): all over
+ * India (by courier), or only nearby — within serviceRadiusKm of the
+ * partner's Google pin. A reader outside that circle cannot request the
+ * partner's books; the Library shows each partner book's reach.
+ */
+const PARTNER_RADIUS_CHOICES_KM = [2, 5, 10, 15, 25, 50, 100];
+function partnerServiceArea_(p) {
+  const nearby = String((p || {}).serviceArea || '').toLowerCase() === 'nearby';
+  const r = Number((p || {}).serviceRadiusKm);
+  const lat = Number((p || {}).lat), lng = Number((p || {}).lng);
+  const pinned = (p || {}).lat !== '' && (p || {}).lat !== undefined && isFinite(lat) && isFinite(lng) && (lat || lng);
+  if (!nearby || !pinned) return { area: 'india', radiusKm: 0, city: String((p || {}).city || ''), lat: null, lng: null };
+  return { area: 'nearby', radiusKm: PARTNER_RADIUS_CHOICES_KM.indexOf(r) !== -1 ? r : 10, city: String(p.city || ''), lat: lat, lng: lng };
+}
+function distanceKm_(lat1, lng1, lat2, lng2) {
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+/** Validates the form's choice. Returns { fields, errors }. */
+function cleanPartnerServiceArea_(d, hasPin) {
+  const out = { fields: {}, errors: {} };
+  if (d.serviceArea === undefined) return out;
+  const area = String(d.serviceArea || '').toLowerCase() === 'nearby' ? 'nearby' : 'india';
+  out.fields.serviceArea = area;
+  if (area === 'nearby') {
+    const r = Number(d.serviceRadiusKm);
+    if (PARTNER_RADIUS_CHOICES_KM.indexOf(r) === -1) out.errors.serviceRadiusKm = 'Choose how far you deliver (' + PARTNER_RADIUS_CHOICES_KM.join(', ') + ' km).';
+    else out.fields.serviceRadiusKm = r;
+    if (!hasPin) out.errors.location = 'Pin your location on Google Maps — the distance is measured from it.';
+  } else out.fields.serviceRadiusKm = '';
+  return out;
+}
+/** Adds a partner book's reach to a Library book (and the partner's pin, for members, when the book has none). */
+function withPartnerServiceArea_(book) {
+  if (!book || !book.sellerType) return book;
+  const partner = approvedPartner_(book.ownerEmail);
+  if (!partner) return book;
+  const sa = partnerServiceArea_(partner);
+  const out = Object.assign({}, book, { serviceArea: sa.area, serviceRadiusKm: sa.radiusKm, serviceCity: sa.city });
+  if (sa.area === 'nearby' && !(book.latitude && book.longitude)) { out.latitude = sa.lat; out.longitude = sa.lng; }
+  return out;
+}
 const PARTNER_STATUSES = ['PENDING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUSPENDED'];
 const PARTNER_AD_PAYMENT_HEADERS = ['id', 'partnerId', 'email', 'amount', 'months', 'utr', 'screenshotUrl', 'status', 'periodFrom', 'periodTo', 'reviewedBy', 'reviewedAt', 'reason', 'createdAt'];
 const PARTNER_DOC_MAX_BYTES = 4 * 1024 * 1024;
@@ -27371,6 +27440,11 @@ function validatePartnerApplication_(d, existingDocs) {
     if (!(isFinite(clean.lat) && isFinite(clean.lng) && Math.abs(clean.lat) <= 90 && Math.abs(clean.lng) <= 180 && (clean.lat || clean.lng))) errors.location = 'Pin your location on Google Maps.';
   }
   if (!(isFinite(clean.lat) && isFinite(clean.lng)) || (!clean.lat && !clean.lng)) { clean.lat = ''; clean.lng = ''; }
+  {
+    const sa = cleanPartnerServiceArea_({ serviceArea: d.serviceArea || 'india', serviceRadiusKm: d.serviceRadiusKm }, clean.lat !== '');
+    Object.assign(clean, sa.fields);
+    Object.keys(sa.errors).forEach(k => { if (!errors[k]) errors[k] = sa.errors[k]; });
+  }
   const registered = partnerIsRegistered_(type, tfIn);
   if (clean.registeredName.length < 2) errors.registeredName = partnerAadhaarOnly_(type, tfIn) ? 'Your name as on your Aadhaar card.'
     : (type === 'bookstore' || type === 'publisher' || type === 'library') && registered
@@ -27484,6 +27558,7 @@ function partnerAgreementHtml_(rec) {
     + row('PAN', rec.panNumber ? String(rec.panNumber).slice(0, 2) + '•••••' + String(rec.panNumber).slice(-3) : '')
     + row('Aadhaar (last 4 digits)', rec.aadhaarLast4)
     + row('Sells', tf.sellsFrom === 'online' ? 'Online only' : tf.sellsFrom === 'both' ? 'Shop and online' : '')
+    + row('Sells and rents to', rec.serviceArea === 'nearby' ? 'Readers within ' + rec.serviceRadiusKm + ' km' : 'Readers all over India')
     + row('Registration', tf.registered === 'no' ? 'Not registered (declared)' : '')
     + '</table>'
     + agreementMdToHtml_(md)
@@ -27568,6 +27643,7 @@ function submitPartnerApplication(data) {
       id: id, type: c.type, email: caller, status: 'PENDING', name: c.name, contactName: c.contactName, phone: c.phone, altPhone: c.altPhone, altEmail: c.altEmail, about: c.about,
       website: c.website, instagram: c.instagram, address: c.address, city: c.city, pincode: c.pincode, lat: c.lat, lng: c.lng,
       placeLabel: c.placeLabel, registeredName: c.registeredName, gstin: c.gstin, panNumber: c.panNumber, aadhaarLast4: c.aadhaarLast4,
+      serviceArea: c.serviceArea, serviceRadiusKm: c.serviceRadiusKm,
       docsJson: JSON.stringify(docs), typeFieldsJson: JSON.stringify(c.typeFields), showBanner: c.showBanner ? 'TRUE' : 'FALSE', runAds: c.runAds ? 'TRUE' : 'FALSE',
       contractVersion: PARTNER_CONTRACT_VERSIONS[c.type], contractSignedName: c.signedName, contractSignedAt: now, reviewNote: '',
       updatedAt: now, submittedAt: now
@@ -27702,6 +27778,10 @@ function partnerPublicView_(p, forAdmin) {
   out.sellsFrom = partnerSellsFrom_(p.type, tfv);
   out.registered = partnerIsRegistered_(p.type, tfv);
   out.aadhaarOnly = partnerAadhaarOnly_(p.type, tfv);
+  const sav = partnerServiceArea_(p);
+  out.serviceArea = sav.area;
+  out.serviceRadiusKm = sav.radiusKm;
+  out.radiusChoices = PARTNER_RADIUS_CHOICES_KM;
   if (forAdmin) {
     out.panNumber = p.panNumber;
     out.agreementUrl = p.agreementFileId ? 'https://drive.google.com/file/d/' + p.agreementFileId + '/view' : '';
@@ -27787,6 +27867,12 @@ function updatePartnerProfile(data) {
     if (isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) { fields.lat = lat; fields.lng = lng; fields.placeLabel = cleanPartnerText_(d.placeLabel, 120); }
     else errors.location = 'Pin your location on Google Maps.';
   }
+  if (d.serviceArea !== undefined) {
+    const pinned = fields.lat !== undefined || (hit.obj.lat !== '' && hit.obj.lat !== undefined && hit.obj.lat !== null);
+    const sa = cleanPartnerServiceArea_(d, pinned);
+    Object.assign(fields, sa.fields);
+    Object.assign(errors, sa.errors);
+  }
   if (d.showBanner !== undefined) fields.showBanner = truthy_(d.showBanner) ? 'TRUE' : 'FALSE';
   if (d.runAds !== undefined) fields.runAds = truthy_(d.runAds) ? 'TRUE' : 'FALSE';
   if (d.bannerHeadline !== undefined || d.bannerTagline !== undefined) {
@@ -27797,6 +27883,7 @@ function updatePartnerProfile(data) {
   if (Object.keys(errors).length) return { success: false, errors: errors, message: 'Please fix the highlighted fields.' };
   fields.updatedAt = new Date();
   setPartnerFields_(hit.rowIndex, partnerRows_().headers, fields);
+  if (fields.serviceArea !== undefined || fields.lat !== undefined) { try { invalidateLibraryCache(); } catch (e) { /* expires by itself */ } }
   return { success: true, message: 'Saved.' };
 }
 
@@ -27918,6 +28005,90 @@ function setPartnerBookStock(data) {
     return { success: true, stock: stock, message: stock ? stock + ' in stock.' : 'Out of stock — it no longer shows in the Library.' };
   }
   return { success: false, message: 'Book not found.' };
+}
+
+// ── Bulk listing for partners (16 Oct 2026, owner's request) ─────────────
+// A partner uploads a CSV (or pastes rows from a spreadsheet); each row is
+// listed through createBook with the same checks as a single listing, except
+// that the cover comes from the ISBN (Open Library) instead of photos. The
+// partner can add their own photos to any book later.
+var __SS_PARTNER_BULK__ = false;
+const PARTNER_BULK_MAX_ROWS = 25;
+function partnerBulkCoverUrl_(data) {
+  const own = String((data || {}).coverImageUrl || '').trim();
+  if (/^https:\/\/[^\s|,]+$/i.test(own)) return own.slice(0, 500);
+  const isbn = normalizeIsbnServer((data || {}).isbn);
+  return isbn ? 'https://covers.openlibrary.org/b/isbn/' + isbn + '-L.jpg?default=false' : '';
+}
+function bulkYes_(v) { return ['yes', 'y', 'true', '1', 'haan', 'ha'].indexOf(String(v == null ? '' : v).trim().toLowerCase()) !== -1; }
+function bulkMoney_(v) {
+  const t = String(v == null ? '' : v).replace(/[₹,\s]/g, '').replace(/^rs\.?/i, '');
+  if (!t) return null;
+  const n = Number(t);
+  return isFinite(n) && n > 0 ? Math.round(n) : NaN;
+}
+/** Action: partnerBulkAddBooks { rows: [{ isbn, title, author, condition, genre, copies, mrp, sellPrice, rentPerMonth, lend, swap, notes, coverImageUrl }], originalDeclared } */
+function partnerBulkAddBooks(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const partner = approvedPartner_(caller);
+  if (!partner) return { success: false, error: 'NOT_PARTNER', message: 'Only an approved partner can add books in bulk.' };
+  const rows = Array.isArray((data || {}).rows) ? data.rows : [];
+  if (!rows.length) return { success: false, message: 'There are no books in the file.' };
+  if (rows.length > PARTNER_BULK_MAX_ROWS) return { success: false, error: 'TOO_MANY_ROWS', message: 'Send at most ' + PARTNER_BULK_MAX_ROWS + ' books at a time.' };
+  if (!truthy_((data || {}).originalDeclared)) return { success: false, error: 'COPY_TYPE_DECLARATION_REQUIRED', message: 'Confirm that these are original copies (not photocopies or pirated prints).' };
+  // Books this partner already has, by ISBN — a second row for the same book is not a new listing.
+  const have = {};
+  readSheetObjects_(getOrCreateSheet('Books', getBookHeaders())).rows.forEach(r => {
+    const o = r.obj;
+    if (normalizeEmail(o.ownerEmail) === caller && String(o.status || '').toLowerCase() !== 'removed') {
+      const k = normalizeIsbnServer(o.isbn); if (k) have[k] = o.title || 'this book';
+    }
+  });
+  const pinned = partner.lat !== '' && partner.lat !== undefined && partner.lat !== null;
+  const results = [];
+  let added = 0;
+  rows.forEach((raw, i) => {
+    const r = raw || {};
+    const line = Number(r.line) || (i + 2);
+    const isbn = normalizeIsbnServer(r.isbn);
+    const out = { line: line, title: String(r.title || '').trim().slice(0, 200) };
+    const fail = (m) => { out.ok = false; out.message = m; results.push(out); };
+    if (!isbn) return fail('ISBN missing or wrong.');
+    if (have[isbn]) return fail('Already on your shelf — change its copies in Books & stock.');
+    const sellPrice = bulkMoney_(r.sellPrice), rent = bulkMoney_(r.rentPerMonth), mrp = bulkMoney_(r.mrp);
+    if (Number.isNaN(sellPrice)) return fail('Selling price is not a number.');
+    if (Number.isNaN(rent)) return fail('Rent is not a number.');
+    if (Number.isNaN(mrp)) return fail('MRP is not a number.');
+    const lend = bulkYes_(r.lend), swap = bulkYes_(r.swap);
+    if (sellPrice === null && rent === null && !lend && !swap) return fail('Give a selling price or a rent, or say yes to lend or swap.');
+    const copies = String(r.copies == null ? '' : r.copies).trim() === '' ? 1 : Math.floor(Number(r.copies));
+    if (!isFinite(copies) || copies < 1 || copies > 9999) return fail('Copies must be a number from 1 to 9999.');
+    const book = {
+      ownerEmail: caller, isbn: isbn, title: r.title, author: r.author,
+      condition: ({ AS_NEW: 'As New', VERY_GOOD: 'Very Good', GOOD: 'Good', FAIR: 'Fair', POOR: 'Poor' })[normalizeConditionGrade(String(r.condition || '').trim() || 'As New')] || 'As New',
+      genre: String(r.genre || '').trim(),
+      area: partner.city || '', pincode: partner.pincode || '',
+      latitude: pinned ? String(partner.lat) : '', longitude: pinned ? String(partner.lng) : '',
+      notes: String(r.notes || '').trim().slice(0, 500), bookshelf: true,
+      permanent_exchange: swap, temporary_exchange: false, rent: rent !== null, lend: lend, sell: sellPrice !== null,
+      sellPrice: sellPrice, rentPerMonth: rent, stock: copies,
+      bookFormat: 'PAPERBACK', bookEdition: 'PUBLISHER', copyType: 'ORIGINAL', copyTypeDeclaration: true, authenticityStatus: 'ORIGINAL',
+      printedMrp: mrp === null ? '' : mrp, userEnteredMRP: mrp === null ? undefined : mrp, noPrintedMrp: mrp === null,
+      coverImageUrl: r.coverImageUrl
+    };
+    let res;
+    __SS_PARTNER_BULK__ = true;
+    try { res = createBook(book); }
+    catch (e) { res = { success: false, message: 'Could not be listed: ' + e }; }
+    finally { __SS_PARTNER_BULK__ = false; }
+    if (res && res.success) {
+      out.ok = true; out.id = res.id || (res.book && res.book.id) || ''; added++; have[isbn] = out.title;
+      results.push(out);
+    } else fail((res && res.message) || 'Could not be listed.');
+  });
+  try { invalidateLibraryCache(); } catch (e) { /* refreshes on its own */ }
+  return { success: true, added: added, failed: results.length - added, results: results,
+    message: added + ' book' + (added === 1 ? '' : 's') + ' listed' + (results.length - added ? ', ' + (results.length - added) + ' need fixing' : '') + '.' };
 }
 
 /** One copy sold: a partner's stock goes down by one (never below 0). */

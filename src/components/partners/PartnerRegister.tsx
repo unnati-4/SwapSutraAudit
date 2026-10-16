@@ -3,6 +3,7 @@ import PayoutFields, { EMPTY_PAYOUT, payoutErrors, type PayoutDetails } from '..
 import { LocationPinPicker, LocationCard } from '../LocationPin';
 import { PARTNER_CONTRACTS, PARTNER_LABEL, type PartnerType } from '../../data/partnerContracts';
 import { fileForUpload, partnerPost, type PartnerView } from './partnerApi';
+import ServiceAreaFields, { type ServiceArea } from './ServiceAreaFields';
 
 /**
  * Partner registration (9 Oct 2026) — a separate form for each type:
@@ -126,6 +127,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
   }));
   // 11 Oct 2026 (owner's request): where SwapSutra pays the partner.
   const [payout, setPayout] = useState<PayoutDetails>(() => ({ ...EMPTY_PAYOUT, payeeName: existing?.registeredName || '', accountName: '' }));
+  const [reach, setReach] = useState<ServiceArea>(() => ({ serviceArea: existing?.serviceArea === 'nearby' ? 'nearby' : 'india', serviceRadiusKm: existing?.serviceRadiusKm || 10 }));
   const [docs, setDocs] = useState<Record<string, { dataUrl: string; name: string }>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [picking, setPicking] = useState(false);
@@ -197,6 +199,7 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
         type, ...form, panNumber: aadhaarOnly ? '' : form.panNumber.trim().toUpperCase(), gstin: aadhaarOnly ? '' : form.gstin.trim().toUpperCase(),
         docs: Object.fromEntries(Object.keys(docs).filter((k) => docList.some((d) => d.key === k)).map((k) => [k, docs[k].dataUrl])),
         lat: form.lat ?? '', lng: form.lng ?? '',
+        serviceArea: reach.serviceArea, serviceRadiusKm: reach.serviceArea === 'nearby' ? reach.serviceRadiusKm : '',
         contractVersion: contract.version,
       });
       if (d?.success) { setNote(d.message); onDone(); }
@@ -308,6 +311,11 @@ export default function PartnerRegister({ initialType, existing, onDone }: {
               : <button type="button" className="btn-outline pp-btn" onClick={() => setPicking(true)}>📍 Pin {type === 'bookstore' ? 'your store' : 'your location'} on Google Maps</button>}
           {errors.location && <span className="pp-error" role="alert">{errors.location}</span>}
         </div>
+      </fieldset>
+
+      <fieldset className="pp-fieldset">
+        <legend>Who can buy or rent from you</legend>
+        <ServiceAreaFields value={reach} onChange={setReach} error={errors.serviceRadiusKm} hasPin={form.lat !== null && form.lng !== null} />
       </fieldset>
 
       <fieldset className="pp-fieldset">

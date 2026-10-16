@@ -5,6 +5,8 @@ import { LocationCard, LocationPinPicker } from '../LocationPin';
 import { PARTNER_CONTRACTS } from '../../data/partnerContracts';
 import { adImageSrc } from '../../utils/ads';
 import { dateLabel, fileForUpload, inr, monthLabel, partnerPost, type PartnerDash } from './partnerApi';
+import ServiceAreaFields, { type ServiceArea } from './ServiceAreaFields';
+import BulkAddBooks from './BulkAddBooks';
 
 /**
  * The partner's own console (9 Oct 2026, owner's request): what they have
@@ -16,7 +18,7 @@ import { dateLabel, fileForUpload, inr, monthLabel, partnerPost, type PartnerDas
 type Tab = 'overview' | 'orders' | 'books' | 'promo' | 'account';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' }, { id: 'orders', label: 'Orders' }, { id: 'books', label: 'Books & stock' },
-  { id: 'promo', label: 'Banner & ads' }, { id: 'account', label: 'Payouts & agreement' },
+  { id: 'promo', label: 'Banner & ads' }, { id: 'account', label: 'Account' },
 ];
 const SERVICE: Record<string, string> = { SELL: 'Sale', RENT: 'Rental', LEND: 'Loan', SWAP: 'Swap' };
 
@@ -141,6 +143,7 @@ export default function PartnerDashboard({ dash, reload, onOpenOrders, onListBoo
             <button type="button" className="btn-primary pp-btn" onClick={onListBook}>+ List a book</button>
           </div>
           <p className="pp-hint">No listing limit. Set how many copies you have — a book with 0 copies is hidden from the Library until you add stock. Each sale takes one copy off.</p>
+          <BulkAddBooks onDone={reload} />
           {(dash.books || []).length === 0 ? <p className="pp-hint">No books yet.</p> : (
             <ul className="pp-list">
               {(dash.books || []).map((b) => <StockRow key={b.id} book={b} busy={busy === 'stock_' + b.id}
@@ -318,6 +321,7 @@ function AccountTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: st
   const [upiErrs, setUpiErrs] = useState<Partial<Record<string, string>>>({});
   const [prof, setProf] = useState({ phone: p.phone, altPhone: p.altPhone || '', altEmail: p.altEmail || '', website: p.website, instagram: p.instagram, about: p.about });
   const [picking, setPicking] = useState(false);
+  const [reach, setReach] = useState<ServiceArea>({ serviceArea: p.serviceArea === 'nearby' ? 'nearby' : 'india', serviceRadiusKm: p.serviceRadiusKm || 10 });
   const contract = PARTNER_CONTRACTS[p.type];
   const [showContract, setShowContract] = useState(false);
   return (
@@ -348,6 +352,13 @@ function AccountTab({ dash, act, busy }: { dash: PartnerDash; act: Act; busy: st
               </>)}
         </div>
         <p className="pp-hint">To change your registered name, PAN or documents, write to swapsutra@gmail.com.</p>
+      </section>
+      <section className="pp-card" data-testid="partner-reach">
+        <h2 className="pp-h2">Who can buy or rent from you</h2>
+        <ServiceAreaFields value={reach} onChange={setReach} hasPin={p.lat !== null && p.lng !== null} />
+        <button type="button" className="btn-outline pp-btn" disabled={busy === 'reach'}
+          onClick={() => act('reach', 'updatePartnerProfile', { serviceArea: reach.serviceArea, serviceRadiusKm: reach.serviceArea === 'nearby' ? reach.serviceRadiusKm : '' }, 'Saved.')}>Save</button>
+        <p className="pp-hint">Now: {p.serviceArea === 'nearby' ? `readers within ${p.serviceRadiusKm} km of your pin` : 'readers all over India'}.</p>
       </section>
       <section className="pp-card">
         <h2 className="pp-h2">Your agreement</h2>

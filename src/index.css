@@ -4451,6 +4451,15 @@ body { overflow-x: clip; }
 .pp-table th, .pp-table td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border-subtle, rgba(74, 59, 50, 0.12)); white-space: nowrap; }
 .pp-table th { font-weight: var(--font-weight-semibold); color: var(--text-secondary); }
 .pp-list { list-style: none; margin: 0.5rem 0; padding: 0; display: grid; gap: 0.5rem; }
+/* Bulk listing for partners (16 Oct 2026) */
+.pp-bulk { display: grid; gap: 0.75rem; margin: 0.75rem 0 1rem; padding: 1rem; border: 1px dashed var(--border-strong, #d8cbb6); border-radius: 14px; background: var(--bg-surface, #fff); min-width: 0; }
+.pp-h3 { font-family: var(--font-display); font-size: var(--font-size-lg); margin: 0; }
+.pp-bulk ol { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.25rem; }
+.pp-bulk__table { max-width: 100%; overflow-x: auto; max-height: 22rem; overflow-y: auto; border: 1px solid var(--border-subtle, #eadfce); border-radius: 10px; }
+.pp-bulk__table table { width: 100%; border-collapse: collapse; font-size: var(--font-size-xs); }
+.pp-bulk__table th, .pp-bulk__table td { padding: 0.4rem 0.5rem; text-align: left; border-bottom: 1px solid var(--border-subtle, #eadfce); white-space: nowrap; }
+.pp-bulk__table th { position: sticky; top: 0; background: var(--bg-page, #FAF6F0); font-weight: var(--font-weight-bold); }
+.pp-bulk__table tr.is-bad td { background: #fdecea; color: #8a1c1c; }
 .pp-list > li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; padding: 0.75rem; border-radius: 12px; background: var(--bg-page, #FAF6F0); }
 .pp-list > li > div:first-child { display: flex; flex-direction: column; min-width: 0; flex: 1 1 12rem; }
 .pp-list__side { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem; }

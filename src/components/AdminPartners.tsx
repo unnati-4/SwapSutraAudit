@@ -64,6 +64,7 @@ export default function AdminPartners() {
       <div className="admin-ads__info">
         <p className="admin-ads__title">{p.name} <span className="type-caption">· {p.typeLabel} · {STATUS[p.status] || p.status}</span></p>
         <p className="type-caption">{p.contactName} · {p.email} · {p.phone} · {p.city} {p.pincode}</p>
+        <p className="type-caption" data-testid="admin-partner-reach">Sells and rents to: {p.serviceArea === 'nearby' ? `readers within ${p.serviceRadiusKm} km` : 'all of India'}</p>
         {(p.altPhone || p.altEmail) && <p className="type-caption">Alternative: {[p.altPhone, p.altEmail].filter(Boolean).join(' · ')}</p>}
         {(p.sellsFrom === 'online' || p.sellsFrom === 'both' || p.registered === false) && (
           <p className="type-caption" data-testid="admin-partner-how">

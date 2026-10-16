@@ -213,6 +213,47 @@ console.log('--- a library partner ---');
   const res = H.playRoom(rt, req.id, { owner: { token: P }, requester: { token: a.token } }, { admin, route: 'courier' });
   C('The sale runs to the end; the partner is paid ₹294 (2% commission), no seller fee', res.done && ledger(rt) === 'commission:6 sale:294', ledger(rt));
   C('...and one copy leaves the stock (3 → 2), the book stays listed', rt.get({ action: 'getBooks' }).find(x => x.id === bk.id).stock === 2);
+  // 16 Oct 2026: a partner adds many books at once.
+  const bulkRows = [
+    { line: 2, isbn: '9780143440048', title: 'Ignited Minds', author: 'A P J Abdul Kalam', condition: 'New', copies: '4', mrp: '299', sellPrice: '250' },
+    { line: 3, isbn: '978-0-06-231500-7', title: 'The Alchemist', author: 'Paulo Coelho', lend: 'yes', rentPerMonth: '₹60' },
+    { line: 4, isbn: '9788173711466', title: 'Wings of Fire', author: 'A P J Abdul Kalam', sellPrice: '300' },
+    { line: 5, isbn: '9780140449136', title: 'Crime and Punishment', author: 'Dostoevsky' },
+    { line: 6, isbn: '12345', title: 'Bad', author: 'Nobody', sellPrice: '10' },
+  ];
+  C('A reader cannot use the bulk upload', rt.post({ action: 'partnerBulkAddBooks', rows: bulkRows, originalDeclared: true }, a.token).error === 'NOT_PARTNER');
+  C('…and a partner must confirm the copies are original', rt.post({ action: 'partnerBulkAddBooks', rows: bulkRows }, P).error === 'COPY_TYPE_DECLARATION_REQUIRED');
+  C('…and send at most 25 at a time', rt.post({ action: 'partnerBulkAddBooks', rows: Array.from({ length: 26 }, () => bulkRows[0]), originalDeclared: true }, P).error === 'TOO_MANY_ROWS');
+  const bulk = rt.post({ action: 'partnerBulkAddBooks', rows: bulkRows, originalDeclared: true }, P);
+  const byLine = (n) => (bulk.results || []).find(x => x.line === n) || {};
+  C('A bulk upload lists the good rows and explains the rest', bulk.success && bulk.added === 2 && bulk.failed === 3, JSON.stringify(bulk));
+  C('…a book already on the shelf is not listed twice', /Already on your shelf/.test(byLine(4).message || ''));
+  C('…a row with no price, rent, lend or swap is refused', /selling price or a rent/.test(byLine(5).message || ''));
+  C('…and a wrong ISBN is caught', /ISBN/.test(byLine(6).message || ''));
+  const lib = rt.get({ action: 'getBooks' });
+  const im = lib.find(x => x.title === 'Ignited Minds'), al = lib.find(x => x.title === 'The Alchemist' && x.sellerType === 'library');
+  C('Bulk books are live with copies, price, the ISBN cover and the partner\'s area', !!im && im.stock === 4 && Number(im.ownerSellPrice || im.sellPrice) === 250
+    && /covers\.openlibrary\.org\/b\/isbn\/9780143440048/.test(im.imageUrls || '') && im.condition === 'As New' && im.sellerType === 'library', JSON.stringify(im && { stock: im.stock, sell: im.ownerSellPrice, img: im.imageUrls, c: im.condition }));
+  C('…lend and rent come through too', !!al && String(al.lend).toUpperCase() === 'TRUE' && String(al.rent).toUpperCase() === 'TRUE', JSON.stringify(al && { lend: al.lend, rent: al.rent }));
+  const sneaky = H.listBook(rt, a.token, 'arjun@gmail.com', { title: 'No Photos', isbn: '9780140449136', frontCoverImage: undefined, backCoverImage: undefined, __SS_PARTNER_BULK__: true, coverImageUrl: 'https://x.com/a.jpg' });
+  C('A reader cannot skip the photos by faking the bulk flag', sneaky.success === false && sneaky.error === 'REQUIRED_MEDIA_MISSING', JSON.stringify(sneaky));
+  // 14 Oct 2026: a partner may sell and rent only nearby.
+  C('A partner sells all over India unless it says otherwise', rt.get({ action: 'getBooks' }).find(x => x.id === bk.id).serviceArea === 'india');
+  const bad = rt.post({ action: 'updatePartnerProfile', serviceArea: 'nearby', serviceRadiusKm: 7 }, P);
+  C('Only the offered distances can be chosen', bad.success === false && bad.errors.serviceRadiusKm);
+  const near = rt.post({ action: 'updatePartnerProfile', serviceArea: 'nearby', serviceRadiusKm: 5 }, P);
+  const lb = rt.get({ action: 'getBooks' }).find(x => x.id === bk.id);
+  C('The partner switches to "within 5 km" and the Library shows it', near.success && lb.serviceArea === 'nearby' && lb.serviceRadiusKm === 5 && lb.serviceCity === 'Lucknow', JSON.stringify(near));
+  const sell = (extra) => rt.post(Object.assign({ action: 'createSwapRequest', serviceType: 'SELL', receiverBookId: bk.id, requestedBookTitle: 'Wings of Fire', policy_accepted: 'TRUE' }, extra), a.token);
+  const noLoc = sell({});
+  C('A reader who gives no location is asked for it', noLoc.success === false && noLoc.error === 'LOCATION_NEEDED' && /within 5 km of Lucknow/.test(noLoc.message), JSON.stringify(noLoc));
+  const far = sell({ readerLat: 28.61, readerLng: 77.21 });
+  C('A reader in Delhi (~420 km away) cannot request it', far.success === false && far.error === 'OUT_OF_AREA' && far.distanceKm > 400, JSON.stringify(far));
+  const neha = H.signup(rt, 'Neha Lucknow', 'neha.lko@gmail.com', '9812312312').token;
+  const inRange = rt.post({ action: 'createSwapRequest', serviceType: 'SELL', receiverBookId: bk.id, requestedBookTitle: 'Wings of Fire', policy_accepted: 'TRUE', readerLat: 26.87, readerLng: 80.97 }, neha);
+  C('A reader 3 km away can', inRange.success === true, JSON.stringify(inRange));
+  const back = rt.post({ action: 'updatePartnerProfile', serviceArea: 'india' }, P);
+  C('…and the partner can go back to all of India', back.success && rt.get({ action: 'getBooks' }).find(x => x.id === bk.id).serviceArea === 'india');
   const appr = rt.mailTo('gomti.library@gmail.com').filter(e => /partner/.test(e.subject));
   C('Partner emails link to the live site', appr.length > 0 && rt.mailTo('gomti.library@gmail.com').every(e => !/run\.app/.test(String(e.body || e.htmlBody))));
 }
