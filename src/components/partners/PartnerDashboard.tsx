@@ -6,6 +6,7 @@ import { PARTNER_CONTRACTS } from '../../data/partnerContracts';
 import { adImageSrc } from '../../utils/ads';
 import { dateLabel, fileForUpload, inr, monthLabel, partnerPost, type PartnerDash } from './partnerApi';
 import ServiceAreaFields, { type ServiceArea } from './ServiceAreaFields';
+import BulkAddBooks from './BulkAddBooks';
 
 /**
  * The partner's own console (9 Oct 2026, owner's request): what they have
@@ -142,6 +143,7 @@ export default function PartnerDashboard({ dash, reload, onOpenOrders, onListBoo
             <button type="button" className="btn-primary pp-btn" onClick={onListBook}>+ List a book</button>
           </div>
           <p className="pp-hint">No listing limit. Set how many copies you have — a book with 0 copies is hidden from the Library until you add stock. Each sale takes one copy off.</p>
+          <BulkAddBooks onDone={reload} />
           {(dash.books || []).length === 0 ? <p className="pp-hint">No books yet.</p> : (
             <ul className="pp-list">
               {(dash.books || []).map((b) => <StockRow key={b.id} book={b} busy={busy === 'stock_' + b.id}

@@ -53,6 +53,8 @@ def api(route):
     u = req.url; act = body.get('action') or (u.split('action=')[1].split('&')[0] if 'action=' in u else '')
     state["calls"].append(act); state["bodies"][act] = body
     if act == 'getBooks': return route.fulfill(json={"success": True, "data": BOOKS})
+    if act == 'partnerBulkAddBooks': return route.fulfill(json={"success": True, "added": len(body.get('rows', [])) - 1, "failed": 1,
+        "results": [dict(line=int(r['line']), title=r.get('title', ''), ok=(i > 0), message=(None if i > 0 else 'Already on your shelf — change its copies in Books & stock.')) for i, r in enumerate(body.get('rows', []))]})
     if act == 'getSponsoredAds': return route.fulfill(json={"success": True, "items": ADS})
     if act == 'getMugProducts': return route.fulfill(json={"success": True, "items": MUGS})
     if act == 'sendOTP': return route.fulfill(json={"success": True})
@@ -164,6 +166,24 @@ with sync_playwright() as p:
     shot(pg, 'partner-promo')
     pg.click('.pp-tabs >> text=Books & stock'); pg.wait_for_timeout(300)
     ck('Books & stock: copies can be changed', pg.locator('input[aria-label="Copies of Dune"]').count() == 1)
+    # 16 Oct 2026: many books at once
+    pg.click('[data-testid="bulk-open"]'); pg.wait_for_timeout(200)
+    tsv = "isbn\ttitle\tauthor\tcopies\tsell_price\tlend\n9780143440048\tIgnited Minds\tA P J Abdul Kalam\t4\t250\tno\n9780062315007\t\"The Alchemist, 25th\"\tPaulo Coelho\t\t\tyes\n12345\tBad\tNobody\t\t10\t\n9780140449136\tNo mode\tDostoevsky\t\t\t\n"
+    pg.fill('[data-testid="bulk-paste"]', tsv); pg.wait_for_timeout(300)
+    ck('Bulk: rows pasted from a spreadsheet are read, problems shown before sending', '4 books found' in pg.locator('[data-testid="bulk-summary"]').inner_text()
+       and '2 ready' in pg.locator('[data-testid="bulk-summary"]').inner_text() and 'The Alchemist, 25th' in pg.locator('[data-testid="bulk-add"]').inner_text()
+       and 'ISBN must have 10 or 13 digits' in pg.locator('[data-testid="bulk-add"]').inner_text())
+    ck('…nothing is sent until the copies are confirmed original', pg.locator('[data-testid="bulk-send"]').is_disabled())
+    ck('Bulk: no horizontal page scroll', no_hscroll(pg))
+    shot(pg, 'partner-bulk')
+    pg.check('[data-testid="bulk-declare"]'); pg.click('[data-testid="bulk-send"]'); pg.wait_for_timeout(1200)
+    sent = state["bodies"].get('partnerBulkAddBooks', {})
+    rows_sent = sent.get('rows', [])
+    ck('…only the ready rows are sent, with the columns mapped', len(rows_sent) == 2 and rows_sent[0].get('sellPrice') == '250' and rows_sent[0].get('copies') == '4'
+       and rows_sent[1].get('lend') == 'yes' and sent.get('originalDeclared') is True, str(sent)[:300])
+    res = pg.locator('[data-testid="bulk-result"]').inner_text() if pg.locator('[data-testid="bulk-result"]').count() else ''
+    fails = pg.locator('[data-testid="bulk-failures"]').inner_text() if pg.locator('[data-testid="bulk-failures"]').count() else ''
+    ck('…and the result says what was listed and what to fix, by line', '1 book listed' in res and 'Line 2' in fails and 'Already on your shelf' in fails and 'Line 4' in fails and 'Line 5' in fails, res + ' | ' + fails)
     ck('The buyer is never named on the dashboard', 'req@' not in pg.content())
     # 14 Oct 2026: all of India, or only nearby
     pg.click('.pp-tabs >> text=Account'); pg.wait_for_timeout(400)

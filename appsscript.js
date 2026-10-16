@@ -6392,6 +6392,7 @@ function doPostHandler_(e) {
     if (action === 'uploadPartnerAdImage') return respondJson(uploadPartnerAdImage(data));
     if (action === 'submitPartnerAdPayment') return respondJson(submitPartnerAdPayment(data));
     if (action === 'setPartnerBookStock') return respondJson(setPartnerBookStock(data));
+    if (action === 'partnerBulkAddBooks') return respondJson(partnerBulkAddBooks(data));
     if (action === 'adminListPartners') return respondJson(adminListPartners());
     if (action === 'adminReviewPartner') return respondJson(adminReviewPartner(data));
     if (action === 'adminReviewPartnerBanner') return respondJson(adminReviewPartnerBanner(data));
@@ -7983,7 +7984,11 @@ function createBook(data) {
   // inside page just as happily as a correct one — the server never knew
   // which slot any file belonged to, because the client sent an unlabelled
   // array and the order was taken on trust.
-  const mediaCheck = validateRequiredBookMedia(data);
+  // A partner's bulk upload (16 Oct 2026) has no photos: the cover comes
+  // from the ISBN. Only partnerBulkAddBooks sets __SS_PARTNER_BULK__ — a
+  // field in the request cannot.
+  const bulkCover = __SS_PARTNER_BULK__ && approvedPartner_(ownerEmail) ? partnerBulkCoverUrl_(data) : '';
+  const mediaCheck = bulkCover ? { ok: true, accepted: {}, imagesForLegacyArray: [] } : validateRequiredBookMedia(data);
   if (!mediaCheck.ok) {
     return {
       success: false,
@@ -8029,7 +8034,7 @@ function createBook(data) {
   // The four required media go up as four known slots, so the row can
   // record which file is which. The joined imageUrls string is derived
   // from the same uploads afterwards, for the screens that still read it.
-  const mediaUpload = uploadRequiredBookMedia(id, mediaCheck.accepted);
+  const mediaUpload = bulkCover ? { folderId: '', urls: {} } : uploadRequiredBookMedia(id, mediaCheck.accepted);
   const uploadResult = {
     folderId: mediaUpload.folderId,
     imageUrls: REQUIRED_BOOK_MEDIA
@@ -8123,7 +8128,7 @@ function createBook(data) {
     else if (h === 'sell') row[i] = flags.sell ? "TRUE" : "FALSE";
     else if (h === 'available_for_swap') row[i] = flags.available_for_swap ? "TRUE" : "FALSE";
     else if (h === 'rent_sale_mode') row[i] = flags.rent_sale_mode;
-    else if (h === 'imageUrls') row[i] = uploadResult.imageUrls;
+    else if (h === 'imageUrls') row[i] = bulkCover || uploadResult.imageUrls;
     else if (h === 'driveFolderId') row[i] = uploadResult.folderId;
     else if (h === 'notes') row[i] = data.notes;
     // A partner (bookstore, publisher…) keeps a stock count; readers have one copy.
@@ -28000,6 +28005,90 @@ function setPartnerBookStock(data) {
     return { success: true, stock: stock, message: stock ? stock + ' in stock.' : 'Out of stock — it no longer shows in the Library.' };
   }
   return { success: false, message: 'Book not found.' };
+}
+
+// ── Bulk listing for partners (16 Oct 2026, owner's request) ─────────────
+// A partner uploads a CSV (or pastes rows from a spreadsheet); each row is
+// listed through createBook with the same checks as a single listing, except
+// that the cover comes from the ISBN (Open Library) instead of photos. The
+// partner can add their own photos to any book later.
+var __SS_PARTNER_BULK__ = false;
+const PARTNER_BULK_MAX_ROWS = 25;
+function partnerBulkCoverUrl_(data) {
+  const own = String((data || {}).coverImageUrl || '').trim();
+  if (/^https:\/\/[^\s|,]+$/i.test(own)) return own.slice(0, 500);
+  const isbn = normalizeIsbnServer((data || {}).isbn);
+  return isbn ? 'https://covers.openlibrary.org/b/isbn/' + isbn + '-L.jpg?default=false' : '';
+}
+function bulkYes_(v) { return ['yes', 'y', 'true', '1', 'haan', 'ha'].indexOf(String(v == null ? '' : v).trim().toLowerCase()) !== -1; }
+function bulkMoney_(v) {
+  const t = String(v == null ? '' : v).replace(/[₹,\s]/g, '').replace(/^rs\.?/i, '');
+  if (!t) return null;
+  const n = Number(t);
+  return isFinite(n) && n > 0 ? Math.round(n) : NaN;
+}
+/** Action: partnerBulkAddBooks { rows: [{ isbn, title, author, condition, genre, copies, mrp, sellPrice, rentPerMonth, lend, swap, notes, coverImageUrl }], originalDeclared } */
+function partnerBulkAddBooks(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  const partner = approvedPartner_(caller);
+  if (!partner) return { success: false, error: 'NOT_PARTNER', message: 'Only an approved partner can add books in bulk.' };
+  const rows = Array.isArray((data || {}).rows) ? data.rows : [];
+  if (!rows.length) return { success: false, message: 'There are no books in the file.' };
+  if (rows.length > PARTNER_BULK_MAX_ROWS) return { success: false, error: 'TOO_MANY_ROWS', message: 'Send at most ' + PARTNER_BULK_MAX_ROWS + ' books at a time.' };
+  if (!truthy_((data || {}).originalDeclared)) return { success: false, error: 'COPY_TYPE_DECLARATION_REQUIRED', message: 'Confirm that these are original copies (not photocopies or pirated prints).' };
+  // Books this partner already has, by ISBN — a second row for the same book is not a new listing.
+  const have = {};
+  readSheetObjects_(getOrCreateSheet('Books', getBookHeaders())).rows.forEach(r => {
+    const o = r.obj;
+    if (normalizeEmail(o.ownerEmail) === caller && String(o.status || '').toLowerCase() !== 'removed') {
+      const k = normalizeIsbnServer(o.isbn); if (k) have[k] = o.title || 'this book';
+    }
+  });
+  const pinned = partner.lat !== '' && partner.lat !== undefined && partner.lat !== null;
+  const results = [];
+  let added = 0;
+  rows.forEach((raw, i) => {
+    const r = raw || {};
+    const line = Number(r.line) || (i + 2);
+    const isbn = normalizeIsbnServer(r.isbn);
+    const out = { line: line, title: String(r.title || '').trim().slice(0, 200) };
+    const fail = (m) => { out.ok = false; out.message = m; results.push(out); };
+    if (!isbn) return fail('ISBN missing or wrong.');
+    if (have[isbn]) return fail('Already on your shelf — change its copies in Books & stock.');
+    const sellPrice = bulkMoney_(r.sellPrice), rent = bulkMoney_(r.rentPerMonth), mrp = bulkMoney_(r.mrp);
+    if (Number.isNaN(sellPrice)) return fail('Selling price is not a number.');
+    if (Number.isNaN(rent)) return fail('Rent is not a number.');
+    if (Number.isNaN(mrp)) return fail('MRP is not a number.');
+    const lend = bulkYes_(r.lend), swap = bulkYes_(r.swap);
+    if (sellPrice === null && rent === null && !lend && !swap) return fail('Give a selling price or a rent, or say yes to lend or swap.');
+    const copies = String(r.copies == null ? '' : r.copies).trim() === '' ? 1 : Math.floor(Number(r.copies));
+    if (!isFinite(copies) || copies < 1 || copies > 9999) return fail('Copies must be a number from 1 to 9999.');
+    const book = {
+      ownerEmail: caller, isbn: isbn, title: r.title, author: r.author,
+      condition: ({ AS_NEW: 'As New', VERY_GOOD: 'Very Good', GOOD: 'Good', FAIR: 'Fair', POOR: 'Poor' })[normalizeConditionGrade(String(r.condition || '').trim() || 'As New')] || 'As New',
+      genre: String(r.genre || '').trim(),
+      area: partner.city || '', pincode: partner.pincode || '',
+      latitude: pinned ? String(partner.lat) : '', longitude: pinned ? String(partner.lng) : '',
+      notes: String(r.notes || '').trim().slice(0, 500), bookshelf: true,
+      permanent_exchange: swap, temporary_exchange: false, rent: rent !== null, lend: lend, sell: sellPrice !== null,
+      sellPrice: sellPrice, rentPerMonth: rent, stock: copies,
+      bookFormat: 'PAPERBACK', bookEdition: 'PUBLISHER', copyType: 'ORIGINAL', copyTypeDeclaration: true, authenticityStatus: 'ORIGINAL',
+      printedMrp: mrp === null ? '' : mrp, userEnteredMRP: mrp === null ? undefined : mrp, noPrintedMrp: mrp === null,
+      coverImageUrl: r.coverImageUrl
+    };
+    let res;
+    __SS_PARTNER_BULK__ = true;
+    try { res = createBook(book); }
+    catch (e) { res = { success: false, message: 'Could not be listed: ' + e }; }
+    finally { __SS_PARTNER_BULK__ = false; }
+    if (res && res.success) {
+      out.ok = true; out.id = res.id || (res.book && res.book.id) || ''; added++; have[isbn] = out.title;
+      results.push(out);
+    } else fail((res && res.message) || 'Could not be listed.');
+  });
+  try { invalidateLibraryCache(); } catch (e) { /* refreshes on its own */ }
+  return { success: true, added: added, failed: results.length - added, results: results,
+    message: added + ' book' + (added === 1 ? '' : 's') + ' listed' + (results.length - added ? ', ' + (results.length - added) + ' need fixing' : '') + '.' };
 }
 
 /** One copy sold: a partner's stock goes down by one (never below 0). */
