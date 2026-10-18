@@ -3,6 +3,7 @@ import { shelfCoverUrl } from '../utils/bookCover';
 import { adImageSrc, shuffled, type SponsoredAd } from '../utils/ads';
 import { adToSlide } from './SponsoredAds';
 import MascotBanner, { type BannerSlide } from './MascotBanner';
+import { seoForPath } from '../seo/pages';
 
 /**
  * The Library's front (30 Sep 2026): a bookshop window.
@@ -89,7 +90,7 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
           book when no ad is running. The heading stays for screen readers
           and search engines. */}
       <div className="lib-hero lib-hero--banner ss-bleed">
-        <h1 className="sr-only">SwapSutra is a reader-first library spread across homes in India.</h1>
+        <h1 className="sr-only">{(typeof window !== 'undefined' && seoForPath(window.location.pathname)?.h1) || 'SwapSutra is a reader-first library spread across homes in India.'}</h1>
         <MascotBanner mascot="book" slides={bannerSlides} startAt={adStart}
           label={ads.length ? 'Sponsored' : 'Featured books'} testId="library-banner" />
       </div>

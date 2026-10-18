@@ -45,10 +45,12 @@ const newbie = H.signup(rt, 'Naya Reader', 'naya.reader@gmail.com', '9876501234'
 C('...a brand-new reader can still join', !!newbie.token && newbie.steps.every(x => x && x.success !== false), JSON.stringify(newbie.steps).slice(0, 300));
 run('runTrialConversionSequence'); run('runSwapRequestSla');
 C('...and the old columns do not come back', OLD_PAID.every(h => !rt.sheets.Subscriptions._data[0].includes(h)), JSON.stringify(rt.sheets.Subscriptions._data[0]));
-rt.now(Date.now() + 4 * 86400000);
+// Counted from Naya's own join date, so the test does not depend on today's date.
+const joined = new Date(rt.rows('Subscriptions').find(r => r.email === 'naya.reader@gmail.com').createdAt).getTime();
+rt.now(joined + 4 * 86400000);
 const seq = run('runTrialConversionSequence');
 C('...the welcome letters still go out, counted from the day they joined', seq.sent >= 1 && rt.mailTo('naya.reader@gmail.com').some(m => /readers near you/i.test(m.subject || '')), JSON.stringify(seq));
-rt.now(Date.now() + 60 * 86400000);
+rt.now(joined + 60 * 86400000);
 const seq2 = run('runTrialConversionSequence');
 C('...and stop after the first month', seq2.sent === 0, JSON.stringify(seq2));
 rt.now(Date.now());

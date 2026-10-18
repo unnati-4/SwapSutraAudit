@@ -288,7 +288,7 @@ console.log('--- the site ---');
   C('Shelf ads say "Sponsored" and link out as sponsored', /Sponsored<\/span>/.test(comp) && /rel="sponsored noopener noreferrer"/.test(comp));
   const mascot = read('src/components/MascotBanner.tsx');
   C('The banner fills the whole Library window; the heading panel and the cover wall are gone (owner\'s request, 10 Oct)', /<div className="lib-hero lib-hero--banner ss-bleed">/.test(hero) && /<MascotBanner mascot="book"/.test(hero) && !/lib-hero__panel|lib-hero__wall|Browse the shelves<\/button>/.test(hero));
-  C('...the heading is kept for screen readers and search engines', /<h1 className="sr-only">SwapSutra is a reader-first library/.test(hero));
+  C('...the heading is kept for screen readers and search engines', /<h1 className="sr-only">[^\n]*SwapSutra is a reader-first library/.test(hero));
   C('Banners change every 10 seconds', /interval = 10000/.test(mascot));
   C('With no ad and no pictured book, the banner still shows (an invitation to browse)', /key: 'welcome'/.test(hero));
   C('The banner pauses on hover/focus and for reduced motion', /prefers-reduced-motion: reduce/.test(mascot) && /onMouseEnter=\{\(\) => setPaused\(true\)\}/.test(mascot));

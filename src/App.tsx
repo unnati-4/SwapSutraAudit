@@ -195,6 +195,7 @@ const AdminMugProducts = lazyScreen<any>(
   'Opening the mug shop listings'
 );
 import {apiUrl, SHARE_ORIGIN} from './config/runtime';
+import { seoForPath, canonicalUrl, SITE_FAQS } from './seo/pages';
 import { shelfCoverCandidates, shelfCoverUrl } from './utils/bookCover';
 import CartPage, { type CartView, type CartOrder } from './components/CartPage';
 import { depositLine, DEPOSIT_ESTIMATE_EXPLAINER } from './utils/deposit';
@@ -6285,7 +6286,10 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [showSplash, setShowSplash] = useState(() => {
     if (typeof window === 'undefined') return false;
-    return !sessionStorage.getItem('swapsutraSplashShown');
+    // Search engines and speed tests start every visit fresh; the splash
+    // would cover the page in every snapshot they take (18 Oct 2026).
+    if (/bot|crawl|spider|slurp|lighthouse|pagespeed|google|bing|yandex|duckduck/i.test(navigator.userAgent || '')) return false;
+    try { return !sessionStorage.getItem('swapsutraSplashShown'); } catch { return false; }
   });
 
   useEffect(() => {
@@ -8574,28 +8578,34 @@ export default function App() {
     }
   }, [showLoginModal]);
 
-  // Update document title
+  // Title, description and canonical link for the page being shown
+  // (18 Oct 2026). Public pages use src/seo/pages.ts — the same text the
+  // build writes into their HTML — so what Google renders matches what it
+  // was first served. Book pages keep the head api/book-page.ts gave them.
   useEffect(() => {
-    switch (activeTab) {
-      case 'reader-circle':
-        document.title = 'Reader Circle — Chapter 1 | SwapSutra';
-        break;
-      case 'events':
-        document.title = 'Community Events | SwapSutra';
-        break;
-      case 'browse':
-        document.title = 'Library | SwapSutra';
-        break;
-      case 'list':
-        document.title = 'List Books | SwapSutra';
-        break;
-      case 'profile':
-        document.title = 'My Profile | SwapSutra';
-        break;
-      default:
-        document.title = 'SwapSutra | Hyperlocal Book Exchange';
+    if (typeof document === 'undefined') return;
+    const path = window.location.pathname;
+    if (path.startsWith('/book/')) return;
+    const page = seoForPath(path);
+    const setMeta = (sel: string, attr: string, key: string, value: string) => {
+      let el = document.head.querySelector(sel) as HTMLElement | null;
+      if (!el) { el = document.createElement(sel.startsWith('link') ? 'link' : 'meta'); el.setAttribute(attr, key); document.head.appendChild(el); }
+      el.setAttribute(sel.startsWith('link') ? 'href' : 'content', value);
+    };
+    if (page) {
+      document.title = page.title;
+      setMeta('meta[name="description"]', 'name', 'description', page.description);
+      setMeta('link[rel="canonical"]', 'rel', 'canonical', canonicalUrl(page));
+      setMeta('meta[property="og:url"]', 'property', 'og:url', canonicalUrl(page));
+    } else {
+      const titles: Partial<Record<AppTab, string>> = {
+        list: 'List Books | SwapSutra', profile: 'My Profile | SwapSutra', cart: 'Cart | SwapSutra',
+        notifications: 'Notifications | SwapSutra', management: 'Management | SwapSutra',
+      };
+      document.title = titles[activeTab] || 'SwapSutra — Swap, Lend, Rent & Buy Books Near You';
+      document.head.querySelector('link[rel="canonical"]')?.remove();
     }
-  }, [activeTab]);
+  }, [activeTab, typeof window !== 'undefined' ? window.location.pathname : '']);
 
   // Shared by the Login form and by post-Sign Up verification: asks the
   // backend for a login OTP. The backend (sendOTP) is the real gate — it
@@ -12937,7 +12947,8 @@ export default function App() {
               className="h-28 w-28 object-contain mb-6" 
               referrerPolicy="no-referrer"
             />
-            <h1 className="font-serif text-3xl font-bold text-[var(--text-primary)] tracking-wide mb-2">SwapSutra</h1>
+            {/* A <p>, not an <h1>: each page has its own heading (18 Oct 2026). */}
+            <p className="font-serif text-3xl font-bold text-[var(--text-primary)] tracking-wide mb-2">SwapSutra</p>
             <p className="font-sans text-xs uppercase tracking-widest text-brand-gold-text font-bold">A Home Built For Readers.</p>
           </div>
         </div>
@@ -14359,6 +14370,12 @@ export default function App() {
               : 'max-w-7xl mx-auto px-4 sm:px-6 pt-5 sm:pt-12 pb-28 xl:pb-12'
         }
       >
+        {/* One heading per page (18 Oct 2026): these views have no visible
+            title of their own, so screen readers and search engines get the
+            page's name from src/seo/pages.ts. */}
+        {(activeTab === 'reading-room' || activeTab === 'book-requests' || activeTab === 'cafe') && !currentReadRouteCircleId && (
+          <h1 className="sr-only">{(seoForPath(typeof window !== 'undefined' ? window.location.pathname : '') || seoForPath(tabToRoute(activeTab)))?.h1 || 'SwapSutra'}</h1>
+        )}
         <AnimatePresence mode="wait">
           {/* The Home page used to live here. Deleted on 20 Sep 2026 — every reader now lands on the Library instead, so a separate front page was one more thing to scroll past on the way to the books. */}
 
@@ -15876,7 +15893,7 @@ export default function App() {
               {/* How it works */}
               <section className="text-center">
                 <span className="text-xs font-bold uppercase tracking-eyebrow text-brand-gold-text mb-6 block">The Process</span>
-                <h2 className="text-4xl md:text-5xl font-serif text-[var(--text-secondary)] mb-16 tracking-tight">The Ritual of Swapping</h2>
+                <h1 className="text-4xl md:text-5xl font-serif text-[var(--text-secondary)] mb-16 tracking-tight">The Ritual of Swapping</h1>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
                   {[
                     {step: '01', title: 'Curate', desc: 'Join and list up to 20 books from your shelf. ₹20 once lifts the limit.' },
@@ -17236,7 +17253,7 @@ export default function App() {
               className="max-w-4xl mx-auto py-12 md:py-24 px-6"
             >
               <div className="text-center space-y-4 mb-16">
-                <h2 className="text-4xl md:text-5xl font-serif text-[var(--text-secondary)] tracking-tight">Need help?</h2>
+                <h1 className="text-4xl md:text-5xl font-serif text-[var(--text-secondary)] tracking-tight">Need help?</h1>
                 <p className="text-[var(--text-muted)] font-medium italic opacity-70">We're here to curate your reading experience.</p>
               </div>
 
@@ -17265,6 +17282,20 @@ export default function App() {
                   <button onClick={() => navigateTo('info')} className="text-sm text-[var(--text-secondary)] opacity-70 uppercase tracking-widest text-2xs font-bold hover:text-brand-gold-text transition-colors">Read Guidelines →</button>
                 </div>
               </div>
+
+              {/* 18 Oct 2026: the questions readers ask most — the same text as
+                  the FAQ structured data on this page (src/seo/pages.ts). */}
+              <section className="max-w-2xl mx-auto mb-16" aria-labelledby="support-faq" data-testid="support-faq">
+                <h2 id="support-faq" className="text-2xl font-serif text-[var(--text-primary)] mb-6 text-center">Questions readers ask</h2>
+                <div className="space-y-3">
+                  {SITE_FAQS.map((f) => (
+                    <details key={f.q} className="night-card bg-[var(--bg-surface)] rounded-2xl border border-brand-border px-5 py-4">
+                      <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">{f.q}</summary>
+                      <p className="mt-2 text-sm text-[var(--text-secondary)] leading-relaxed">{f.a}</p>
+                    </details>
+                  ))}
+                </div>
+              </section>
 
               <div className="night-card max-w-2xl mx-auto bg-[var(--bg-surface)] p-8 md:p-12 rounded-[40px] border border-brand-border shadow-editorial">
                 <h3 className="text-2xl font-serif text-[var(--text-primary)] mb-8 text-center">Send us a message</h3>
@@ -17312,7 +17343,7 @@ export default function App() {
               {/* Hero */}
               <section className="text-center max-w-2xl mx-auto">
                 <span className="text-xs font-bold uppercase tracking-eyebrow text-brand-gold-text mb-6 block">SwapSutra Campus Ambassador Program</span>
-                <h2 className="text-4xl md:text-5xl font-serif text-[var(--text-primary)] mb-6 tracking-tight leading-tight">Become a Campus Ambassador</h2>
+                <h1 className="text-4xl md:text-5xl font-serif text-[var(--text-primary)] mb-6 tracking-tight leading-tight">Become a Campus Ambassador</h1>
                 <p className="text-[var(--text-secondary)] text-base md:text-lg leading-relaxed italic opacity-90 mb-10">
                   Bring readers from your campus together and help build a stronger reading community.
                 </p>
