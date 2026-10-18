@@ -1,4 +1,4 @@
-# SwapSutra — https://swapsutra.in
+# SwapSutra — https://www.swapsutra.in
 
 User-agent: *
 Allow: /
@@ -21,4 +21,4 @@ Allow: /api/sitemap
 Allow: /api/swapsutra
 Allow: /api/books
 
-Sitemap: https://swapsutra.in/sitemap.xml
+Sitemap: https://www.swapsutra.in/sitemap.xml

@@ -12,7 +12,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || '';
-const SITE_ORIGIN = 'https://swapsutra.in';
+const SITE_ORIGIN = 'https://www.swapsutra.in';
 
 export const config = { maxDuration: 20 };
 

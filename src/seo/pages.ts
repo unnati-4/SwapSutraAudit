@@ -12,7 +12,7 @@
  * Keep the text true to what the page shows — Google compares them.
  */
 
-export const SITE_ORIGIN = 'https://swapsutra.in';
+export const SITE_ORIGIN = 'https://www.swapsutra.in';
 export const SITE_NAME = 'SwapSutra';
 
 export interface SeoFaq { q: string; a: string }

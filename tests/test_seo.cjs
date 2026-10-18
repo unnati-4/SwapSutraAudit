@@ -41,7 +41,7 @@ for (const p of seo.SEO_PAGES) {
   const title = (html.match(/<title>([^<]*)<\/title>/) || [])[1];
   const desc = (html.match(/<meta name="description" content="([^"]*)"/) || [])[1];
   const canon = (html.match(/<link rel="canonical" href="([^"]*)"/) || [])[1];
-  if (h1s !== 1 || !title || !desc || !canon || !/^https:\/\/swapsutra\.in\//.test(canon) || desc.length > 170 || /<div id="root"><\/div>/.test(html)) { allOk = false; detail += p.path + ' '; }
+  if (h1s !== 1 || !title || !desc || !canon || !/^https:\/\/www\.swapsutra\.in\//.test(canon) || desc.length > 170 || /<div id="root"><\/div>/.test(html)) { allOk = false; detail += p.path + ' '; }
   if (p.inSitemap) { titles.add(title); descs.add(desc); }
 }
 const indexed = seo.SEO_PAGES.filter((p) => p.inSitemap).length;
@@ -54,25 +54,28 @@ C('The Support page carries its FAQ as structured data and as visible text', /"@
 C('Inner pages have breadcrumbs', /"@type":"BreadcrumbList"/.test(fs.readFileSync(pageFile('/partners'), 'utf8')) && /aria-label="Breadcrumb"/.test(fs.readFileSync(pageFile('/partners'), 'utf8')));
 C('Every page links to every other public page (no orphans)', seo.SEO_PAGES.filter((p) => p.inSitemap).every((p) => home.includes(`href="${p.path}"`)));
 C('Duplicate addresses point at one canonical (/library → /, /community → /reading-room)',
-  /rel="canonical" href="https:\/\/swapsutra\.in\/"/.test(fs.readFileSync(pageFile('/library'), 'utf8')) && /href="https:\/\/swapsutra\.in\/reading-room"/.test(fs.readFileSync(pageFile('/community'), 'utf8')));
+  /rel="canonical" href="https:\/\/www\.swapsutra\.in\/"/.test(fs.readFileSync(pageFile('/library'), 'utf8')) && /href="https:\/\/www\.swapsutra\.in\/reading-room"/.test(fs.readFileSync(pageFile('/community'), 'utf8')));
 C('Every image in the served pages has alt text', seo.SEO_PAGES.every((p) => (fs.readFileSync(pageFile(p.path), 'utf8').match(/<img\b[^>]*>/g) || []).every((t) => /\balt="[^"]+"/.test(t))));
 C('The plain app shell is kept for every other address', fs.existsSync(path.join(tmp, 'dist', 'app.html')) && !/rel="canonical"/.test(fs.readFileSync(path.join(tmp, 'dist', 'app.html'), 'utf8')));
 C('Nothing tells Google not to index the public pages', seo.SEO_PAGES.every((p) => !/noindex/.test(fs.readFileSync(pageFile(p.path), 'utf8'))));
 
 // 2. robots.txt, sitemap and routing
 const robots = fs.readFileSync(path.join(root, 'public/robots.txt'), 'utf8');
-C('robots.txt lets Google read the sitemap and the data pages load', /Allow: \/api\/sitemap/.test(robots) && /Allow: \/api\/swapsutra/.test(robots) && /Sitemap: https:\/\/swapsutra\.in\/sitemap\.xml/.test(robots));
+C('robots.txt lets Google read the sitemap and the data pages load', /Allow: \/api\/sitemap/.test(robots) && /Allow: \/api\/swapsutra/.test(robots) && /Sitemap: https:\/\/www\.swapsutra\.in\/sitemap\.xml/.test(robots));
 C('…and does not block the public pages', !/Disallow: \/\s*$/m.test(robots) && !/Disallow: \/(library|partners|syllabus|plot|book)\b/.test(robots));
 const vj = JSON.parse(fs.readFileSync(path.join(root, 'vercel.json'), 'utf8'));
 const srcs = vj.rewrites.map((r) => r.source);
 C('/sitemap.xml and /book/<id> are routed before the catch-all', srcs.indexOf('/sitemap.xml') !== -1 && srcs.indexOf('/book/:id') !== -1 && srcs.indexOf('/:path*') === srcs.length - 1
   && vj.rewrites.find((r) => r.source === '/book/:id').destination.startsWith('/api/book-page') && vj.rewrites[srcs.length - 1].destination === '/app.html');
-C('www.swapsutra.in sends readers to swapsutra.in in one step', (vj.redirects || []).some((r) => r.has && r.has[0].value === 'www.swapsutra.in' && r.destination === 'https://swapsutra.in/:path*' && r.permanent));
+// 18 Oct 2026: Vercel already sends swapsutra.in to www.swapsutra.in (Domains
+// settings). A vercel.json redirect the other way made an endless loop and
+// took the site down — never add a host redirect here.
+C('vercel.json has no host redirect (Vercel\'s Domains settings own that)', !vj.redirects || !vj.redirects.some((r) => (r.has || []).some((h) => h.type === 'host')));
 C('API answers are kept out of search results by header', vj.headers.some((h) => h.source === '/api/:path*' && h.headers.some((x) => x.key === 'X-Robots-Tag' && /noindex/.test(x.value))));
 const sm = fs.readFileSync(path.join(root, 'api/sitemap.ts'), 'utf8');
 const smPaths = [...sm.matchAll(/\{ path: '([^']+)'/g)].map((m) => m[1]).sort();
 const wantPaths = seo.SEO_PAGES.filter((p) => p.inSitemap).map((p) => p.path).sort();
-C('The sitemap lists exactly the indexed pages, on the one host', JSON.stringify(smPaths) === JSON.stringify(wantPaths) && /const SITE_URL = 'https:\/\/swapsutra\.in'/.test(sm) && !/www\.swapsutra\.in/.test(sm) && seo.SITE_ORIGIN === 'https://swapsutra.in', JSON.stringify(smPaths));
+C('The sitemap lists exactly the indexed pages, on the one host', JSON.stringify(smPaths) === JSON.stringify(wantPaths) && /const SITE_URL = 'https:\/\/www\.swapsutra\.in'/.test(sm) && seo.SITE_ORIGIN === 'https://www.swapsutra.in', JSON.stringify(smPaths));
 C('The book-page function imports packages only (Vercel cannot load ./files)', !/from '\.\.?\//.test(fs.readFileSync(path.join(root, 'api/book-page.ts'), 'utf8')) && !/from '\.\.?\//.test(sm));
 
 // 3. Book pages
@@ -81,7 +84,7 @@ const shell = fs.readFileSync(path.join(tmp, 'dist', 'app.html'), 'utf8');
 const html = bp.renderBookPage(shell, { id: 'SS_BOOK_1', title: 'Wings of <Fire>', author: 'A P J Abdul Kalam', condition: 'As New', sell: 'TRUE', lend: 'TRUE', ownerSellPrice: 250,
   isbn: '978-81-7371-146-6', genre: 'Biography', area: 'Hazratganj', imageUrls: 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWx/view', sellerName: 'Gomti Library' });
 C('A book page gets its own title and description', /<title>Wings of &lt;Fire&gt; by A P J Abdul Kalam — Borrow or buy on SwapSutra<\/title>/.test(html) && /content="Wings of &lt;Fire&gt;[^"]*Hazratganj[^"]*₹250/.test(html), (html.match(/<title>[^<]*/) || [])[0]);
-C('…its canonical link, one H1 and the cover with alt text', /rel="canonical" href="https:\/\/swapsutra\.in\/book\/SS_BOOK_1"/.test(html) && (html.match(/<h1[\s>]/g) || []).length === 1
+C('…its canonical link, one H1 and the cover with alt text', /rel="canonical" href="https:\/\/www\.swapsutra\.in\/book\/SS_BOOK_1"/.test(html) && (html.match(/<h1[\s>]/g) || []).length === 1
   && /<img src="https:\/\/drive\.google\.com\/thumbnail\?id=1AbCdEfGhIjKlMnOpQrStUvWx&amp;sz=w800" alt="Cover of Wings of &lt;Fire&gt;/.test(html));
 const ld = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
 const book = ld.find((x) => x['@type'] === 'Book');

@@ -9,14 +9,14 @@
 //
 // The public pages come from src/seo/pages.ts, the same list the build
 // uses to write a real HTML page per route; book pages are rendered by
-// api/book-page.ts. Every URL uses the one canonical host, swapsutra.in.
+// api/book-page.ts. Every URL uses the one canonical host, www.swapsutra.in (Vercel sends swapsutra.in there).
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || '';
 // The one canonical host. Kept in step with SITE_ORIGIN in src/seo/pages.ts
 // (tests/test_seo.cjs checks) — a function here may import packages only.
-const SITE_URL = 'https://swapsutra.in';
+const SITE_URL = 'https://www.swapsutra.in';
 
 export const config = { maxDuration: 30 };
 
