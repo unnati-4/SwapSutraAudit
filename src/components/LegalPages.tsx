@@ -77,7 +77,7 @@ const Shell = ({
       ))}
     </div>
 
-    <h2 className="text-3xl md:text-4xl font-serif text-[var(--text-primary)] mb-3 text-center tracking-tight">{title}</h2>
+    <h1 className="text-3xl md:text-4xl font-serif text-[var(--text-primary)] mb-3 text-center tracking-tight">{title}</h1>
     <p className="text-xs uppercase tracking-eyebrow text-brand-gold-text font-bold text-center mb-8">
       Effective {L.effectiveDate}
     </p>

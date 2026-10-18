@@ -1,8 +1,4 @@
-# SwapSutra — https://www.swapsutra.in
-#
-# There was no robots.txt at all before this, which meant no way to
-# declare a sitemap and no instruction to keep crawlers out of the
-# members-only surfaces.
+# SwapSutra — https://swapsutra.in
 
 User-agent: *
 Allow: /
@@ -14,10 +10,15 @@ Disallow: /notifications
 Disallow: /my-requests
 Disallow: /newsletter-manager
 Disallow: /unsubscribe
+Disallow: /cart
+Disallow: /shelf
 Disallow: /api/
+# …except what the pages themselves need. Until 18 Oct 2026 the rule above
+# blocked the sitemap too, and the data the Library loads — so Google could
+# not read the sitemap, and rendered every page without its books. API
+# answers carry an X-Robots-Tag: noindex header instead (vercel.json).
+Allow: /api/sitemap
+Allow: /api/swapsutra
+Allow: /api/books
 
-# The sitemap is generated from the live Library rather than kept as a
-# static file, so a book listed this morning is discoverable today. It
-# is served from /api/sitemap; declaring it here is what makes a sitemap
-# at a non-standard path count.
-Sitemap: https://www.swapsutra.in/api/sitemap
+Sitemap: https://swapsutra.in/sitemap.xml
