@@ -7627,6 +7627,18 @@ export default function App() {
   const [swapRequests, setSwapRequests] = useState<SwapRequestExt[]>([]);
   const [activeChats, setActiveChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const chatId = url.searchParams.get('chatId');
+    if (!chatId) return;
+    const chat = activeChats.find(item => item.chatId === chatId);
+    if (!chat) return;
+    setActiveChat(chat);
+    url.searchParams.delete('chatId');
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+  }, [activeChats]);
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [currentReadFormOpen, setCurrentReadFormOpen] = useState(false);

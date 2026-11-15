@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
+import ExchangeRoom from './ExchangeRoom';
 import {apiUrl} from '../config/runtime';
 
 /**
@@ -30,6 +31,7 @@ interface BacklogPayer {
 }
 
 interface BacklogRow {
+  saleDeposit?: { pending: boolean; amount: number | null };
   swapId: string;
   serviceType: string;
   requestedBookTitle: string;
@@ -107,14 +109,14 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
   };
 
   const breakdown = (p: BacklogPayer) => {
-    if ((p.saleAmount ?? 0) > 0) return `₹${p.saleAmount} book price + ₹${p.platformFee ?? 0} fee`;
+    if ((p.saleAmount ?? 0) > 0) return `₹${p.saleAmount} book price + ₹${p.platformFee ?? 0} fee${p.depositAmount ? ` + ₹${p.depositAmount} deposit` : ''}`;
     if ((p.depositAmount ?? 0) > 0) return `₹${p.depositAmount} deposit + ₹${p.platformFee ?? 0} fee`;
     return `₹${p.platformFee ?? p.requiredAmount} platform fee`;
   };
 
   const visible = rows
     .filter(r => filterService === 'ALL' || r.serviceType === filterService)
-    .filter(r => !filterAdminPending || r.payers.some(p => p.adminStatus === 'ADMIN_PENDING'))
+    .filter(r => !filterAdminPending || r.saleDeposit?.pending || r.payers.some(p => p.adminStatus === 'ADMIN_PENDING'))
     .slice()
     .sort((a, b) => {
       if (sortKey === 'serviceType') return a.serviceType.localeCompare(b.serviceType);
@@ -178,6 +180,7 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
                 <td className="p-3">{r.requestedBookTitle}</td>
                 <td className="p-3">{r.requesterEmail.split('@')[0]} ↔ {r.ownerEmail.split('@')[0]}</td>
                 <td className="p-3 space-y-1">
+                  {r.saleDeposit?.pending && <p>Waiting for admin to enter the security deposit. Open the exchange room to set it.</p>}
                   {r.payers.map(p => (
                     <div key={p.payerRole} className={`font-bold uppercase ${p.adminStatus === 'ADMIN_APPROVED' ? 'text-green-600' : p.adminStatus === 'ADMIN_PENDING' ? 'text-amber-600' : 'text-[var(--text-secondary)]'}`}>
                       {p.payerRole}: ₹{p.requiredAmount}{p.estimated ? ' (estimate — price not verified)' : ''} — {p.adminStatus.replace('_', ' ')}
@@ -200,6 +203,7 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
               {open === r.swapId && (
                 <tr key={r.swapId + '-review'} className="bg-[var(--bg-page)]">
                   <td colSpan={7} className="p-4">
+                    {r.serviceType === 'SELL' && <ExchangeRoom swapId={r.swapId} isAdmin onChanged={load} />}
                     <div className="grid gap-3 md:grid-cols-2">
                       {r.payers.map(p => {
                         const key = r.swapId + ':' + p.payerRole;
