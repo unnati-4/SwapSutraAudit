@@ -430,5 +430,83 @@ check('111. An archived room is never pulled back to Completed', /!== 'Completed
   check('118. Rating includes SwapSutra and offers the Google review', /How was SwapSutra\?/.test(roomUi) && /GoogleReviewCard/.test(roomUi));
 }
 
+// Shipping quotes, online-only exchanges and the complete COD sale journey.
+{
+  const env = makeEnv();
+  const setCheckout = (id, value) => {
+    const swap = env.ctx.loadSwapForCirculation(id);
+    env.ctx.saveOrderCheckout_(swap, value);
+  };
+  env.addSwap({ id: 'COD1', serviceType: 'SELL', amount: 300 });
+  setCheckout('COD1', { mode: 'ONLINE' });
+  env.as('req@x.com');
+  check('Shipping pending blocks payment', !room(env, 'req@x.com', 'COD1').payment.allApproved &&
+    !room(env, 'req@x.com', 'COD1').actions.some(a => a.type === 'pay'));
+  check('Requester cannot quote shipping', env.api.adminSetOrderShipping({ swapId: 'COD1', onlineShipping: 40, codShipping: 70 }).success === false);
+  env.as('swapsutra@gmail.com');
+  check('Reject negative shipping', env.api.adminSetOrderShipping({ swapId: 'COD1', onlineShipping: -10, codShipping: 70 }).success === false);
+  check('Admin saves separate shipping rates', env.api.adminSetOrderShipping({ swapId: 'COD1', onlineShipping: 40, codShipping: 70 }).success);
+  check('Admin saves the sale deposit', env.api.adminSetSaleSecurityDeposit({ swapId: 'COD1', amount: 80 }).success);
+  let r = room(env, 'req@x.com', 'COD1');
+  check('Online total includes book, deposit, fee and shipping', r.payment.checkout.total === 430 && r.payment.payers[0].shippingAmount === 40);
+  check('Stale shipping choice is rejected', env.api.selectOrderPaymentMode({ swapId: 'COD1', mode: 'COD', revision: 'old' }).success === false);
+  env.as('own@x.com');
+  check('Owner cannot select the requester payment mode', env.api.selectOrderPaymentMode({ swapId: 'COD1', mode: 'COD', revision: r.payment.checkout.revision }).success === false);
+  env.as('req@x.com');
+  check('Buyer can select COD', env.api.selectOrderPaymentMode({ swapId: 'COD1', mode: 'COD', revision: r.payment.checkout.revision }).success);
+  r = room(env, 'req@x.com', 'COD1');
+  check('COD total uses COD shipping', r.payment.checkout.total === 460);
+  check('COD confirmation requires condition video', env.api.confirmOrderCod({ swapId: 'COD1', revision: r.payment.checkout.revision, depositQuotedAt: r.payment.saleDeposit.quotedAt }).success === false);
+  env.video('COD1', 'outbound', 'QUALITY', 'own@x.com');
+  r = room(env, 'req@x.com', 'COD1');
+  check('COD offers confirmation instead of advance payment', r.actions.some(a => a.type === 'confirmCod') && !r.actions.some(a => a.type === 'pay'));
+  check('COD rejects online payment evidence', env.api.submitSecurityFeePayment({ swapId: 'COD1', utr: 'VALID123', screenshotUrl: 'https://proof', checkoutRevision: r.payment.checkout.revision }).success === false);
+  check('COD can be confirmed', env.api.confirmOrderCod({ swapId: 'COD1', revision: r.payment.checkout.revision, depositQuotedAt: r.payment.saleDeposit.quotedAt }).success);
+  r = room(env, 'req@x.com', 'COD1');
+  check('COD allows dispatch without marking money paid', r.payment.readyToProceed && !r.payment.allApproved && r.payment.payers[0].adminStatus === 'NOT_SUBMITTED');
+  env.as('swapsutra@gmail.com');
+  check('Confirmed COD freezes shipping', env.api.adminSetOrderShipping({ swapId: 'COD1', onlineShipping: 1, codShipping: 2 }).success === false);
+  check('Confirmed COD freezes deposit', env.api.adminSetSaleSecurityDeposit({ swapId: 'COD1', amount: 90 }).success === false);
+  env.as('req@x.com');
+  check('Confirmed COD freezes payment mode', env.api.selectOrderPaymentMode({ swapId: 'COD1', mode: 'ONLINE', revision: r.payment.checkout.revision }).success === false);
+  act(env, 'own@x.com', { swapId: 'COD1', act: 'setRoute', phase: 'out', method: 'courier' });
+  env.video('COD1', 'outbound', 'PACKING', 'own@x.com');
+  env.video('COD1', 'outbound', 'HANDOVER', 'own@x.com');
+  check('COD allows tracking entry before collection', act(env, 'own@x.com', { swapId: 'COD1', act: 'courierDetails', leg: 'outbound', courierName: 'India Post', awb: 'EE123456789IN' }).success);
+  check('COD allows sender delivery confirmation', act(env, 'own@x.com', { swapId: 'COD1', act: 'markDelivered', leg: 'outbound' }).success);
+  env.video('COD1', 'outbound', 'RECEIVING', 'req@x.com');
+  check('COD buyer confirms receipt', act(env, 'req@x.com', { swapId: 'COD1', act: 'markReceived', leg: 'outbound', happy: true }).success);
+  check('Uncollected COD produces no payouts or deposit refund', env.payouts('COD1').length === 0);
+  check('Rating waits for COD collection', !room(env, 'req@x.com', 'COD1').exchangeDone);
+  env.api.runSaleAutoRelease_();
+  check('Auto release cannot pay uncollected COD', env.payouts('COD1').length === 0);
+  check('Requester cannot mark COD funds received', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 460, reference: 'REMIT1' }).success === false);
+  env.as('swapsutra@gmail.com');
+  check('Short COD receipt rejected', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 450, reference: 'REMIT1' }).success === false);
+  check('Admin records full COD receipt', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 460, reference: 'REMIT1' }).success);
+  const payouts = env.payouts('COD1');
+  check('Seller receives only the sale proceeds', payouts.some(p => p.leg === 'sale' && p.amount === 290), JSON.stringify(payouts));
+  check('Deposit refund excludes shipping and fee', payouts.some(p => p.leg === 'refund:requester' && p.amount === 80));
+  env.as('swapsutra@gmail.com');
+  check('COD receipt retry is idempotent', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 460, reference: 'REMIT1' }).success && env.payouts('COD1').length === payouts.length);
+  check('Verified COD completes the exchange', room(env, 'req@x.com', 'COD1').exchangeDone);
+}
+for (const kind of ['SWAP', 'RENT', 'LEND']) {
+  const env = makeEnv();
+  env.addSwap({ id: kind, serviceType: kind, securityDeposit: 200, ownerDeposit: kind === 'SWAP' ? 200 : 0 });
+  env.ctx.saveOrderCheckout_(env.ctx.loadSwapForCirculation(kind), { mode: 'ONLINE' });
+  env.as('swapsutra@gmail.com');
+  check(kind + ' accepts an online shipping quote', env.api.adminSetOrderShipping({ swapId: kind, onlineShipping: 50 }).success);
+  env.video(kind, 'outbound', 'QUALITY', 'own@x.com');
+  if (kind === 'SWAP') env.video(kind, 'counter', 'QUALITY', 'req@x.com');
+  const r = room(env, 'req@x.com', kind);
+  check(kind + ' requires full online payment before dispatch', r.actions.some(a => a.type === 'pay') && !r.payment.allApproved && !r.payment.checkout.codAllowed && r.payment.payers.find(p => p.payerRole === 'requester').shippingAmount === 50);
+  check(kind + ' rejects COD server-side', env.api.selectOrderPaymentMode({ swapId: kind, mode: 'COD', revision: r.payment.checkout.revision }).success === false);
+  check(kind + ' rejects stale online quotes', env.api.submitSecurityFeePayment({ swapId: kind, utr: 'VALID123', screenshotUrl: 'https://proof', checkoutRevision: 'old' }).success === false);
+  check(kind + ' accepts online evidence with current quote', env.api.submitSecurityFeePayment({ swapId: kind, utr: 'VALID123', screenshotUrl: 'https://proof', checkoutRevision: r.payment.checkout.revision }).success);
+  env.as('swapsutra@gmail.com');
+  check(kind + ' freezes rates after online submission', env.api.adminSetOrderShipping({ swapId: kind, onlineShipping: 60 }).success === false);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
