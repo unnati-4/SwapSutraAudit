@@ -200,7 +200,8 @@ export class NotificationEngine {
       void inQuiet; void isThrottled;
 
       // 4. EMAIL NOTIFICATION
-      if (prefs.emailEnabled && categoryPref.email && !inQuiet && (priority === 'high' || priority === 'urgent' || !isThrottled)) {
+      const queuedByBackend = ['direct_message_received', 'voice_message_received', 'current_read_message'].includes(type);
+      if (!queuedByBackend && prefs.emailEnabled && categoryPref.email && !inQuiet && (priority === 'high' || priority === 'urgent' || !isThrottled)) {
         const emailSubjectText = emailSubject || `${title} 📚`;
         const emailHtml = generateSwapSutraEmailHtml({
           recipientName: 'Reader',

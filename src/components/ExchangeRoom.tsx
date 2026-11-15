@@ -49,7 +49,7 @@ export interface RoomData {
   legs: { out: RoomLeg[]; back: RoomLeg[] };
   route: { out: RoomRoute | null; back: RoomRoute | null };
   deadlines: { conditionBy: string; payBy: string };
-  payment: { payers: Payer[]; allApproved: boolean; upi: PayDetails };
+  payment: { saleDeposit?: { pending: boolean; amount: number | null; quotedAt: string }; payers: Payer[]; allApproved: boolean; upi: PayDetails };
   returnInfo: { dueAt: string; daysLeft: number; overdue: boolean; extensionDays: number } | null;
   sale: { price: number; sellerReceives: number; payoutStatus: string } | null;
   /** A rental: the rent, taken from the deposit at the end and paid to the owner. */
@@ -114,6 +114,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   const [progress, setProgress] = useState<{ key: string; p: number } | null>(null);
   const [pinFor, setPinFor] = useState<'out' | 'back' | null>(null);
   const [utr, setUtr] = useState('');
+  const [depositInput, setDepositInput] = useState('');
   const [payFile, setPayFile] = useState<File | null>(null);
   const [courier, setCourier] = useState<Record<string, { name: string; awb: string }>>({});
   const [happy, setHappy] = useState(false);
@@ -175,9 +176,23 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
     setBusy('pay'); setMsg('');
     try {
       const fileData = await fileToDataUrl(payFile);
-      const res = await post({ action: 'submitSecurityFeePayment', swapId, utr: utr.trim(), fileData, fileName: payFile.name });
+      const res = await post({ action: 'submitSecurityFeePayment', swapId, utr: utr.trim(), fileData, fileName: payFile.name, depositQuotedAt: room?.payment.saleDeposit?.quotedAt });
       if (res?.success) { setUtr(''); setPayFile(null); }
       await after(res, 'Payment sent — SwapSutra will verify it shortly.');
+    } catch { setMsg('Network error. Please try again.'); }
+    finally { setBusy(''); }
+  };
+
+  const saveDeposit = async () => {
+    if (!/^\d+$/.test(depositInput) || !Number.isSafeInteger(Number(depositInput)) || Number(depositInput) < 1) {
+      setMsg('Enter a positive deposit in whole rupees.');
+      return;
+    }
+    setBusy('deposit'); setMsg('');
+    try {
+      const result = await post({ action: 'adminSetSaleSecurityDeposit', swapId, amount: Number(depositInput) });
+      if (result.success) setDepositInput('');
+      await after(result, 'Security deposit saved.');
     } catch { setMsg('Network error. Please try again.'); }
     finally { setBusy(''); }
   };
@@ -225,7 +240,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         const p = myPayer;
         if (!p) return null;
         const parts = (p.saleAmount ?? 0) > 0
-          ? `₹${p.saleAmount} book price + ₹${p.platformFee ?? 0} platform fee. SwapSutra holds the price and pays the seller only after you have the book and say you're happy.`
+          ? `₹${p.saleAmount} book price + ₹${p.platformFee ?? 0} platform fee${p.depositAmount ? ` + ₹${p.depositAmount} refundable security deposit` : ''}. SwapSutra holds the price and pays the seller only after you have the book and say you're happy.`
           : (p.depositAmount ?? 0) > 0 && (room.rentCharge ?? 0) > 0 && room.role === 'requester'
             ? `₹${p.depositAmount} security deposit + ₹${p.platformFee ?? 0} platform fee. When the book is back, the rent (₹${Math.min(room.rentCharge ?? 0, p.depositAmount ?? 0)}) goes to the owner from the deposit and ₹${Math.max(0, (p.depositAmount ?? 0) - (room.rentCharge ?? 0))} comes back to you.`
           : (p.depositAmount ?? 0) > 0 && (room.feeFromDeposit ?? 0) > 0 && !(p.platformFee ?? 0)
@@ -528,6 +543,24 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         showReport
           ? <DisputeReport swapId={swapId} />
           : <button type="button" onClick={() => setShowReport(true)} className="text-2xs underline text-[var(--text-secondary)]">Report a problem</button>
+      )}
+
+      {isAdmin && room.type === 'SELL' && !room.closed && !room.exchangeDone &&
+        !room.payment.payers.some(p => p.utr || p.adminStatus === 'ADMIN_APPROVED' || p.adminStatus === 'ADMIN_PENDING') && (
+        <div className="rounded-2xl border border-brand-border p-4 space-y-3">
+          <label className="block text-xs font-bold">
+            Security deposit (₹)
+            <input type="number" min="1" step="1" value={depositInput}
+              placeholder={room.payment.saleDeposit?.amount?.toString() || 'Enter amount'}
+              onChange={e => setDepositInput(e.target.value)}
+              className="input-classic mt-2 w-full" />
+          </label>
+          <p className="text-xs text-[var(--text-secondary)]">
+            {room.payment.saleDeposit?.pending ? 'The buyer is waiting for the deposit amount.' :
+              room.payment.saleDeposit?.amount ? `Current deposit ₹${room.payment.saleDeposit.amount}.` : 'Enter the deposit for this purchase.'}
+          </p>
+          <button type="button" className={btnSolid} disabled={!!busy || !depositInput} onClick={saveDeposit}>Save deposit</button>
+        </div>
       )}
 
       {isAdmin && room.payment.payers.filter(p => p.adminStatus === 'ADMIN_PENDING').map(p => (

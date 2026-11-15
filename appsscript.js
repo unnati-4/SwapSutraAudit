@@ -8,6 +8,12 @@
  * 3. Execute as: "Me"
  * 4. Who has access: "Anyone"
  * 5. Deploy & copy the Web App URL to your .env or proxy config.
+ * Chat email: run installChatEmailTrigger() once as the deployment owner.
+ * CHAT_CONVERSATION_PATH can override /profile?chatId={chatId} with the
+ * actual frontend route. It accepts {chatId} and optionally {swapId}.
+ * The admin UI can POST adminSetSaleSecurityDeposit with swapId and amount.
+ * Read payment.saleDeposit from getExchangeRoom; send its quotedAt as
+ * depositQuotedAt on payment submission to detect an outdated quote.
  */
 
 let SPREADSHEET_ID = "1VgXsJgoJTaqOmwAe_hxCxO9L69I5sKbIpPq_Tjmfgu8";
@@ -5485,29 +5491,7 @@ function getCircleMessages(data) {
   return { success: true, data: messages };
 }
 
-function sendReadersCircleMessageEmail(to, senderName, bookTitle, discussionUrl) {
-  try {
-    const subject = "New activity in your Readers Circle 📚";
-    const body = `${senderName} posted a new message in the Readers Circle for '${bookTitle}'. Open SwapSutra to continue the discussion.`;
-    const content = `<p>${escapeHtml(body)}</p>`;
-    const htmlBody = typeof getBrandedEmailTemplate === "function"
-      ? getBrandedEmailTemplate("New message in your Readers Circle", content, discussionUrl, "Open Discussion")
-      : `
-        <div style="font-family: Georgia, serif; color:#3B241C; line-height:1.6;">
-          <h2>New message in your Readers Circle</h2>
-          ${content}
-          <p><a href="${escapeHtml(discussionUrl)}">Open the Readers Circle discussion</a></p>
-        </div>
-      `;
-    sendSwapSutraEmail({ to, subject, htmlBody });
-    return true;
-  } catch (e) {
-    Logger.log("Readers Circle message email failed for " + to + ": " + e.toString());
-    return false;
-  }
-}
-
-function notifyReadersCircleMessage(circleId, messageId, senderEmail, senderName, discussionUrl, rows) {
+function notifyReadersCircleMessage(circleId, messageId, senderEmail, senderName, discussionUrl, rows, row) {
   const currentRows = rows || getCurrentReadRows();
   const circle = currentRows.circles.find(c => String(c.circle_id) === String(circleId));
   if (!circle) return { notificationsCreated: 0, emailsAttempted: 0 };
@@ -5537,12 +5521,13 @@ function notifyReadersCircleMessage(circleId, messageId, senderEmail, senderName
     dedupeKey
   })));
 
-  let emailsAttempted = 0;
-  recipients.forEach(email => {
-    emailsAttempted += sendReadersCircleMessageEmail(email, displayName, bookTitle, link) ? 1 : 0;
-  });
-
-  return { notificationsCreated: created.length, emailsAttempted };
+  const emailQueued = queueChatEmailSafely_(() => enqueueChatEmail_({
+    id: messageId, conversation: 'circle:' + circleId, name: bookTitle + ' · Readers Circle',
+    link: buildReadersCircleDiscussionUrl(swapSutraSiteUrl() + '/readers-circle', circleId),
+    sender: displayName, preview: row.is_spoiler === 'TRUE' ? 'Spoiler hidden. Open the conversation to read it.' : chatEmailPreview_(row.message),
+    at: row.created_at.getTime()
+  }, sender, recipients));
+  return { notificationsCreated: created.length, emailsAttempted: 0, emailQueued: emailQueued };
 }
 
 function addCircleMessage(data) {
@@ -5622,13 +5607,15 @@ function addCircleMessage(data) {
   };
   rows.messageSheet.appendRow(CURRENT_READ_MESSAGE_HEADERS.map(h => row[h] || ""));
 
-  // Circle notifications mail every member of that circle. The Café's
-  // "members" are everyone on SwapSutra, so doing that per message would
-  // be a mailout, not a notification. The room is ambient by design —
-  // you look in when you want company.
   const notificationResult = isCafe
-    ? notifyCafeMentions_(row, userId, userName, rows)
-    : notifyReadersCircleMessage(circleId, row.message_id, userId, userName, data.discussion_url || data.discussionUrl, rows);
+    ? Object.assign(notifyCafeMentions_(row, userId, userName, rows), {
+      emailQueued: queueChatEmailSafely_(() => enqueueChatEmail_({
+        id: row.message_id, conversation: 'cafe', name: "Reader's Café", link: swapSutraSiteUrl() + '/readers-cafe',
+        sender: userName, preview: row.is_spoiler === 'TRUE' ? 'Spoiler hidden. Open the conversation to read it.' : chatEmailPreview_(row.message),
+        at: row.created_at.getTime()
+      }, userId, cafeChatEmailRecipients_()))
+    })
+    : notifyReadersCircleMessage(circleId, row.message_id, userId, userName, data.discussion_url || data.discussionUrl, rows, row);
 
   // Real activity signal backing the "Bookish Confidant" achievement --
   // logged only when a genuine message was actually posted above.
@@ -6475,6 +6462,7 @@ function doPostHandler_(e) {
     // none of them trust a client-supplied stage, role, amount or email.
     if (action === 'getSwapStage') return respondJson(getSwapStage(data));
     if (action === 'getSecurityFeeStatus') return respondJson(getSecurityFeeStatus(data));
+    if (action === 'adminSetSaleSecurityDeposit') return respondJson(adminSetSaleSecurityDeposit(data));
     if (action === 'submitSecurityFeePayment') return respondJson(submitSecurityFeePayment(data));
     // Oct 2026 — listing allowance and platform revenue.
     if (action === 'getListingAllowance') return respondJson(getListingAllowance(data));
@@ -9083,7 +9071,7 @@ function createSwapRequest(data) {
     "offeredBookId", "requestedBookValue", "offeredBookValue",
     "ownerDeposit", "ownerDepositUtr", "ownerDepositStatus",
     // 'ESTIMATE' when that side's deposit came from an unverified price.
-    "requesterDepositBasis", "ownerDepositBasis"
+    "requesterDepositBasis", "ownerDepositBasis", "saleDepositQuote"
   ];
   const sheet = getOrCreateSheet('SwapRequests', swapHeaders);
   ensureSheetHeaders(sheet, swapHeaders);
@@ -9326,17 +9314,17 @@ function createSwapRequest(data) {
       ? Number(deposits.salePrice)
       : (serviceType === 'RENT' ? Number(rentCharge || 0) : 0);
     else if (h === 'monthlyRent') row[i] = serviceType === 'RENT' ? Number(monthlyRent || 0) : '';
-    else if (h === 'securityDeposit') row[i] = deposits.requesterDeposit;
+    else if (h === 'securityDeposit') row[i] = serviceType === 'SELL' ? '' : deposits.requesterDeposit;
     else if (h === 'offeredBookId') row[i] = offeredBook ? String(offeredBook.id || '') : '';
     else if (h === 'requestedBookValue') row[i] = deposits.requestedBookValue;
     else if (h === 'offeredBookValue') row[i] = deposits.offeredBookValue;
     else if (h === 'ownerDeposit') row[i] = deposits.ownerDeposit;
-    else if (h === 'requesterDepositBasis') row[i] = deposits.requesterDepositEstimated ? 'ESTIMATE' : 'KNOWN';
+    else if (h === 'requesterDepositBasis') row[i] = serviceType === 'SELL' ? 'MANUAL' : (deposits.requesterDepositEstimated ? 'ESTIMATE' : 'KNOWN');
     else if (h === 'ownerDepositBasis') row[i] = deposits.ownerDeposit > 0 ? (deposits.ownerDepositEstimated ? 'ESTIMATE' : 'KNOWN') : '';
     else if (h === 'ownerDepositUtr') row[i] = '';
     else if (h === 'ownerDepositStatus') row[i] = deposits.ownerDeposit > 0 ? 'Pending' : 'N/A';
     else if (h === 'paymentStatus') row[i] = data.paymentStatus || (serviceType === 'RENT' || serviceType === 'SELL' ? 'Pending' : 'N/A');
-    else if (h === 'paymentUtr') row[i] = data.paymentUtr || data.security_fee_utr || '';
+    else if (h === 'paymentUtr') row[i] = serviceType === 'SELL' ? '' : (data.paymentUtr || data.security_fee_utr || '');
     else if (h === 'handoverStatus') row[i] = 'Pending';
     else if (h === 'returnStatus') row[i] = (serviceType === 'RENT' || serviceType === 'LEND') ? 'Pending' : 'N/A';
     else if (h === 'area') row[i] = data.area || '';
@@ -13292,7 +13280,8 @@ function sendChatMessage(data) {
   msgSheet.appendRow(row);
   chatThreadCacheClear_(chatId);
 
-  return { success: true, messageId: msgId };
+  const emailQueued = queueChatEmailSafely_(() => queueTransactionChatEmail_(chat, msgId, senderEmail, message, data.mediaType, now));
+  return emailQueued ? { success: true, messageId: msgId } : { success: true, messageId: msgId, emailQueued: false };
 }
 
 const CHAT_SAFETY_EVENTS_SHEET = 'ChatSafetyEvents';
@@ -17006,7 +16995,7 @@ function plainTextFromHtml(html) {
     .trim();
 }
 
-function sendViaEmailProvider(msg, apiKey) {
+function sendViaEmailProvider(msg, apiKey, idempotencyKey) {
   const payload = {
     from: getEmailFromAddress(),
     to: [msg.to],
@@ -17014,7 +17003,7 @@ function sendViaEmailProvider(msg, apiKey) {
   };
   if (msg.htmlBody) {
     payload.html = msg.htmlBody;
-    payload.text = plainTextFromHtml(msg.htmlBody);
+    payload.text = idempotencyKey && msg.body ? msg.body : plainTextFromHtml(msg.htmlBody);
   } else {
     payload.text = msg.body;
   }
@@ -17023,10 +17012,12 @@ function sendViaEmailProvider(msg, apiKey) {
     payload.attachments = msg.attachments.map(b => ({ filename: b.getName(), content: Utilities.base64Encode(b.getBytes()) }));
   }
 
+  const headers = { Authorization: 'Bearer ' + apiKey };
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
   const response = UrlFetchApp.fetch(EMAIL_PROVIDER_ENDPOINT, {
     method: 'post',
     contentType: 'application/json',
-    headers: { Authorization: 'Bearer ' + apiKey },
+    headers: headers,
     payload: JSON.stringify(payload),
     // Read the status ourselves so a 4xx becomes a fallback rather than
     // an exception that skips the fallback entirely.
@@ -19910,7 +19901,7 @@ function swapDepositEstimated_(swapObj, role) {
   if (!swapObj) return false;
   const recorded = String(swapObj[role === 'owner' ? 'ownerDepositBasis' : 'requesterDepositBasis'] || '').trim().toUpperCase();
   if (recorded === 'ESTIMATE') return true;
-  if (recorded === 'KNOWN') return false;
+  if (recorded === 'KNOWN' || recorded === 'MANUAL') return false;
   const bookId = role === 'owner' ? swapObj.offeredBookId : swapObj.requestedBookId;
   if (!bookId) return false;
   return isEstimatedBookValue_(findBookById(bookId));
@@ -20792,6 +20783,17 @@ function loadSecurityFeeRows(swapId) {
  * — locking its chat exactly like a brand-new swap, with no grandfathering.
  */
 function ensureSecurityFeeRecords(swap) {
+  if (!isEscrowSaleOrder_(swap.obj)) return ensureSecurityFeeRecordsUnlocked_(swap);
+  return withSaleDepositLock_(() => {
+    const current = loadSwapForCirculation(swap.obj.id);
+    if (!current) throw new Error('Purchase could not be found.');
+    swap.obj = current.obj;
+    return ensureSecurityFeeRecordsUnlocked_(swap);
+  });
+}
+
+function ensureSecurityFeeRecordsUnlocked_(swap) {
+  if (saleDepositState_(swap.obj).pending) return [];
   const swapId = swap.obj.id;
   const required = securityFeeRequirements(swap);
   const { sheet, headers, rows } = loadSecurityFeeRows(swapId);
@@ -20891,9 +20893,12 @@ function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
       rejectedReason: isSelf ? (rec.rejectedReason || '') : ''
     };
   });
-  const required = payers.length > 0;
-  const allApproved = !required || payers.every(p => p.adminStatus === 'ADMIN_APPROVED');
-  return { payers, required, allApproved };
+  const saleDeposit = saleDepositState_(swap.obj);
+  const required = saleDeposit.pending || payers.length > 0;
+  const allApproved = !saleDeposit.pending && (!required || payers.every(p => p.adminStatus === 'ADMIN_APPROVED'));
+  const result = { payers, required, allApproved };
+  if (saleDeposit.manual) result.saleDeposit = saleDeposit;
+  return result;
 }
 
 /**
@@ -21229,9 +21234,8 @@ const UTR_PATTERN = /^[A-Za-z0-9]{4,25}$/;
 /**
  * A party submits evidence of their own security-fee payment. The role is
  * derived from the verified session against the swap's own two parties —
- * never accepted from the client — and the amount was already fixed on
- * the server at request-creation time (computeMutualDeposit), so nothing
- * here is client-controlled except the UTR text and the screenshot bytes.
+ * never accepted from the client. The server uses the saved order terms,
+ * including the latest admin quote for a purchase.
  */
 function submitSecurityFeePayment(data) {
   try {
@@ -21248,7 +21252,33 @@ function submitSecurityFeePayment(data) {
       return { success: false, error: 'REQUEST_CLOSED', message: 'This request has closed, so there is nothing to pay. Please do not send money for it.' };
     }
 
-    ensureSecurityFeeRecords(swap);
+    if (isEscrowSaleOrder_(swap.obj)) {
+      return withSaleDepositLock_(() => submitSecurityFeeEvidence_(data, caller, loadSwapForCirculation(swapId)));
+    }
+    return submitSecurityFeeEvidence_(data, caller, swap);
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+function submitSecurityFeeEvidence_(data, caller, swap) {
+  try {
+    if (!swap || ['expired', 'cancelled', 'declined', 'rejected'].includes(String(swap.obj.status || '').toLowerCase())) {
+      return { success: false, error: 'REQUEST_CLOSED', message: 'This request has closed. Please do not send money for it.' };
+    }
+    const swapId = String(swap.obj.id);
+    const role = swapPartyRole(swap, caller);
+    const quote = saleDepositState_(swap.obj);
+    if (quote.pending) {
+      return { success: false, error: 'DEPOSIT_PENDING', message: 'Wait for SwapSutra to set the security deposit before paying.' };
+    }
+    if (quote.manual && !roomSwapAccepted_(swap.obj.status)) {
+      return { success: false, error: 'NOT_ACCEPTED', message: 'Wait for the purchase request to be accepted before paying.' };
+    }
+    if (quote.manual && data.depositQuotedAt && data.depositQuotedAt !== quote.quotedAt) {
+      return { success: false, error: 'DEPOSIT_CHANGED', message: 'The security deposit changed. Refresh the exchange room and check the new amount.' };
+    }
+    ensureSecurityFeeRecordsUnlocked_(swap);
     const { sheet, headers, rows } = loadSecurityFeeRows(swapId);
     const mine = rows.find(r => r.obj.payerRole === role);
     if (!mine) return { success: false, message: 'No security fee is required from you on this exchange.' };
@@ -21403,6 +21433,7 @@ function adminListSecurityFeeBacklog(data) {
         status: status,
         createdAt: obj.createdAt,
         updatedAt: obj.updatedAt,
+        saleDeposit: fee.saleDeposit,
         payers: fee.payers.map(p => ({
           payerRole: p.payerRole, payerEmail: p.payerEmail, requiredAmount: p.requiredAmount,
           paymentStatus: p.paymentStatus, adminStatus: p.adminStatus, estimated: p.estimated,
@@ -23773,6 +23804,67 @@ function platformFeeAppliesToSwap_(swapObj) {
  * A party owing nothing (pre-launch exchange, zero deposit) gets no row,
  * exactly as before. The admin account never pays a platform fee.
  */
+/** Manual deposits apply to new purchases and older escrow orders explicitly quoted by an admin. */
+function isEscrowSaleOrder_(obj) {
+  return String(obj.serviceType || '').trim().toUpperCase() === 'SELL' && saleEscrowAppliesToSwap_(obj);
+}
+
+function saleDepositState_(obj) {
+  const manual = isEscrowSaleOrder_(obj) && (obj.requesterDepositBasis === 'MANUAL' || Boolean(obj.saleDepositQuote));
+  if (!manual) return { manual: false, pending: false, amount: null };
+  let quote;
+  try { quote = JSON.parse(obj.saleDepositQuote || 'null'); } catch (e) { quote = null; }
+  const valid = quote && Number.isSafeInteger(quote.amount) && quote.amount > 0 && Number.isFinite(Date.parse(quote.quotedAt));
+  return { manual: true, pending: !valid, amount: valid ? quote.amount : null, quotedAt: valid ? quote.quotedAt : '' };
+}
+
+function withSaleDepositLock_(run) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    return run();
+  } finally {
+    try { SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
+  }
+}
+
+/** Admin POST action: { action: 'adminSetSaleSecurityDeposit', swapId, amount }. */
+function adminSetSaleSecurityDeposit(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const raw = String((data && data.amount) || '').trim();
+  const amount = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(amount) || amount < 1) {
+    return { success: false, error: 'INVALID_DEPOSIT', message: 'Enter a positive security deposit in whole rupees.' };
+  }
+  try {
+    return withSaleDepositLock_(() => {
+      const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
+      if (!swap || !isEscrowSaleOrder_(swap.obj)) {
+        return { success: false, message: 'This action requires a SwapSutra purchase order.' };
+      }
+      const status = String(swap.obj.status || '').trim().toLowerCase();
+      if (status !== 'pending' && !['accepted', 'approved', 'active'].includes(status)) {
+        return { success: false, message: 'This purchase is past the deposit entry stage.' };
+      }
+      const payment = loadSecurityFeeRows(swap.obj.id).rows.map(r => r.obj)
+        .find(r => r.payerRole === 'requester');
+      if ((payment && (payment.utr || payment.submittedAt || ['ADMIN_APPROVED', 'ADMIN_PENDING', 'ADMIN_REJECTED'].includes(payment.adminStatus))) ||
+          swap.obj.paymentUtr) {
+        return { success: false, error: 'PAYMENT_ALREADY_SUBMITTED', message: 'The buyer has already submitted payment evidence.' };
+      }
+      const previous = saleDepositState_(swap.obj);
+      if (previous.amount === amount) return { success: true, saleDeposit: previous };
+      const headers = ensureSheetHeaders(swap.sheet, ['saleDepositQuote']);
+      swap.obj.saleDepositQuote = JSON.stringify({ amount: amount, quotedAt: new Date().toISOString() });
+      swap.sheet.getRange(swap.rowIndex + 1, headers.indexOf('saleDepositQuote') + 1).setValue(swap.obj.saleDepositQuote);
+      return { success: true, saleDeposit: saleDepositState_(swap.obj) };
+    });
+  } catch (e) {
+    Logger.log('adminSetSaleSecurityDeposit failed: ' + e);
+    return { success: false, message: 'The security deposit could not be saved. Try again.' };
+  }
+}
+
 function computeExchangePayments_(swap) {
   const obj = swap.obj || {};
   const serviceType = String(obj.serviceType || 'SWAP').trim().toUpperCase();
@@ -23792,9 +23884,13 @@ function computeExchangePayments_(swap) {
   if (serviceType === 'SELL' && saleEscrowAppliesToSwap_(obj)) {
     const saleAmount = Math.max(0, Math.round(Number(obj.amount || 0)));
     const fee = isAdminEmail(swap.requesterEmail) ? 0 : baseFee;
-    if (swap.requesterEmail && saleAmount + fee > 0) {
-      reqs.push({ payerRole: 'requester', payerEmail: swap.requesterEmail, requiredAmount: saleAmount + fee,
-        depositAmount: 0, platformFee: fee, saleAmount: saleAmount });
+    const quote = saleDepositState_(obj);
+    if (quote.pending) return reqs;
+    const deposit = quote.amount || 0;
+    const total = saleAmount + fee + deposit;
+    if (swap.requesterEmail && total > 0) {
+      reqs.push({ payerRole: 'requester', payerEmail: swap.requesterEmail, requiredAmount: total,
+        depositAmount: deposit, platformFee: fee, saleAmount: saleAmount });
     }
     return reqs;
   }
@@ -25404,6 +25500,7 @@ function saleStatusFor_(swap) {
   const id = String(swap.obj.id);
   const fee = platformFeePerParty_();
   const price = Math.max(0, Math.round(Number(swap.obj.amount || 0)));
+  const quote = saleDepositState_(swap.obj);
   // A partner seller (9 Oct 2026) pays no ₹10 fee; SwapSutra keeps its commission instead.
   const partnerSeller = approvedPartner_(swap.ownerEmail);
   const sellerFee = isAdminEmail(swap.ownerEmail) || partnerSeller ? 0 : fee;
@@ -25417,7 +25514,7 @@ function saleStatusFor_(swap) {
   return {
     escrow: saleEscrowActive_(swap),
     price: price,
-    buyerPays: price + (isAdminEmail(swap.requesterEmail) ? 0 : fee),
+    buyerPays: quote.pending ? null : price + (isAdminEmail(swap.requesterEmail) ? 0 : fee) + (quote.amount || 0),
     sellerReceives: Math.max(0, Math.round((price - sellerFee - commission.commission) * 100) / 100),
     sellerFee: sellerFee,
     commission: commission.commission, commissionRate: commission.rate, partnerSeller: !!partnerSeller,
@@ -25495,7 +25592,9 @@ function adminDecideSale(data) {
   const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
   const title = String(swap.obj.requestedBookTitle || 'the book');
   if (outcome === 'REFUND_BUYER') {
-    const amount = Number(paid.requiredAmount || st.buyerPays) || st.buyerPays;
+    const priorDepositRefund = readSheetObjects_(sheet).rows.map(r => r.obj)
+      .find(r => String(r.swapId) === String(swap.obj.id) && String(r.leg) === 'refund:requester');
+    const amount = Math.max(0, Number(paid.requiredAmount || st.buyerPays) - Number(priorDepositRefund && priorDepositRefund.amount || 0));
     const rec = { id: generateId('SS_REFUND_'), swapId: swap.obj.id, leg: 'sale_refund', bookTitle: title, defaulterEmail: swap.ownerEmail,
       ownerEmail: swap.requesterEmail, amount: amount, dueAt: '', forfeitedAt: new Date(), payoutStatus: 'TO_PAY_OWNER',
       note: 'Purchase refunded to the buyer after a dispute. Reason: ' + reason };
@@ -25511,6 +25610,7 @@ function adminDecideSale(data) {
       note: 'Sale released to the seller after a dispute: price ₹' + st.price + ' − ₹' + st.sellerFee + ' platform fee. Reason: ' + reason };
     salePartnerPayout_(swap, st, rec, sheet, headers);
     sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    roomCreateRefunds_(swap, true);
     returnNotify_(swap.ownerEmail, 'sale_payout_due', 'Your sale is complete',
       'After reviewing "' + title + '", SwapSutra is paying you ₹' + st.sellerReceives + '. Reason: ' + reason, swap.obj.id, 'sale_dec_s_' + swap.obj.id);
     returnNotify_(swap.requesterEmail, 'sale_decided_buyer', 'Decision on your purchase',
@@ -25761,7 +25861,9 @@ function roomIntroMessage_(request) {
   const back = type === 'RENT' || type === 'LEND' || (type === 'SWAP' && String(request.swapPreference || '').toLowerCase() === 'temporary');
   return '🛡️ This is your exchange room. Chat here, and follow the steps at the top — every step is recorded here.\n\n' +
     '3. The book\'s condition video (by whoever sends a book) — within 48 hours\n' +
-    '4. Payment through SwapSutra — within 48 hours after that, or the request closes\n' +
+    (saleDepositState_(request || {}).manual
+      ? '4. Wait for SwapSutra to enter the security deposit. Pay within 48 hours once the deposit and condition video are both ready.\n'
+      : '4. Payment through SwapSutra — within 48 hours after that, or the request closes\n') +
     '5. Packaging video · 6. Meet in person or courier · 7. Place, or courier + tracking ID\n' +
     '8. Handover video · 9. Sender marks delivered, receiver records the unboxing video and marks received\n' +
     (back ? '10–14. 21 days with the reader; with 7 days left you can ask for +7 once (the owner agrees); then the return, with the same videos, and both mark it\n' : '') +
@@ -25940,7 +26042,10 @@ function computeExchangeRoom_(input) {
   const rejectedTimes = (fee.payers || []).filter(p => p.adminStatus === 'ADMIN_REJECTED')
     .map(p => t(p.updatedAt || p.submittedAt)).filter(x => isFinite(x));
   const rejectedAt = rejectedTimes.length ? Math.max.apply(null, rejectedTimes) : NaN;
-  const payBy = (isFinite(conditionDoneAt) ? Math.max(conditionDoneAt, clockStart, isFinite(rejectedAt) ? rejectedAt : -Infinity) : NaN) + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
+  const deposit = fee.saleDeposit;
+  const waitingForDeposit = Boolean(deposit && deposit.pending);
+  const quoteAt = deposit && deposit.quotedAt ? t(deposit.quotedAt) : -Infinity;
+  const payBy = (isFinite(conditionDoneAt) ? Math.max(conditionDoneAt, clockStart, quoteAt, isFinite(rejectedAt) ? rejectedAt : -Infinity) : NaN) + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
   const unpaid = (fee.payers || []).filter(p => p.adminStatus === 'NOT_SUBMITTED' || p.adminStatus === 'ADMIN_REJECTED' || !p.adminStatus);
   const paymentPhase = accepted && !done[4];
 
@@ -25949,7 +26054,7 @@ function computeExchangeRoom_(input) {
   const current = closedEarly ? 16 : (firstOpen || 16);
   const sale = type === 'SELL';
   const titles = Object.assign({}, ROOM_STEP_TITLES);
-  if (sale) { titles[4] = 'Payment (book price + fee) — or close'; titles[9] = 'Delivered & received — buyer closes the purchase'; }
+  if (sale) { titles[4] = deposit ? 'Payment (book price, fee and security deposit)' : 'Payment (book price + fee) — or close'; titles[9] = 'Delivered & received — buyer closes the purchase'; }
   const legNames = l => out.length > 1 ? (l.sender === viewer ? 'your book' : 'their book') : 'the book';
   const detail = {};
   detail[3] = (out.length > 1 ? 'Each of you records your own book\'s condition' : (viewer === 'owner' ? 'You record the book\'s condition' : 'The owner records the book\'s condition')) +
@@ -25958,6 +26063,8 @@ function computeExchangeRoom_(input) {
     ? (fee.payers || []).map(p => (p.payerRole === viewer ? 'You' : p.payerRole === 'owner' ? 'The owner' : 'The requester') + ': ₹' + p.requiredAmount + ' — ' +
       (p.adminStatus === 'ADMIN_APPROVED' ? 'verified' : p.adminStatus === 'ADMIN_PENDING' ? 'paid, SwapSutra is verifying' : p.adminStatus === 'ADMIN_REJECTED' ? 'not accepted, pay again' : 'to pay')).join(' · ')
     : 'Nothing to pay on this exchange.';
+  if (waitingForDeposit) detail[4] = 'SwapSutra will enter the security deposit. Please wait before paying.';
+  else if (deposit && deposit.amount) detail[4] += ' · Security deposit ₹' + deposit.amount + '.';
   if (paymentPhase && raw[3] && unpaid.length) detail[4] += ' · Pay by ' + when(payBy) + ', or the request closes.';
   detail[6] = outRoute ? (outRoute.method === 'courier' ? 'Courier' : 'In person') : 'Decide together in the chat; either of you records it.';
   detail[7] = outRoute ? (outRoute.method === 'courier'
@@ -26086,6 +26193,7 @@ function computeExchangeRoom_(input) {
   else if (archived) waitingOn = '';
   else if (!actions.some(a => a.type !== 'close' && a.type !== 'payoutAccount')) {
     if (paymentPhase && !raw[3]) waitingOn = 'Waiting for ' + otherName + ' to record the book\'s condition video.';
+    else if (paymentPhase && waitingForDeposit) waitingOn = 'Waiting for SwapSutra to enter the security deposit.';
     else if (paymentPhase && unpaid.length) waitingOn = 'Waiting for the payment.';
     else if (paymentPhase) waitingOn = 'SwapSutra is verifying the payment — usually within a few hours.';
     else if (needsReturn && done[9] && !done[12] && !(ret.extensionWindow || {}).open) waitingOn = ret.started ? 'Enjoy the book. The return is due by ' + when(ret.dueAt) + '.' : '';
@@ -26194,7 +26302,8 @@ function getExchangeRoom(data) {
       bookTitle: String(swap.obj.requestedBookTitle || ''),
       otherName: approvedPartner_(caller) ? 'the buyer' : roomName_(caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail),
       disputeOpen: input.disputeOpen,
-      payment: { payers: input.fee.payers, allApproved: input.fee.allApproved, upi: paymentDetails_() },
+      payment: Object.assign({ payers: input.fee.payers, allApproved: input.fee.allApproved, upi: paymentDetails_() },
+        input.fee.saleDeposit ? { saleDeposit: input.fee.saleDeposit } : {}),
       returnInfo: ret.applies && ret.started ? { dueAt: ret.dueAt, daysLeft: ret.daysLeft, overdue: ret.overdue, extensionDays: ret.extensionDays,
         window: ret.extensionWindow || null, pendingExtension: pending } : null,
       sale: String(swap.obj.serviceType || '').toUpperCase() === 'SELL' ? saleStatusFor_(swap) : null,
@@ -26397,13 +26506,14 @@ function roomFinishExchange_(swap, room) {
  * return) or SwapSutra decided it in a dispute. Waits while a dispute is
  * open. Idempotent: one refund record per reader.
  */
-function roomCreateRefunds_(swap) {
+function roomCreateRefunds_(swap, saleRuling) {
   const id = String(swap.obj.id);
-  if (swapHasOpenDispute(id)) return [];
+  if (!saleRuling && swapHasOpenDispute(id)) return [];
   const sheet = getReturnForfeitSheet_();
   const headers = ensureSheetHeaders(sheet, RETURN_FORFEIT_HEADERS);
   const existing = readSheetObjects_(sheet).rows.map(r => r.obj).filter(f => String(f.swapId) === id);
   const created = [];
+  if (existing.some(f => String(f.leg) === 'sale_refund')) return created;
   // Launch check (11 Oct 2026): a book that came back late is settled by the
   // forfeit job (runReturnDeadlines), never refunded here as well.
   const late = {};
@@ -28536,3 +28646,229 @@ const LAUNCH_USED_NAMES = 'a,a08f84,a390cfd0b405,a5d6a7,a85d6d,a87926,aadhaar,aa
 // <partner-agreements> generated by scripts/gen-partner-agreements.cjs — do not edit by hand
 const PARTNER_AGREEMENT_TEXT = {"bookstore":"# SwapSutra Bookstore Partner Agreement\n\n**Version:** bookstore-2026-10-13\n\n> Drafted for SwapSutra. Have an advocate review it before relying on it.\n\n## 1. What this agreement covers\n\nThis agreement is between Unnati Goyal, sole proprietor, trading as SwapSutra (Saharanpur, Uttar Pradesh, India; swapsutra@gmail.com) (\"SwapSutra\") and the bookstore named in the registration, acting through its owner or authorised person (\"the Bookstore\"). It applies from the moment the Bookstore signs it on swapsutra.in, and takes effect when SwapSutra approves the registration.\n\nThe Bookstore may list books for sale, rent or loan on SwapSutra without the 20-book limit that applies to readers, and must keep the number of copies in stock (inventory) correct for every listing.\n\nThe Bookstore may show its banner on the SwapSutra Library page and run ads, as set out in clause 6.\n\nThe Bookstore uses a partner account that is separate from any reader account, and is also bound by SwapSutra's Terms of Use, Privacy Policy, Community Guidelines and Refund & Security Deposit Policy. Where they differ, this agreement applies to the Bookstore's partner activity.\n\n## 2. Registration, documents and verification\n\nThe Bookstore gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), a business proof (GST certificate, shop & establishment registration, Udyam or trade licence) — or, if the business is not registered, a photo of the owner with the books and a declaration that the details are true — contact details and the business location (or, if it sells online only, the city it ships from and the link where it sells).\n\nA Bookstore that sells online only gives just the owner's masked Aadhaar, its contact details, the city it ships from and the link where it sells; it does not need a PAN or business documents, and SwapSutra may verify it by a video call before approving.\n\nIf the Bookstore is not registered, it sells or lends in the owner's own name and under the owner's PAN, and SwapSutra may verify it by a video call before approving. The Bookstore must tell SwapSutra if it registers later, and upload the proof.\n\nSwapSutra keeps these documents in private storage, uses them only to verify the partner, to pay them and to meet legal requirements, and does not show them to readers. Only the last 4 digits of the Aadhaar number are kept as text.\n\nThe Bookstore must tell SwapSutra within 7 days if any of these details change. SwapSutra may ask for fresh documents at any time and may pause the account until they are given.\n\n## 3. Selling, orders and stock\n\nBuyers pay SwapSutra through the site. SwapSutra holds the money until the buyer has received the book and closed the purchase (or 7 days after receipt with no problem reported), as set out in the Refund & Security Deposit Policy.\n\nSwapSutra is run by its founder, Unnati Goyal. All money paid to SwapSutra — buyers' payments, security deposits, the Bookstore's promotion fees and the money waiting for the Bookstore's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is paid out or refunded under this agreement.\n\nThe Bookstore keeps every listing accurate — title, edition, condition, price and the number of copies in stock — and marks a book out of stock as soon as it is no longer available. An order the Bookstore cannot fulfil must be cancelled in the exchange room straight away; repeated cancellations may lead to suspension.\n\nEvery order runs in its exchange room: the condition video, packaging video, courier name and tracking ID, and the steps the room asks for must be completed within the times it shows.\n\n## 4. Shipping and delivery are the partner's responsibility\n\nThe Bookstore is responsible for packing, shipping and delivering every order — choosing the courier, paying the shipping cost unless the listing says otherwise, entering the courier name and tracking ID, and making sure the book reaches the buyer in the condition shown.\n\nLoss or damage in transit, delays and courier disputes are between the Bookstore and the courier. If a book does not arrive, or arrives damaged or different from the listing, SwapSutra may refund the buyer from the money it holds for that order, and the Bookstore is not paid for it.\n\nSwapSutra gives the Bookstore only what is needed to post an order — the recipient's name, delivery address, pincode and phone number. The Bookstore may use these only to deliver that order and must not keep, share or use them for marketing or any other purpose.\n\n## 5. Fees, commission and monthly payouts\n\nThe Bookstore pays no ₹10 platform fee on its own books (when it sells, lends, rents out or swaps them). The buyer, borrower or renter always pays SwapSutra's ₹10 platform fee on each exchange. When the Bookstore asks for another reader's book, it pays the ₹10 like any reader.\n\nSwapSutra keeps a commission of 2% of every payout to the Bookstore (the sale price of each book sold, and the rent of each book rented). The commission is deducted before payment.\n\nIf SwapSutra approves the Bookstore \"commission-free\", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.\n\nPayouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID or bank account the Bookstore gives at registration (it can be changed in the partner dashboard). The dashboard shows every order, the commission kept and what was paid.\n\nThe Bookstore is responsible for its own taxes (including GST where it applies) on its sales. SwapSutra may change the commission rate or the fees with at least 30 days' notice by email; The Bookstore may end this agreement before the change applies.\n\n## 6. Banner and ads (promotion)\n\nThe Bookstore chooses whether to show a banner on the SwapSutra Library page and whether to run ads, and can change this at any time in the dashboard. Every banner and ad is checked by SwapSutra before it shows and is always labelled \"Sponsored\" with the SwapSutra logo.\n\nPromotion is free for the first 6 months from approval. After that it costs ₹100 for every 2 months, paid in advance by UPI to SwapSutra and verified by SwapSutra. If it is not paid, the banner and ads stop showing until it is; nothing else about the account changes.\n\nThe Bookstore confirms that every banner and ad is true, is its own to publish (images, logos, text), and does not mislead readers. SwapSutra may refuse, pause or remove any banner or ad, with a reason.\n\n## 7. Conduct\n\nThe Bookstore lists only genuine, legally sold copies — no pirated, counterfeit or unauthorised editions — and describes each book honestly.\n\nThe Bookstore does not contact buyers outside SwapSutra to take a sale off the site, does not ask buyers for their personal details, and treats readers courteously.\n\nSwapSutra may suspend or end a partner account for a breach of this agreement or of the Community Guidelines, after telling the partner why (or at once for fraud, piracy or a risk to readers).\n\n## 8. Ending the agreement\n\nEither side may end this agreement with 15 days' notice by email. The Bookstore must complete or cancel open orders; SwapSutra pays what is due for completed orders with the next monthly payout, less any commission and any refund owed to buyers.\n\nUnpaid promotion fees are not refundable once the promotion period has started.\n\n## 9. Liability, privacy and law\n\nSwapSutra provides the platform. It is not the seller of the Bookstore's books and is not liable for the books, their delivery, or the Bookstore's dealings with couriers. Each side's liability to the other is limited to the commission and fees SwapSutra received from the Bookstore in the 3 months before the claim, except for fraud.\n\nPersonal data is handled under the Privacy Policy and the Digital Personal Data Protection Act, 2023.\n\nThis agreement is governed by the laws of India. Disputes are first raised with SwapSutra's grievance officer (swapsutra@gmail.com); if not resolved in 30 days, the courts at Saharanpur, Uttar Pradesh have jurisdiction.\n\n## 10. Signature\n\nBy typing the owner's or authorised person's full name and submitting the registration, the Bookstore signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and the Bookstore can see them in the partner dashboard. A signed copy of this agreement is emailed to the Bookstore and to SwapSutra, and SwapSutra keeps a copy in its records.\n","author":"# SwapSutra Author Partner Agreement\n\n**Version:** author-2026-10-13\n\n> Drafted for SwapSutra. Have an advocate review it before relying on it.\n\n## 1. What this agreement covers\n\nThis agreement is between Unnati Goyal, sole proprietor, trading as SwapSutra (Saharanpur, Uttar Pradesh, India; swapsutra@gmail.com) (\"SwapSutra\") and the author named in the registration (\"the Author\"). It applies from the moment the Author signs it on swapsutra.in, and takes effect when SwapSutra approves the registration.\n\nThe Author may list and sell copies of their own books, and promote their books, readings and events on SwapSutra.\n\nThe Author confirms they hold the right to sell and promote every book they list, and that cover images and text they upload are theirs to use.\n\nThe Author uses a partner account that is separate from any reader account, and is also bound by SwapSutra's Terms of Use, Privacy Policy, Community Guidelines and Refund & Security Deposit Policy. Where they differ, this agreement applies to the Author's partner activity.\n\n## 2. Registration, documents and verification\n\nThe Author gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), contact details and location (optional).\n\nSwapSutra keeps these documents in private storage, uses them only to verify the partner, to pay them and to meet legal requirements, and does not show them to readers. Only the last 4 digits of the Aadhaar number are kept as text.\n\nThe Author must tell SwapSutra within 7 days if any of these details change. SwapSutra may ask for fresh documents at any time and may pause the account until they are given.\n\n## 3. Selling, orders and stock\n\nBuyers pay SwapSutra through the site. SwapSutra holds the money until the buyer has received the book and closed the purchase (or 7 days after receipt with no problem reported), as set out in the Refund & Security Deposit Policy.\n\nSwapSutra is run by its founder, Unnati Goyal. All money paid to SwapSutra — buyers' payments, security deposits, the Author's promotion fees and the money waiting for the Author's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is paid out or refunded under this agreement.\n\nThe Author keeps every listing accurate — title, edition, condition, price and the number of copies in stock — and marks a book out of stock as soon as it is no longer available. An order the Author cannot fulfil must be cancelled in the exchange room straight away; repeated cancellations may lead to suspension.\n\nEvery order runs in its exchange room: the condition video, packaging video, courier name and tracking ID, and the steps the room asks for must be completed within the times it shows.\n\n## 4. Shipping and delivery are the partner's responsibility\n\nThe Author is responsible for packing, shipping and delivering every order — choosing the courier, paying the shipping cost unless the listing says otherwise, entering the courier name and tracking ID, and making sure the book reaches the buyer in the condition shown.\n\nLoss or damage in transit, delays and courier disputes are between the Author and the courier. If a book does not arrive, or arrives damaged or different from the listing, SwapSutra may refund the buyer from the money it holds for that order, and the Author is not paid for it.\n\nSwapSutra gives the Author only what is needed to post an order — the recipient's name, delivery address, pincode and phone number. The Author may use these only to deliver that order and must not keep, share or use them for marketing or any other purpose.\n\n## 5. Fees, commission and monthly payouts\n\nThe Author pays no ₹10 platform fee on its own books (when it sells, lends, rents out or swaps them). The buyer, borrower or renter always pays SwapSutra's ₹10 platform fee on each exchange. When the Author asks for another reader's book, it pays the ₹10 like any reader.\n\nSwapSutra keeps a commission of 2% of every payout to the Author (the sale price of each book sold, and the rent of each book rented). The commission is deducted before payment.\n\nIf SwapSutra approves the Author \"commission-free\", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.\n\nPayouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID or bank account the Author gives at registration (it can be changed in the partner dashboard). The dashboard shows every order, the commission kept and what was paid.\n\nThe Author is responsible for its own taxes (including GST where it applies) on its sales. SwapSutra may change the commission rate or the fees with at least 30 days' notice by email; The Author may end this agreement before the change applies.\n\n## 6. Banner and ads (promotion)\n\nThe Author chooses whether to show a banner on the SwapSutra Library page and whether to run ads, and can change this at any time in the dashboard. Every banner and ad is checked by SwapSutra before it shows and is always labelled \"Sponsored\" with the SwapSutra logo.\n\nPromotion is free for the first 6 months from approval. After that it costs ₹100 for every 2 months, paid in advance by UPI to SwapSutra and verified by SwapSutra. If it is not paid, the banner and ads stop showing until it is; nothing else about the account changes.\n\nThe Author confirms that every banner and ad is true, is its own to publish (images, logos, text), and does not mislead readers. SwapSutra may refuse, pause or remove any banner or ad, with a reason.\n\n## 7. Conduct\n\nThe Author lists only genuine, legally sold copies — no pirated, counterfeit or unauthorised editions — and describes each book honestly.\n\nThe Author does not contact buyers outside SwapSutra to take a sale off the site, does not ask buyers for their personal details, and treats readers courteously.\n\nSwapSutra may suspend or end a partner account for a breach of this agreement or of the Community Guidelines, after telling the partner why (or at once for fraud, piracy or a risk to readers).\n\n## 8. Ending the agreement\n\nEither side may end this agreement with 15 days' notice by email. The Author must complete or cancel open orders; SwapSutra pays what is due for completed orders with the next monthly payout, less any commission and any refund owed to buyers.\n\nUnpaid promotion fees are not refundable once the promotion period has started.\n\n## 9. Liability, privacy and law\n\nSwapSutra provides the platform. It is not the seller of the Author's books and is not liable for the books, their delivery, or the Author's dealings with couriers. Each side's liability to the other is limited to the commission and fees SwapSutra received from the Author in the 3 months before the claim, except for fraud.\n\nPersonal data is handled under the Privacy Policy and the Digital Personal Data Protection Act, 2023.\n\nThis agreement is governed by the laws of India. Disputes are first raised with SwapSutra's grievance officer (swapsutra@gmail.com); if not resolved in 30 days, the courts at Saharanpur, Uttar Pradesh have jurisdiction.\n\n## 10. Signature\n\nBy typing their full name and submitting the registration, the Author signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and the Author can see them in the partner dashboard. A signed copy of this agreement is emailed to the Author and to SwapSutra, and SwapSutra keeps a copy in its records.\n","publisher":"# SwapSutra Publisher Partner Agreement\n\n**Version:** publisher-2026-10-13\n\n> Drafted for SwapSutra. Have an advocate review it before relying on it.\n\n## 1. What this agreement covers\n\nThis agreement is between Unnati Goyal, sole proprietor, trading as SwapSutra (Saharanpur, Uttar Pradesh, India; swapsutra@gmail.com) (\"SwapSutra\") and the publisher or imprint named in the registration, acting through its authorised signatory (\"the Publisher\"). It applies from the moment the Publisher signs it on swapsutra.in, and takes effect when SwapSutra approves the registration.\n\nThe Publisher may list and sell books it publishes or distributes, without a listing limit, keeping the number of copies in stock correct for every listing.\n\nThe Publisher confirms it holds the publishing or distribution rights for every book it lists, and will list no pirated or unauthorised edition.\n\nThe Publisher uses a partner account that is separate from any reader account, and is also bound by SwapSutra's Terms of Use, Privacy Policy, Community Guidelines and Refund & Security Deposit Policy. Where they differ, this agreement applies to the Publisher's partner activity.\n\n## 2. Registration, documents and verification\n\nThe Publisher gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), a business proof (GST certificate, shop & establishment registration, Udyam or trade licence) — or, if the business is not registered, a photo of the owner with the books and a declaration that the details are true — contact details and the business location (or, if it sells online only, the city it ships from and the link where it sells).\n\nIf the Publisher is not registered, it sells or lends in the owner's own name and under the owner's PAN, and SwapSutra may verify it by a video call before approving. The Publisher must tell SwapSutra if it registers later, and upload the proof.\n\nSwapSutra keeps these documents in private storage, uses them only to verify the partner, to pay them and to meet legal requirements, and does not show them to readers. Only the last 4 digits of the Aadhaar number are kept as text.\n\nThe Publisher must tell SwapSutra within 7 days if any of these details change. SwapSutra may ask for fresh documents at any time and may pause the account until they are given.\n\n## 3. Selling, orders and stock\n\nBuyers pay SwapSutra through the site. SwapSutra holds the money until the buyer has received the book and closed the purchase (or 7 days after receipt with no problem reported), as set out in the Refund & Security Deposit Policy.\n\nSwapSutra is run by its founder, Unnati Goyal. All money paid to SwapSutra — buyers' payments, security deposits, the Publisher's promotion fees and the money waiting for the Publisher's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is paid out or refunded under this agreement.\n\nThe Publisher keeps every listing accurate — title, edition, condition, price and the number of copies in stock — and marks a book out of stock as soon as it is no longer available. An order the Publisher cannot fulfil must be cancelled in the exchange room straight away; repeated cancellations may lead to suspension.\n\nEvery order runs in its exchange room: the condition video, packaging video, courier name and tracking ID, and the steps the room asks for must be completed within the times it shows.\n\n## 4. Shipping and delivery are the partner's responsibility\n\nThe Publisher is responsible for packing, shipping and delivering every order — choosing the courier, paying the shipping cost unless the listing says otherwise, entering the courier name and tracking ID, and making sure the book reaches the buyer in the condition shown.\n\nLoss or damage in transit, delays and courier disputes are between the Publisher and the courier. If a book does not arrive, or arrives damaged or different from the listing, SwapSutra may refund the buyer from the money it holds for that order, and the Publisher is not paid for it.\n\nSwapSutra gives the Publisher only what is needed to post an order — the recipient's name, delivery address, pincode and phone number. The Publisher may use these only to deliver that order and must not keep, share or use them for marketing or any other purpose.\n\n## 5. Fees, commission and monthly payouts\n\nThe Publisher pays no ₹10 platform fee on its own books (when it sells, lends, rents out or swaps them). The buyer, borrower or renter always pays SwapSutra's ₹10 platform fee on each exchange. When the Publisher asks for another reader's book, it pays the ₹10 like any reader.\n\nSwapSutra keeps a commission of 2% of every payout to the Publisher (the sale price of each book sold, and the rent of each book rented). The commission is deducted before payment.\n\nIf SwapSutra approves the Publisher \"commission-free\", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.\n\nPayouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID or bank account the Publisher gives at registration (it can be changed in the partner dashboard). The dashboard shows every order, the commission kept and what was paid.\n\nThe Publisher is responsible for its own taxes (including GST where it applies) on its sales. SwapSutra may change the commission rate or the fees with at least 30 days' notice by email; The Publisher may end this agreement before the change applies.\n\n## 6. Banner and ads (promotion)\n\nThe Publisher chooses whether to show a banner on the SwapSutra Library page and whether to run ads, and can change this at any time in the dashboard. Every banner and ad is checked by SwapSutra before it shows and is always labelled \"Sponsored\" with the SwapSutra logo.\n\nPromotion is free for the first 6 months from approval. After that it costs ₹100 for every 2 months, paid in advance by UPI to SwapSutra and verified by SwapSutra. If it is not paid, the banner and ads stop showing until it is; nothing else about the account changes.\n\nThe Publisher confirms that every banner and ad is true, is its own to publish (images, logos, text), and does not mislead readers. SwapSutra may refuse, pause or remove any banner or ad, with a reason.\n\n## 7. Conduct\n\nThe Publisher lists only genuine, legally sold copies — no pirated, counterfeit or unauthorised editions — and describes each book honestly.\n\nThe Publisher does not contact buyers outside SwapSutra to take a sale off the site, does not ask buyers for their personal details, and treats readers courteously.\n\nSwapSutra may suspend or end a partner account for a breach of this agreement or of the Community Guidelines, after telling the partner why (or at once for fraud, piracy or a risk to readers).\n\n## 8. Ending the agreement\n\nEither side may end this agreement with 15 days' notice by email. The Publisher must complete or cancel open orders; SwapSutra pays what is due for completed orders with the next monthly payout, less any commission and any refund owed to buyers.\n\nUnpaid promotion fees are not refundable once the promotion period has started.\n\n## 9. Liability, privacy and law\n\nSwapSutra provides the platform. It is not the seller of the Publisher's books and is not liable for the books, their delivery, or the Publisher's dealings with couriers. Each side's liability to the other is limited to the commission and fees SwapSutra received from the Publisher in the 3 months before the claim, except for fraud.\n\nPersonal data is handled under the Privacy Policy and the Digital Personal Data Protection Act, 2023.\n\nThis agreement is governed by the laws of India. Disputes are first raised with SwapSutra's grievance officer (swapsutra@gmail.com); if not resolved in 30 days, the courts at Saharanpur, Uttar Pradesh have jurisdiction.\n\n## 10. Signature\n\nBy typing the owner's or authorised person's full name and submitting the registration, the Publisher signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and the Publisher can see them in the partner dashboard. A signed copy of this agreement is emailed to the Publisher and to SwapSutra, and SwapSutra keeps a copy in its records.\n","promoter":"# SwapSutra Promoter Partner Agreement\n\n**Version:** promoter-2026-10-13\n\n> Drafted for SwapSutra. Have an advocate review it before relying on it.\n\n## 1. What this agreement covers\n\nThis agreement is between Unnati Goyal, sole proprietor, trading as SwapSutra (Saharanpur, Uttar Pradesh, India; swapsutra@gmail.com) (\"SwapSutra\") and the promoter or agency named in the registration (\"the Promoter\"). It applies from the moment the Promoter signs it on swapsutra.in, and takes effect when SwapSutra approves the registration.\n\nThe Promoter may run ads and banners on SwapSutra for books, authors, bookstores or literary events it is authorised to promote, and may list books it is entitled to sell.\n\nThe Promoter confirms it has the written permission of every author, publisher or business it promotes, and will produce that permission if SwapSutra asks.\n\nThe Promoter uses a partner account that is separate from any reader account, and is also bound by SwapSutra's Terms of Use, Privacy Policy, Community Guidelines and Refund & Security Deposit Policy. Where they differ, this agreement applies to the Promoter's partner activity.\n\n## 2. Registration, documents and verification\n\nThe Promoter gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), contact details and location (optional).\n\nSwapSutra keeps these documents in private storage, uses them only to verify the partner, to pay them and to meet legal requirements, and does not show them to readers. Only the last 4 digits of the Aadhaar number are kept as text.\n\nThe Promoter must tell SwapSutra within 7 days if any of these details change. SwapSutra may ask for fresh documents at any time and may pause the account until they are given.\n\n## 3. Selling, orders and stock\n\nBuyers pay SwapSutra through the site. SwapSutra holds the money until the buyer has received the book and closed the purchase (or 7 days after receipt with no problem reported), as set out in the Refund & Security Deposit Policy.\n\nSwapSutra is run by its founder, Unnati Goyal. All money paid to SwapSutra — buyers' payments, security deposits, the Promoter's promotion fees and the money waiting for the Promoter's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is paid out or refunded under this agreement.\n\nThe Promoter keeps every listing accurate — title, edition, condition, price and the number of copies in stock — and marks a book out of stock as soon as it is no longer available. An order the Promoter cannot fulfil must be cancelled in the exchange room straight away; repeated cancellations may lead to suspension.\n\nEvery order runs in its exchange room: the condition video, packaging video, courier name and tracking ID, and the steps the room asks for must be completed within the times it shows.\n\n## 4. Shipping and delivery are the partner's responsibility\n\nThe Promoter is responsible for packing, shipping and delivering every order — choosing the courier, paying the shipping cost unless the listing says otherwise, entering the courier name and tracking ID, and making sure the book reaches the buyer in the condition shown.\n\nLoss or damage in transit, delays and courier disputes are between the Promoter and the courier. If a book does not arrive, or arrives damaged or different from the listing, SwapSutra may refund the buyer from the money it holds for that order, and the Promoter is not paid for it.\n\nSwapSutra gives the Promoter only what is needed to post an order — the recipient's name, delivery address, pincode and phone number. The Promoter may use these only to deliver that order and must not keep, share or use them for marketing or any other purpose.\n\n## 5. Fees, commission and monthly payouts\n\nThe Promoter pays no ₹10 platform fee on its own books (when it sells, lends, rents out or swaps them). The buyer, borrower or renter always pays SwapSutra's ₹10 platform fee on each exchange. When the Promoter asks for another reader's book, it pays the ₹10 like any reader.\n\nSwapSutra keeps a commission of 2% of every payout to the Promoter (the sale price of each book sold, and the rent of each book rented). The commission is deducted before payment.\n\nIf SwapSutra approves the Promoter \"commission-free\", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.\n\nPayouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID or bank account the Promoter gives at registration (it can be changed in the partner dashboard). The dashboard shows every order, the commission kept and what was paid.\n\nThe Promoter is responsible for its own taxes (including GST where it applies) on its sales. SwapSutra may change the commission rate or the fees with at least 30 days' notice by email; The Promoter may end this agreement before the change applies.\n\n## 6. Banner and ads (promotion)\n\nThe Promoter chooses whether to show a banner on the SwapSutra Library page and whether to run ads, and can change this at any time in the dashboard. Every banner and ad is checked by SwapSutra before it shows and is always labelled \"Sponsored\" with the SwapSutra logo.\n\nPromotion is free for the first 6 months from approval. After that it costs ₹100 for every 2 months, paid in advance by UPI to SwapSutra and verified by SwapSutra. If it is not paid, the banner and ads stop showing until it is; nothing else about the account changes.\n\nThe Promoter confirms that every banner and ad is true, is its own to publish (images, logos, text), and does not mislead readers. SwapSutra may refuse, pause or remove any banner or ad, with a reason.\n\n## 7. Conduct\n\nThe Promoter lists only genuine, legally sold copies — no pirated, counterfeit or unauthorised editions — and describes each book honestly.\n\nThe Promoter does not contact buyers outside SwapSutra to take a sale off the site, does not ask buyers for their personal details, and treats readers courteously.\n\nSwapSutra may suspend or end a partner account for a breach of this agreement or of the Community Guidelines, after telling the partner why (or at once for fraud, piracy or a risk to readers).\n\n## 8. Ending the agreement\n\nEither side may end this agreement with 15 days' notice by email. The Promoter must complete or cancel open orders; SwapSutra pays what is due for completed orders with the next monthly payout, less any commission and any refund owed to buyers.\n\nUnpaid promotion fees are not refundable once the promotion period has started.\n\n## 9. Liability, privacy and law\n\nSwapSutra provides the platform. It is not the seller of the Promoter's books and is not liable for the books, their delivery, or the Promoter's dealings with couriers. Each side's liability to the other is limited to the commission and fees SwapSutra received from the Promoter in the 3 months before the claim, except for fraud.\n\nPersonal data is handled under the Privacy Policy and the Digital Personal Data Protection Act, 2023.\n\nThis agreement is governed by the laws of India. Disputes are first raised with SwapSutra's grievance officer (swapsutra@gmail.com); if not resolved in 30 days, the courts at Saharanpur, Uttar Pradesh have jurisdiction.\n\n## 10. Signature\n\nBy typing their full name and submitting the registration, the Promoter signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and the Promoter can see them in the partner dashboard. A signed copy of this agreement is emailed to the Promoter and to SwapSutra, and SwapSutra keeps a copy in its records.\n","library":"# SwapSutra Library Partner Agreement\n\n**Version:** library-2026-10-13\n\n> Drafted for SwapSutra. Have an advocate review it before relying on it.\n\n## 1. What this agreement covers\n\nThis agreement is between Unnati Goyal, sole proprietor, trading as SwapSutra (Saharanpur, Uttar Pradesh, India; swapsutra@gmail.com) (\"SwapSutra\") and the library named in the registration, acting through its librarian or authorised person (\"the Library\"). It applies from the moment the Library signs it on swapsutra.in, and takes effect when SwapSutra approves the registration.\n\nThe Library may lend, rent or sell books from its collection on SwapSutra without the 20-book limit that applies to readers, and must keep the number of copies available correct for every listing.\n\nThe Library confirms it owns, or is authorised to lend or sell, every book it lists, and that its own membership rules do not stop it from doing so.\n\nThe Library may show its banner on the SwapSutra Library page and run ads, as set out in clause 6.\n\nThe Library uses a partner account that is separate from any reader account, and is also bound by SwapSutra's Terms of Use, Privacy Policy, Community Guidelines and Refund & Security Deposit Policy. Where they differ, this agreement applies to the Library's partner activity.\n\n## 2. Registration, documents and verification\n\nThe Library gives true and complete details: the name the business or work is registered in, the owner's or signatory's PAN, a masked Aadhaar (only the last 4 digits visible), a proof of the library (trust, society or shop registration, or a letter from the school or college) — or, if the library is not registered, a photo of the library with the librarian and a declaration that the details are true — contact details and the library location.\n\nIf the Library is not registered, it sells or lends in the owner's own name and under the owner's PAN, and SwapSutra may verify it by a video call before approving. The Library must tell SwapSutra if it registers later, and upload the proof.\n\nSwapSutra keeps these documents in private storage, uses them only to verify the partner, to pay them and to meet legal requirements, and does not show them to readers. Only the last 4 digits of the Aadhaar number are kept as text.\n\nThe Library must tell SwapSutra within 7 days if any of these details change. SwapSutra may ask for fresh documents at any time and may pause the account until they are given.\n\n## 3. Selling, orders and stock\n\nBuyers pay SwapSutra through the site. SwapSutra holds the money until the buyer has received the book and closed the purchase (or 7 days after receipt with no problem reported), as set out in the Refund & Security Deposit Policy.\n\nSwapSutra is run by its founder, Unnati Goyal. All money paid to SwapSutra — buyers' payments, security deposits, the Library's promotion fees and the money waiting for the Library's monthly payout — is received into and held in the account of SwapSutra's founder, Unnati Goyal (the UPI ID or bank account shown in every payment box), until it is paid out or refunded under this agreement.\n\nThe Library keeps every listing accurate — title, edition, condition, price and the number of copies in stock — and marks a book out of stock as soon as it is no longer available. An order the Library cannot fulfil must be cancelled in the exchange room straight away; repeated cancellations may lead to suspension.\n\nEvery order runs in its exchange room: the condition video, packaging video, courier name and tracking ID, and the steps the room asks for must be completed within the times it shows.\n\n## 4. Shipping and delivery are the partner's responsibility\n\nThe Library is responsible for packing, shipping and delivering every order — choosing the courier, paying the shipping cost unless the listing says otherwise, entering the courier name and tracking ID, and making sure the book reaches the buyer in the condition shown.\n\nLoss or damage in transit, delays and courier disputes are between the Library and the courier. If a book does not arrive, or arrives damaged or different from the listing, SwapSutra may refund the buyer from the money it holds for that order, and the Library is not paid for it.\n\nSwapSutra gives the Library only what is needed to post an order — the recipient's name, delivery address, pincode and phone number. The Library may use these only to deliver that order and must not keep, share or use them for marketing or any other purpose.\n\n## 5. Fees, commission and monthly payouts\n\nThe Library pays no ₹10 platform fee on its own books (when it sells, lends, rents out or swaps them). The buyer, borrower or renter always pays SwapSutra's ₹10 platform fee on each exchange. When the Library asks for another reader's book, it pays the ₹10 like any reader.\n\nSwapSutra keeps a commission of 2% of every payout to the Library (the sale price of each book sold, and the rent of each book rented). The commission is deducted before payment.\n\nIf SwapSutra approves the Library \"commission-free\", no commission is charged on payouts for the first 12 months from the date of approval; from the 13th month the 2% commission applies.\n\nPayouts are made monthly: the money for orders closed in a calendar month is paid after that month ends, usually within the first 10 days of the next month, to the UPI ID or bank account the Library gives at registration (it can be changed in the partner dashboard). The dashboard shows every order, the commission kept and what was paid.\n\nThe Library is responsible for its own taxes (including GST where it applies) on its sales. SwapSutra may change the commission rate or the fees with at least 30 days' notice by email; The Library may end this agreement before the change applies.\n\n## 6. Banner and ads (promotion)\n\nThe Library chooses whether to show a banner on the SwapSutra Library page and whether to run ads, and can change this at any time in the dashboard. Every banner and ad is checked by SwapSutra before it shows and is always labelled \"Sponsored\" with the SwapSutra logo.\n\nPromotion is free for the first 6 months from approval. After that it costs ₹100 for every 2 months, paid in advance by UPI to SwapSutra and verified by SwapSutra. If it is not paid, the banner and ads stop showing until it is; nothing else about the account changes.\n\nThe Library confirms that every banner and ad is true, is its own to publish (images, logos, text), and does not mislead readers. SwapSutra may refuse, pause or remove any banner or ad, with a reason.\n\n## 7. Conduct\n\nThe Library lists only genuine, legally sold copies — no pirated, counterfeit or unauthorised editions — and describes each book honestly.\n\nThe Library does not contact buyers outside SwapSutra to take a sale off the site, does not ask buyers for their personal details, and treats readers courteously.\n\nSwapSutra may suspend or end a partner account for a breach of this agreement or of the Community Guidelines, after telling the partner why (or at once for fraud, piracy or a risk to readers).\n\n## 8. Ending the agreement\n\nEither side may end this agreement with 15 days' notice by email. The Library must complete or cancel open orders; SwapSutra pays what is due for completed orders with the next monthly payout, less any commission and any refund owed to buyers.\n\nUnpaid promotion fees are not refundable once the promotion period has started.\n\n## 9. Liability, privacy and law\n\nSwapSutra provides the platform. It is not the seller of the Library's books and is not liable for the books, their delivery, or the Library's dealings with couriers. Each side's liability to the other is limited to the commission and fees SwapSutra received from the Library in the 3 months before the claim, except for fraud.\n\nPersonal data is handled under the Privacy Policy and the Digital Personal Data Protection Act, 2023.\n\nThis agreement is governed by the laws of India. Disputes are first raised with SwapSutra's grievance officer (swapsutra@gmail.com); if not resolved in 30 days, the courts at Saharanpur, Uttar Pradesh have jurisdiction.\n\n## 10. Signature\n\nBy typing the owner's or authorised person's full name and submitting the registration, the Library signs this agreement electronically (Information Technology Act, 2000). SwapSutra records the name, the date and time and this agreement's version, and the Library can see them in the partner dashboard. A signed copy of this agreement is emailed to the Library and to SwapSutra, and SwapSutra keeps a copy in its records.\n"};
 // </partner-agreements>
+
+// A durable outbox keeps email delivery outside the chat request.
+const CHAT_EMAIL_OUTBOX_HEADERS = ['messageKey', 'recipient', 'payload', 'batch', 'deliveredAt', 'retryAt'];
+const CHAT_EMAIL_COOLDOWN_MS = 5 * 60 * 1000;
+const CHAT_EMAIL_MAX_MESSAGES = 25;
+const CHAT_EMAIL_LEASE_KEY = 'CHAT_EMAIL_WORKER_LEASE';
+
+function queueChatEmailSafely_(enqueue) {
+  try {
+    enqueue();
+    return true;
+  } catch (e) {
+    Logger.log('Chat message saved but email queue failed: ' + e);
+    return false;
+  }
+}
+
+function chatEmailPreview_(message, mediaType) {
+  if (String(mediaType || '').toLowerCase() === 'location') return 'Shared a location. Open the conversation to view it.';
+  const text = String(message || '').replace(/\s+/g, ' ').trim();
+  if (!text) return 'Shared an attachment.';
+  if (scanMessageForPII(text).blocked) return 'Open the conversation to read this message.';
+  const chars = Array.from(text);
+  return chars.length > 160 ? chars.slice(0, 159).join('') + '…' : text;
+}
+
+function cafeChatEmailRecipients_() {
+  const subscriptions = readSheetObjects_(getOrCreateSheet('Subscriptions', [])).rows.map(r => r.obj);
+  const users = readSheetObjects_(getOrCreateSheet('Users', [])).rows.map(r => r.obj);
+  const partners = partnerRows_().rows.map(r => r.obj).filter(p => p.status === 'APPROVED');
+  const subscriptionByEmail = new Map(subscriptions.map(s => [normalizeEmail(s.email), s]));
+  const partnerEmails = new Set(partners.map(p => normalizeEmail(p.email)));
+  const emails = new Set(users.concat(subscriptions, partners).map(r => normalizeEmail(r.email)));
+  emails.add('swapsutra@gmail.com');
+  const free = freeRegistrationMode_();
+  return Array.from(emails).filter(email => {
+    if (!email) return false;
+    if (isAdminEmail(email)) return true;
+    const sub = subscriptionByEmail.get(email);
+    if (!free) return Boolean(sub && ['TRIAL', 'FREE_TRIAL', 'PREMIUM', 'Active'].includes(computeSubscriptionStatus(sub)));
+    return partnerEmails.has(email) || !sub ||
+      (String(sub.adminStatus || '').trim().toLowerCase() !== 'cancelled' &&
+       String(sub.membershipStatus || '').trim().toUpperCase() !== 'CANCELLED');
+  });
+}
+
+function queueTransactionChatEmail_(chat, id, senderEmail, message, mediaType, createdAt) {
+  const chatId = String(chat.chatId || chat.id);
+  const preSwap = chat.chatType === 'BookRequest' || String(chat.swapId || '').indexOf('SS_REQ_BOOK_') === 0;
+  const swap = preSwap || !chat.swapId ? null : loadSwapForCirculation(chat.swapId);
+  const book = !swap && chat.bookId ? findBookById(chat.bookId) : null;
+  const title = (swap && swap.obj.requestedBookTitle) || (book && book.title);
+  const label = preSwap ? 'Book request' : 'Exchange room';
+  const path = String(getScriptSetting('CHAT_CONVERSATION_PATH') || '/profile?chatId={chatId}');
+  const safePath = /^\/(?![\/\\])[^\\\r\n]*\{chatId\}/.test(path) ? path : '/profile?chatId={chatId}';
+  const link = swapSutraSiteUrl() + safePath.replace('{chatId}', encodeURIComponent(chatId))
+    .replace('{swapId}', encodeURIComponent(chat.swapId || ''));
+  enqueueChatEmail_({
+    id: id, conversation: 'chat:' + chatId, name: title ? label + ' · ' + title : label, link: link,
+    sender: isAdminEmail(senderEmail) ? 'SwapSutra' : roomName_(senderEmail),
+    preview: chatEmailPreview_(message, mediaType), at: createdAt.getTime()
+  }, senderEmail, [chat.ownerEmail, chat.requesterEmail, chat.adminEmail], email => {
+    return approvedPartner_(email) && !isAdminEmail(senderEmail) ? 'Buyer' : null;
+  });
+}
+
+function enqueueChatEmail_(event, sender, recipients, displayNameForRecipient) {
+  const author = normalizeEmail(sender);
+  const emails = new Set(recipients.map(normalizeEmail));
+  const rows = Array.from(emails).filter(email => email !== author && /^[a-z0-9][^\s@,;]*@[^\s@,;]+\.[^\s@,;]+$/i.test(email))
+    .map(email => {
+      const displayName = displayNameForRecipient && displayNameForRecipient(email);
+      const payload = JSON.stringify(displayName ? Object.assign({}, event, { sender: displayName }) : event);
+      return [event.conversation + ':' + event.id, email, payload, '', '', ''];
+    });
+  if (!rows.length) return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getOrCreateSheet('ChatEmailOutbox', CHAT_EMAIL_OUTBOX_HEADERS);
+    const lastRow = sheet.getLastRow();
+    const shortfall = lastRow + rows.length - sheet.getMaxRows();
+    if (shortfall > 0) sheet.insertRowsAfter(sheet.getMaxRows(), shortfall);
+    sheet.getRange(lastRow + 1, 1, rows.length, CHAT_EMAIL_OUTBOX_HEADERS.length).setValues(rows);
+    SpreadsheetApp.flush();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Run once from the Apps Script editor as the deployment owner. */
+function installChatEmailTrigger() {
+  const existing = ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'runChatEmailOutbox');
+  if (!existing) ScriptApp.newTrigger('runChatEmailOutbox').timeBased().everyMinutes(5).create();
+  return 'SwapSutra chat email delivery runs every five minutes.';
+}
+
+function runChatEmailOutbox() {
+  const props = PropertiesService.getScriptProperties();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return;
+  try {
+    if (Number(props.getProperty(CHAT_EMAIL_LEASE_KEY)) > Date.now()) return;
+    // Longer than the Apps Script execution limit. A killed worker recovers after expiry.
+    props.setProperty(CHAT_EMAIL_LEASE_KEY, String(Date.now() + 10 * 60 * 1000));
+  } finally {
+    lock.releaseLock();
+  }
+  try {
+    return deliverChatEmailOutbox_();
+  } finally {
+    props.deleteProperty(CHAT_EMAIL_LEASE_KEY);
+  }
+}
+
+function deliverChatEmailOutbox_() {
+  const sheet = getOrCreateSheet('ChatEmailOutbox', CHAT_EMAIL_OUTBOX_HEADERS);
+  const rows = sheet.getDataRange().getValues().slice(1);
+  const now = Date.now();
+  const settings = PropertiesService.getScriptProperties().getProperties();
+  const apiKey = getEmailProviderKey();
+  const sentKeys = new Map();
+  const latestDelivery = new Map();
+  const ready = new Map();
+  const batches = new Map();
+  const alreadyHandled = [];
+  const summary = { sent: 0, retried: 0 };
+
+  rows.forEach(([key, recipient, payload, batch, deliveredAt], i) => {
+    if (!deliveredAt) return;
+    sentKeys.set(JSON.stringify([key, recipient]), deliveredAt);
+    latestDelivery.set(recipient, Math.max(latestDelivery.get(recipient) || 0, Number(deliveredAt)));
+  });
+
+  rows.forEach(([key, recipient, payload, batch, deliveredAt, retryAt], i) => {
+    if (deliveredAt || !payload) return;
+    const uniqueKey = JSON.stringify([key, recipient]);
+    const event = JSON.parse(payload);
+    if (sentKeys.has(uniqueKey) || Number(settings['ACCOUNT_DELETED_AT:' + recipient]) >= event.at) {
+      alreadyHandled.push(i + 2);
+      return;
+    }
+    const item = { row: i + 2, event: event, retryAt: Number(retryAt) || 0 };
+    if (batch) {
+      if (!batches.has(recipient)) batches.set(recipient, { id: batch, items: [] });
+      // There is at most one claimed batch per recipient.
+      batches.get(recipient).items.push(item);
+    } else {
+      if (!ready.has(recipient)) ready.set(recipient, new Map());
+      if (!ready.get(recipient).has(uniqueKey)) ready.get(recipient).set(uniqueKey, item);
+    }
+  });
+  setChatEmailRows_(sheet, 'E', alreadyHandled, now);
+  setChatEmailRows_(sheet, 'C', alreadyHandled, '');
+
+  let remaining = apiKey ? Infinity : MailApp.getRemainingDailyQuota();
+  const recipients = new Set([...batches.keys(), ...ready.keys()]);
+  for (const recipient of recipients) {
+    if (Date.now() - now > 4 * 60 * 1000 || remaining <= 0) break;
+    if (now - (latestDelivery.get(recipient) || 0) < CHAT_EMAIL_COOLDOWN_MS) continue;
+    let batch = batches.get(recipient);
+    if (batch && batch.items.some(item => item.retryAt > now)) continue;
+    if (!batch) {
+      const items = Array.from(ready.get(recipient).values()).slice(0, CHAT_EMAIL_MAX_MESSAGES);
+      batch = { id: 'chat-' + Utilities.getUuid(), items: items };
+      setChatEmailRows_(sheet, 'D', items.map(item => item.row), batch.id);
+      SpreadsheetApp.flush();
+    }
+    const batchRows = batch.items.map(item => item.row);
+    try {
+      const mail = chatDigestEmail_(recipient, batch.items.map(item => item.event));
+      if (apiKey) {
+        if (!sendViaEmailProvider(mail, apiKey, batch.id)) throw new Error('Email provider rejected chat digest.');
+      } else {
+        MailApp.sendEmail(mail);
+      }
+      remaining--;
+    } catch (e) {
+      setChatEmailRows_(sheet, 'F', batchRows, Date.now() + 15 * 60 * 1000);
+      Logger.log('Chat email batch ' + batch.id + ' will retry: ' + e);
+      summary.retried++;
+      continue;
+    }
+    setChatEmailRows_(sheet, 'E', batchRows, Date.now());
+    SpreadsheetApp.flush();
+    setChatEmailRows_(sheet, 'C', batchRows, '');
+    summary.sent++;
+  }
+  return summary;
+}
+
+function setChatEmailRows_(sheet, column, rows, value) {
+  for (let start = 0; start < rows.length; start += 200) {
+    sheet.getRangeList(rows.slice(start, start + 200).map(row => column + row)).setValue(value);
+  }
+}
+
+function chatDigestEmail_(recipient, events) {
+  const conversations = new Map();
+  events.forEach(event => {
+    if (!conversations.has(event.conversation)) conversations.set(event.conversation, []);
+    conversations.get(event.conversation).push(event);
+  });
+  const title = events.length === 1 ? 'New chat message' : events.length + ' new chat messages';
+  const formatTime = event => Utilities.formatDate(new Date(event.at), 'Asia/Kolkata', 'dd MMM yyyy, h:mm a') + ' IST';
+  const body = [];
+  const sections = Array.from(conversations.values()).map(messages => {
+    const conversation = messages[0];
+    body.push(conversation.name);
+    const entries = messages.map(event => {
+      const stamp = formatTime(event);
+      body.push(event.sender + ' · ' + stamp + '\n' + event.preview);
+      return '<p style="margin:0 0 16px"><strong>' + escapeHtml(event.sender) + '</strong><br>' +
+        '<span style="font-size:13px;color:#736454">' + escapeHtml(stamp) + '</span><br>' + escapeHtml(event.preview) + '</p>';
+    }).join('');
+    body.push('Open conversation: ' + conversation.link, '');
+    return '<div style="border-top:1px solid #EBE3D5;padding:16px 0">' +
+      '<h2 style="font:normal 21px Georgia;margin:0 0 12px">' + escapeHtml(conversation.name) + '</h2>' +
+      entries + '<a href="' + escapeHtml(conversation.link) + '" style="display:inline-block;background:#8E4A59;color:#fff;' +
+      'padding:10px 16px;border-radius:6px;text-decoration:none">Open conversation</a></div>';
+  });
+  return {
+    to: recipient, subject: title + ' · SwapSutra', body: body.join('\n'), name: 'SwapSutra',
+    htmlBody: getBrandedEmailTemplate(title, sections.join(''), '', '')
+  };
+}
