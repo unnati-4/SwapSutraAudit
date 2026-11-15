@@ -65,7 +65,7 @@ function makeEnv() {
     LockService: { getScriptLock: () => ({ tryLock: () => true, waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: { fetch() { throw new Error('no network'); } },
     CacheService: { getScriptCache: () => ({ get: () => null, put() {}, remove() {}, putAll() {}, getAll: () => ({}) }) },
-    SpreadsheetApp: { getActiveSpreadsheet: () => null },
+    SpreadsheetApp: { getActiveSpreadsheet: () => null, flush() {} },
     MailApp: { sendEmail() {} },
     ContentService: { MimeType: { JSON: 'JSON' }, createTextOutput: (t) => ({ setMimeType: () => ({ __text: t }) }) },
     DriveApp: {},

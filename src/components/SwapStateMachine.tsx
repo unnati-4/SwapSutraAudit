@@ -92,7 +92,7 @@ interface StageEvaluation {
   stageStatus: string;
   completed: boolean;
   chatUnlocked: boolean;
-  securityFee: { payers: FeePayer[]; required: boolean; allApproved: boolean };
+  securityFee: { checkout?: { revision?: string }; saleDeposit?: { quotedAt?: string }; payers: FeePayer[]; required: boolean; allApproved: boolean };
   upi: PayDetails;
   stages: {
     handover: StageBlock;
@@ -196,7 +196,7 @@ export default function SwapStateMachine({ swapId, isAdmin }: { swapId: string; 
     const file = input?.files?.[0];
     if (!file) { window.alert('Attach a payment screenshot.'); return; }
     const fileData = await fileToDataUrl(file);
-    await runAction('submitSecurityFeePayment', { utr: utrInput.trim(), fileData, fileName: file.name }, 'pay');
+    await runAction('submitSecurityFeePayment', { utr: utrInput.trim(), fileData, fileName: file.name, checkoutRevision: data?.securityFee.checkout?.revision, depositQuotedAt: data?.securityFee.saleDeposit?.quotedAt }, 'pay');
     setUtrInput('');
   };
 

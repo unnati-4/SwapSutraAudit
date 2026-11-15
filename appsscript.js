@@ -6462,6 +6462,10 @@ function doPostHandler_(e) {
     // none of them trust a client-supplied stage, role, amount or email.
     if (action === 'getSwapStage') return respondJson(getSwapStage(data));
     if (action === 'getSecurityFeeStatus') return respondJson(getSecurityFeeStatus(data));
+    if (action === 'adminSetOrderShipping') return respondJson(adminSetOrderShipping(data));
+    if (action === 'selectOrderPaymentMode') return respondJson(selectOrderPaymentMode(data));
+    if (action === 'confirmOrderCod') return respondJson(confirmOrderCod(data));
+    if (action === 'adminRecordCodReceived') return respondJson(adminRecordCodReceived(data));
     if (action === 'adminSetSaleSecurityDeposit') return respondJson(adminSetSaleSecurityDeposit(data));
     if (action === 'submitSecurityFeePayment') return respondJson(submitSecurityFeePayment(data));
     // Oct 2026 — listing allowance and platform revenue.
@@ -9071,7 +9075,7 @@ function createSwapRequest(data) {
     "offeredBookId", "requestedBookValue", "offeredBookValue",
     "ownerDeposit", "ownerDepositUtr", "ownerDepositStatus",
     // 'ESTIMATE' when that side's deposit came from an unverified price.
-    "requesterDepositBasis", "ownerDepositBasis", "saleDepositQuote"
+    "requesterDepositBasis", "ownerDepositBasis", "saleDepositQuote", "orderCheckout"
   ];
   const sheet = getOrCreateSheet('SwapRequests', swapHeaders);
   ensureSheetHeaders(sheet, swapHeaders);
@@ -9314,6 +9318,7 @@ function createSwapRequest(data) {
       ? Number(deposits.salePrice)
       : (serviceType === 'RENT' ? Number(rentCharge || 0) : 0);
     else if (h === 'monthlyRent') row[i] = serviceType === 'RENT' ? Number(monthlyRent || 0) : '';
+    else if (h === 'orderCheckout') row[i] = JSON.stringify({ mode: 'ONLINE' });
     else if (h === 'securityDeposit') row[i] = serviceType === 'SELL' ? '' : deposits.requesterDeposit;
     else if (h === 'offeredBookId') row[i] = offeredBook ? String(offeredBook.id || '') : '';
     else if (h === 'requestedBookValue') row[i] = deposits.requestedBookValue;
@@ -20692,7 +20697,7 @@ const SECURITY_FEE_HEADERS = [
   'depositAmount', 'platformFee',
   // Oct 2026: on a sale, the book's price the buyer pays SwapSutra (held
   // until they confirm receipt, then paid to the seller).
-  'saleAmount'
+  'saleAmount', 'shippingAmount'
 ];
 
 const STAGE_EVENTS_SHEET = 'SwapStageEvents';
@@ -20783,7 +20788,7 @@ function loadSecurityFeeRows(swapId) {
  * — locking its chat exactly like a brand-new swap, with no grandfathering.
  */
 function ensureSecurityFeeRecords(swap) {
-  if (!isEscrowSaleOrder_(swap.obj)) return ensureSecurityFeeRecordsUnlocked_(swap);
+  if (!isEscrowSaleOrder_(swap.obj) && !swap.obj.orderCheckout) return ensureSecurityFeeRecordsUnlocked_(swap);
   return withSaleDepositLock_(() => {
     const current = loadSwapForCirculation(swap.obj.id);
     if (!current) throw new Error('Purchase could not be found.');
@@ -20793,7 +20798,7 @@ function ensureSecurityFeeRecords(swap) {
 }
 
 function ensureSecurityFeeRecordsUnlocked_(swap) {
-  if (saleDepositState_(swap.obj).pending) return [];
+  if (saleDepositState_(swap.obj).pending || (orderCheckout_(swap.obj) || {}).pending) return [];
   const swapId = swap.obj.id;
   const required = securityFeeRequirements(swap);
   const { sheet, headers, rows } = loadSecurityFeeRows(swapId);
@@ -20825,7 +20830,7 @@ function ensureSecurityFeeRecordsUnlocked_(swap) {
       return;
     }
     const want = { requiredAmount: req.requiredAmount, depositAmount: req.depositAmount === undefined ? req.requiredAmount : req.depositAmount,
-      platformFee: req.platformFee || 0, saleAmount: req.saleAmount || 0 };
+      platformFee: req.platformFee || 0, saleAmount: req.saleAmount || 0, shippingAmount: req.shippingAmount || 0 };
     const differs = Object.keys(want).some(k => Number(r.obj[k] || 0) !== Number(want[k] || 0));
     if (differs) {
       Object.keys(want).forEach(k => setRowCell(r.rowIndex, k, want[k]));
@@ -20847,6 +20852,7 @@ function ensureSecurityFeeRecordsUnlocked_(swap) {
       else if (h === 'depositAmount') row[i] = req.depositAmount === undefined ? req.requiredAmount : req.depositAmount;
       else if (h === 'platformFee') row[i] = req.platformFee || 0;
       else if (h === 'saleAmount') row[i] = req.saleAmount || 0;
+      else if (h === 'shippingAmount') row[i] = req.shippingAmount || 0;
       else if (h === 'paymentStatus') row[i] = 'PENDING';
       else if (h === 'adminStatus') row[i] = 'NOT_SUBMITTED';
       else if (h === 'createdAt') row[i] = now;
@@ -20854,6 +20860,16 @@ function ensureSecurityFeeRecordsUnlocked_(swap) {
     });
     sheet.appendRow(row);
   });
+  const checkout = orderCheckout_(swap.obj);
+  if (checkout && checkout.collected) {
+    const payment = loadSecurityFeeRows(swapId).rows.find(r => r.obj.payerRole === 'requester');
+    if (payment && payment.obj.adminStatus !== 'ADMIN_APPROVED') {
+      const fields = { paymentStatus: 'PAID', adminStatus: 'ADMIN_APPROVED', utr: checkout.reference,
+        approvedAt: checkout.collectedAt, approvedBy: checkout.collectedBy, updatedAt: checkout.collectedAt };
+      Object.keys(fields).forEach(key => setRowCell(payment.rowIndex, key, fields[key]));
+      created = true;
+    }
+  }
   return created ? loadSecurityFeeRows(swapId).rows.map(r => r.obj) : rows.map(r => r.obj);
 }
 
@@ -20881,6 +20897,7 @@ function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
       depositAmount: feeRecordBreakdown_(rec).depositAmount,
       platformFee: feeRecordBreakdown_(rec).platformFee,
       saleAmount: feeRecordBreakdown_(rec).saleAmount,
+      shippingAmount: Number(rec.shippingAmount || 0),
       estimated: estimatedByRole[rec.payerRole],
       paymentStatus: rec.paymentStatus || 'PENDING',
       adminStatus: rec.adminStatus || 'NOT_SUBMITTED',
@@ -20894,9 +20911,17 @@ function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
     };
   });
   const saleDeposit = saleDepositState_(swap.obj);
-  const required = saleDeposit.pending || payers.length > 0;
-  const allApproved = !saleDeposit.pending && (!required || payers.every(p => p.adminStatus === 'ADMIN_APPROVED'));
+  const checkout = orderCheckout_(swap.obj);
+  const required = saleDeposit.pending || Boolean(checkout && checkout.pending) || payers.length > 0;
+  const allApproved = !saleDeposit.pending && !(checkout && checkout.pending) && (!required || payers.every(p => p.adminStatus === 'ADMIN_APPROVED'));
   const result = { payers, required, allApproved };
+  if (checkout) {
+    result.checkout = Object.assign({}, checkout, {
+      editable: checkoutEditable_(swap),
+      total: checkout.pending || saleDeposit.pending ? null : (computeExchangePayments_(swap).find(r => r.payerRole === 'requester') || {}).requiredAmount
+    });
+    result.readyToProceed = allApproved || (!saleDeposit.pending && !checkout.pending && checkout.codConfirmed);
+  }
   if (saleDeposit.manual) result.saleDeposit = saleDeposit;
   return result;
 }
@@ -20914,7 +20939,7 @@ function swapChatUnlocked(swapId) {
     const swap = loadSwapForCirculation(swapId);
     if (!swap) return false;
     const status = securityFeeStatus(swap, '', true);
-    return status.allApproved;
+    return status.readyToProceed || status.allApproved;
   } catch (err) {
     Logger.log('swapChatUnlocked failed: ' + err.toString());
     return false;
@@ -21117,7 +21142,7 @@ function getSwapStage(data) {
 
     // Prerequisite chain: each stage's "unlocked" flag is computed from
     // the stage before it — never assumed from what the client asked for.
-    const secApproved = fee.allApproved;
+    const secApproved = fee.readyToProceed || fee.allApproved;
     const handoverUnlocked = accepted && secApproved && !disputeOpen;
     const logisticsUnlocked = handoverUnlocked && handover.complete;
     const receiptUnlocked = logisticsUnlocked && logistics.complete;
@@ -21154,7 +21179,7 @@ function getSwapStage(data) {
     const myFee = fee.payers.find(p => p.payerRole === myRole) || null;
     const actions = [];
     if (!disputeOpen) {
-      if (myFee && myFee.adminStatus !== 'ADMIN_APPROVED' && myFee.adminStatus !== 'ADMIN_PENDING') {
+      if (!(fee.checkout && fee.checkout.mode === 'COD') && myFee && myFee.adminStatus !== 'ADMIN_APPROVED' && myFee.adminStatus !== 'ADMIN_PENDING') {
         actions.push({ type: 'submitSecurityFeePayment', stage: 'SECURITY_FEE', label: 'Pay to unlock chat' });
       }
       const confirmable = (stageName, unlocked, partyState) => {
@@ -21252,7 +21277,7 @@ function submitSecurityFeePayment(data) {
       return { success: false, error: 'REQUEST_CLOSED', message: 'This request has closed, so there is nothing to pay. Please do not send money for it.' };
     }
 
-    if (isEscrowSaleOrder_(swap.obj)) {
+    if (isEscrowSaleOrder_(swap.obj) || swap.obj.orderCheckout) {
       return withSaleDepositLock_(() => submitSecurityFeeEvidence_(data, caller, loadSwapForCirculation(swapId)));
     }
     return submitSecurityFeeEvidence_(data, caller, swap);
@@ -21268,6 +21293,10 @@ function submitSecurityFeeEvidence_(data, caller, swap) {
     }
     const swapId = String(swap.obj.id);
     const role = swapPartyRole(swap, caller);
+    const checkout = orderCheckout_(swap.obj);
+    if (checkout && (checkout.pending || checkout.mode === 'COD' || data.checkoutRevision !== checkout.revision)) {
+      return { success: false, message: 'Refresh the shipping quote and select online payment before submitting payment evidence.' };
+    }
     const quote = saleDepositState_(swap.obj);
     if (quote.pending) {
       return { success: false, error: 'DEPOSIT_PENDING', message: 'Wait for SwapSutra to set the security deposit before paying.' };
@@ -21434,11 +21463,12 @@ function adminListSecurityFeeBacklog(data) {
         createdAt: obj.createdAt,
         updatedAt: obj.updatedAt,
         saleDeposit: fee.saleDeposit,
+        checkout: fee.checkout,
         payers: fee.payers.map(p => ({
           payerRole: p.payerRole, payerEmail: p.payerEmail, requiredAmount: p.requiredAmount,
           paymentStatus: p.paymentStatus, adminStatus: p.adminStatus, estimated: p.estimated,
           // 9 Oct 2026: what the admin needs to check a payment right here.
-          depositAmount: p.depositAmount, platformFee: p.platformFee, saleAmount: p.saleAmount,
+          depositAmount: p.depositAmount, platformFee: p.platformFee, saleAmount: p.saleAmount, shippingAmount: p.shippingAmount,
           utr: p.utr, screenshotUrl: p.screenshotUrl, submittedAt: p.submittedAt, rejectedReason: p.rejectedReason
         }))
       });
@@ -23852,6 +23882,7 @@ function adminSetSaleSecurityDeposit(data) {
           swap.obj.paymentUtr) {
         return { success: false, error: 'PAYMENT_ALREADY_SUBMITTED', message: 'The buyer has already submitted payment evidence.' };
       }
+      if (!checkoutEditable_(swap)) return { success: false, message: 'This amount is locked after COD confirmation or payment submission.' };
       const previous = saleDepositState_(swap.obj);
       if (previous.amount === amount) return { success: true, saleDeposit: previous };
       const headers = ensureSheetHeaders(swap.sheet, ['saleDepositQuote']);
@@ -23865,7 +23896,148 @@ function adminSetSaleSecurityDeposit(data) {
   }
 }
 
+// Admin shipping quotes and requester payment mode. Existing orders opt in when quoted.
+function orderCheckout_(obj) {
+  if (!obj.orderCheckout) return null;
+  let state;
+  try { state = JSON.parse(obj.orderCheckout); } catch (e) { state = {}; }
+  const sale = String(obj.serviceType || '').toUpperCase() === 'SELL';
+  const rateValid = value => Number.isSafeInteger(value) && value >= 0;
+  const quoted = rateValid(state.onlineShipping) && (!sale || rateValid(state.codShipping)) && Boolean(state.revision);
+  const mode = state.mode === 'COD' && sale ? 'COD' : 'ONLINE';
+  return Object.assign({}, state, {
+    mode: mode, codAllowed: sale, pending: !quoted,
+    shippingAmount: quoted ? (mode === 'COD' ? state.codShipping : state.onlineShipping) : null,
+    codConfirmed: mode === 'COD' && Boolean(state.confirmedAt),
+    collected: mode === 'COD' && Boolean(state.collectedAt)
+  });
+}
+
+function saveOrderCheckout_(swap, state) {
+  const headers = ensureSheetHeaders(swap.sheet, ['orderCheckout']);
+  swap.obj.orderCheckout = JSON.stringify(state);
+  swap.sheet.getRange(swap.rowIndex + 1, headers.indexOf('orderCheckout') + 1).setValue(swap.obj.orderCheckout);
+}
+
+function checkoutEditable_(swap) {
+  const checkout = orderCheckout_(swap.obj);
+  if (checkout && checkout.codConfirmed) return false;
+  if (!['pending', 'accepted', 'active', 'approved'].includes(String(swap.obj.status || '').toLowerCase())) return false;
+  return !loadSecurityFeeRows(swap.obj.id).rows.some(r =>
+    r.obj.submittedAt || r.obj.utr || ['ADMIN_PENDING', 'ADMIN_APPROVED', 'ADMIN_REJECTED'].includes(r.obj.adminStatus));
+}
+
+function adminSetOrderShipping(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, message: 'Unauthorized' };
+  return withSaleDepositLock_(() => {
+    const swap = loadSwapForCirculation(String(data.swapId || ''));
+    if (!swap || !checkoutEditable_(swap)) return { success: false, message: 'Shipping charges are locked after payment submission or COD confirmation.' };
+    const sale = String(swap.obj.serviceType || '').toUpperCase() === 'SELL';
+    const parse = value => /^\d+$/.test(String(value)) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
+    const online = parse(data.onlineShipping);
+    const cod = sale ? parse(data.codShipping) : null;
+    if (online === null || (sale && cod === null)) return { success: false, message: 'Enter shipping charges in whole rupees. Enter 0 for free shipping.' };
+    const previous = orderCheckout_(swap.obj) || { mode: 'ONLINE' };
+    if (!previous.pending && previous.onlineShipping === online && previous.codShipping === cod) return { success: true };
+    saveOrderCheckout_(swap, { mode: previous.mode, onlineShipping: online, codShipping: cod,
+      revision: Utilities.getUuid(), quotedAt: new Date().toISOString() });
+    return { success: true, message: 'Shipping charges saved.' };
+  });
+}
+
+function selectOrderPaymentMode(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, message: 'Sign in first.' };
+  return withSaleDepositLock_(() => {
+    const swap = loadSwapForCirculation(String(data.swapId || ''));
+    if (!swap || caller !== swap.requesterEmail) return { success: false, message: 'Only the requester can choose the payment mode.' };
+    const checkout = orderCheckout_(swap.obj);
+    if (!checkout || checkout.pending || !checkoutEditable_(swap)) return { success: false, message: 'Wait for the shipping quote, or check whether this payment is already confirmed.' };
+    if (data.revision !== checkout.revision) return { success: false, message: 'Shipping charges changed. Refresh and review the amount.' };
+    const mode = String(data.mode || '');
+    if (!['ONLINE', 'COD'].includes(mode) || (mode === 'COD' && !checkout.codAllowed)) return { success: false, message: 'Cash on delivery is available only for book sales. Exchanges, rentals and loans require online payment in advance.' };
+    saveOrderCheckout_(swap, Object.assign({}, checkout, { mode: mode }));
+    return { success: true };
+  });
+}
+
+function confirmOrderCod(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, message: 'Sign in first.' };
+  return withSaleDepositLock_(() => {
+    const swap = loadSwapForCirculation(String(data.swapId || ''));
+    if (!swap || caller !== swap.requesterEmail) return { success: false, message: 'Only the requester can confirm COD.' };
+    const checkout = orderCheckout_(swap.obj);
+    if (!checkout || !checkout.codAllowed || checkout.mode !== 'COD' || checkout.pending) return { success: false, message: 'Select COD after shipping charges are set.' };
+    if (checkout.codConfirmed) return { success: true };
+    if (!checkoutEditable_(swap) || !roomSwapAccepted_(swap.obj.status) || saleDepositState_(swap.obj).pending) {
+      return { success: false, message: 'Wait for acceptance and the deposit quote before confirming COD.' };
+    }
+    if (data.revision !== checkout.revision || data.depositQuotedAt !== saleDepositState_(swap.obj).quotedAt) {
+      return { success: false, message: 'The amount changed. Refresh and review it before confirming.' };
+    }
+    const videos = vmsVideosForSwap_(swap.obj.id);
+    if (!videos.some(v => v.leg === 'outbound' && v.kind === 'QUALITY' && normalizeEmail(v.uploaderEmail) === swap.ownerEmail)) {
+      return { success: false, message: 'Review the owner’s condition video before confirming COD.' };
+    }
+    ensureSecurityFeeRecordsUnlocked_(swap);
+    saveOrderCheckout_(swap, Object.assign({}, checkout, { confirmedAt: new Date().toISOString() }));
+    return { success: true, message: 'COD confirmed. Pay the full quoted amount on delivery.' };
+  });
+}
+
+/** Recording receipt means the courier's money has reached SwapSutra. */
+function adminRecordCodReceived(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, message: 'Unauthorized' };
+  const result = withSaleDepositLock_(() => {
+    const swap = loadSwapForCirculation(String(data.swapId || ''));
+    if (!swap) return { success: false, message: 'Order not found.' };
+    const checkout = orderCheckout_(swap.obj);
+    if (!checkout || !checkout.codConfirmed) return { success: false, message: 'This order has no confirmed COD payment.' };
+    if (checkout.collected) { ensureSecurityFeeRecordsUnlocked_(swap); return { success: true }; }
+    const requirement = computeExchangePayments_(swap).find(r => r.payerRole === 'requester');
+    if (!requirement || Number(data.amount) !== requirement.requiredAmount) return { success: false, message: 'The received amount must match the full COD total.' };
+    const reference = String(data.reference || '').trim();
+    if (!reference || reference.length > 150) return { success: false, message: 'Enter the courier remittance reference (up to 150 characters).' };
+    saveOrderCheckout_(swap, Object.assign({}, checkout, { collectedAt: new Date().toISOString(), collectedBy: normalizeEmail(getAuthenticatedEmail()), reference: reference }));
+    ensureSecurityFeeRecordsUnlocked_(swap);
+    return { success: true };
+  });
+  if (result.success) {
+    const swap = loadSwapForCirculation(String(data.swapId));
+    const events = journeyEventsBySwap_()[swap.obj.id] || [];
+    if (events.some(e => e.event === 'received' && e.leg === 'outbound' && /happy with the book/.test(String(e.note)))) {
+      confirmSaleCompleteFor_( { swapId: swap.obj.id, happy: true }, swap.requesterEmail);
+    }
+    roomAfterMark_(swap);
+  }
+  return result;
+}
+
+function codPaymentOutstanding_(swap) {
+  const checkout = orderCheckout_(swap.obj);
+  return Boolean(checkout && checkout.codConfirmed && !checkout.collected);
+}
+
 function computeExchangePayments_(swap) {
+  const checkout = orderCheckout_(swap.obj || {});
+  if (checkout && checkout.pending) return [];
+  const required = computeBaseExchangePayments_(swap);
+  if (!checkout) return required;
+  const shipping = checkout.shippingAmount || 0;
+  const requester = required.find(r => r.payerRole === 'requester');
+  if (requester) {
+    requester.shippingAmount = shipping;
+    requester.requiredAmount += shipping;
+    if (!Number.isSafeInteger(requester.requiredAmount)) throw new Error('The quoted total is too large. Check the shipping amount.');
+  } else if (shipping && !saleDepositState_(swap.obj).pending) {
+    required.push({ payerRole: 'requester', payerEmail: swap.requesterEmail, requiredAmount: shipping,
+      depositAmount: 0, platformFee: 0, saleAmount: 0, shippingAmount: shipping });
+  }
+  return required;
+}
+
+function computeBaseExchangePayments_(swap) {
   const obj = swap.obj || {};
   const serviceType = String(obj.serviceType || 'SWAP').trim().toUpperCase();
   const feeApplies = platformFeeAppliesToSwap_(obj);
@@ -23976,7 +24148,7 @@ function feeRecordBreakdown_(rec) {
   const sale = Number(rec.saleAmount || 0);
   const depositRaw = rec.depositAmount;
   const deposit = depositRaw === '' || depositRaw === undefined || depositRaw === null
-    ? Math.max(0, total - fee - sale)
+    ? Math.max(0, total - fee - sale - Number(rec.shippingAmount || 0))
     : Number(depositRaw);
   return { depositAmount: deposit, platformFee: fee, saleAmount: sale };
 }
@@ -25514,7 +25686,7 @@ function saleStatusFor_(swap) {
   return {
     escrow: saleEscrowActive_(swap),
     price: price,
-    buyerPays: quote.pending ? null : price + (isAdminEmail(swap.requesterEmail) ? 0 : fee) + (quote.amount || 0),
+    buyerPays: quote.pending || (orderCheckout_(swap.obj) || {}).pending ? null : price + (isAdminEmail(swap.requesterEmail) ? 0 : fee) + (quote.amount || 0) + ((orderCheckout_(swap.obj) || {}).shippingAmount || 0),
     sellerReceives: Math.max(0, Math.round((price - sellerFee - commission.commission) * 100) / 100),
     sellerFee: sellerFee,
     commission: commission.commission, commissionRate: commission.rate, partnerSeller: !!partnerSeller,
@@ -25532,6 +25704,18 @@ function saleStatusFor_(swap) {
  * A partner's sale (9 Oct 2026): the payout is paid with the month's
  * statement, SwapSutra's commission is recorded, and one copy leaves stock.
  */
+function appendSalePayout_(swap, st, rec, sheet, headers) {
+  const append = () => {
+    const existing = readSheetObjects_(sheet).rows.some(r => String(r.obj.swapId) === String(swap.obj.id) &&
+      ['sale', 'sale_refund'].includes(String(r.obj.leg)));
+    if (existing) return false;
+    salePartnerPayout_(swap, st, rec, sheet, headers);
+    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    return true;
+  };
+  return swap.obj.orderCheckout ? withSaleDepositLock_(append) : append();
+}
+
 function salePartnerPayout_(swap, st, rec, sheet, headers) {
   if (!st.partnerSeller) return;
   const parts = partnerPayoutParts_(swap.ownerEmail, st.price, rec.forfeitedAt);
@@ -25608,8 +25792,7 @@ function adminDecideSale(data) {
       ownerEmail: swap.ownerEmail, amount: st.sellerReceives, dueAt: '', forfeitedAt: new Date(),
       payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
       note: 'Sale released to the seller after a dispute: price ₹' + st.price + ' − ₹' + st.sellerFee + ' platform fee. Reason: ' + reason };
-    salePartnerPayout_(swap, st, rec, sheet, headers);
-    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    appendSalePayout_(swap, st, rec, sheet, headers);
     roomCreateRefunds_(swap, true);
     returnNotify_(swap.ownerEmail, 'sale_payout_due', 'Your sale is complete',
       'After reviewing "' + title + '", SwapSutra is paying you ₹' + st.sellerReceives + '. Reason: ' + reason, swap.obj.id, 'sale_dec_s_' + swap.obj.id);
@@ -25634,11 +25817,15 @@ function adminDecideSale(data) {
 }
 
 function confirmSaleComplete(data) {
-  const caller = normalizeEmail(getAuthenticatedEmail());
+  return confirmSaleCompleteFor_(data, normalizeEmail(getAuthenticatedEmail()));
+}
+
+function confirmSaleCompleteFor_(data, caller) {
   const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
   if (!swap) return { success: false, message: 'That exchange could not be found.' };
   if (String(swap.obj.serviceType || '').toUpperCase() !== 'SELL') return { success: false, message: 'Only a purchase is closed this way.' };
   if (caller !== swap.requesterEmail) return { success: false, error: 'WRONG_PARTY', message: 'Only the buyer can close the purchase.' };
+  if (codPaymentOutstanding_(swap)) return { success: false, message: 'The book is received. The seller payout waits for SwapSutra to confirm receipt of the COD funds.' };
   if (!(data && (data.happy === true || data.happy === 'true'))) {
     return { success: false, message: 'If something is wrong with the book, report a problem instead — SwapSutra will review the videos.' };
   }
@@ -25660,8 +25847,7 @@ function confirmSaleComplete(data) {
     payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
     note: 'Sale closed by the buyer: price ₹' + st.price + ' − ₹' + st.sellerFee + ' platform fee.' + (note ? ' Buyer: ' + note : '')
   };
-  salePartnerPayout_(swap, st, rec, sheet, headers);
-  sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+  appendSalePayout_(swap, st, rec, sheet, headers);
   try {
     appendStageEvent({ swapId: swap.obj.id, stage: 'OUTCOME', party: 'requester', actionType: 'sale_closed', actorEmail: caller, note: 'Buyer is happy; payout ₹' + st.sellerReceives + ' created.' });
   } catch (e) { /* the payout record is the source of truth */ }
@@ -25707,7 +25893,7 @@ function runSaleAutoRelease_() {
     const ageDays = (Date.now() - Math.min.apply(null, got)) / (24 * 60 * 60 * 1000);
     if (swapHasOpenDispute(id)) return;
     const swap = loadSwapForCirculation(id);
-    if (!swap || !saleEscrowActive_(swap)) return;
+    if (!swap || !saleEscrowActive_(swap) || codPaymentOutstanding_(swap)) return;
     if (ageDays >= 5 && ageDays < SALE_AUTO_RELEASE_DAYS) {
       returnNotify_(swap.requesterEmail, 'sale_close_reminder', 'Please close your purchase',
         'You confirmed receiving "' + (o.requestedBookTitle || 'the book') + '". Close the purchase if you are happy, or report a problem — otherwise the payment is released to the seller in ' + Math.ceil(SALE_AUTO_RELEASE_DAYS - ageDays) + ' days.',
@@ -25723,8 +25909,7 @@ function runSaleAutoRelease_() {
       payoutStatus: st.sellerReceives > 0 ? 'TO_PAY_OWNER' : 'NO_DEPOSIT',
       note: 'Released automatically: received ' + SALE_AUTO_RELEASE_DAYS + '+ days ago, no problem reported. Price ₹' + st.price + ' − ₹' + st.sellerFee + '.'
     };
-    salePartnerPayout_(swap, st, rec, sheet, headers);
-    sheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
+    appendSalePayout_(swap, st, rec, sheet, headers);
     payouts.push(rec);
     summary.released++;
     returnNotify_(swap.ownerEmail, 'sale_payout_due', 'Your sale payment is released',
@@ -25861,7 +26046,9 @@ function roomIntroMessage_(request) {
   const back = type === 'RENT' || type === 'LEND' || (type === 'SWAP' && String(request.swapPreference || '').toLowerCase() === 'temporary');
   return '🛡️ This is your exchange room. Chat here, and follow the steps at the top — every step is recorded here.\n\n' +
     '3. The book\'s condition video (by whoever sends a book) — within 48 hours\n' +
-    (saleDepositState_(request || {}).manual
+    (orderCheckout_(request || {})
+      ? '4. Wait for the admin shipping quote and condition video, then complete online payment or confirm COD (selling orders only) within 48 hours.\n'
+      : saleDepositState_(request || {}).manual
       ? '4. Wait for SwapSutra to enter the security deposit. Pay within 48 hours once the deposit and condition video are both ready.\n'
       : '4. Payment through SwapSutra — within 48 hours after that, or the request closes\n') +
     '5. Packaging video · 6. Meet in person or courier · 7. Place, or courier + tracking ID\n' +
@@ -26000,12 +26187,13 @@ function computeExchangeRoom_(input) {
   raw[1] = true;
   raw[2] = accepted || archived;
   raw[3] = all(out, l => has(l, 'QUALITY'));
-  raw[4] = !!fee.allApproved;
+  raw[4] = !!(fee.readyToProceed || fee.allApproved);
   raw[5] = all(out, l => has(l, 'PACKING'));
   raw[6] = !!outRoute;
   raw[7] = !!outRoute && (outRoute.method !== 'courier' || all(out, l => !!l.awb));
   raw[8] = all(out, l => has(l, 'HANDOVER'));
-  raw[9] = all(out, l => !!l.senderMarkedAt && !!l.receivedAt);
+  const codOutstanding = Boolean(fee.checkout && fee.checkout.codConfirmed && !fee.checkout.collected);
+  raw[9] = all(out, l => !!l.senderMarkedAt && !!l.receivedAt) && !codOutstanding;
   if (needsReturn) {
     raw[10] = !!noticeEvent || !!backRoute;
     raw[11] = !!noticeEvent || !!backRoute;
@@ -26043,8 +26231,9 @@ function computeExchangeRoom_(input) {
     .map(p => t(p.updatedAt || p.submittedAt)).filter(x => isFinite(x));
   const rejectedAt = rejectedTimes.length ? Math.max.apply(null, rejectedTimes) : NaN;
   const deposit = fee.saleDeposit;
-  const waitingForDeposit = Boolean(deposit && deposit.pending);
-  const quoteAt = deposit && deposit.quotedAt ? t(deposit.quotedAt) : -Infinity;
+  const checkout = fee.checkout;
+  const waitingForDeposit = Boolean((deposit && deposit.pending) || (checkout && checkout.pending));
+  const quoteAt = Math.max(deposit && deposit.quotedAt ? t(deposit.quotedAt) : -Infinity, checkout && checkout.quotedAt ? t(checkout.quotedAt) : -Infinity);
   const payBy = (isFinite(conditionDoneAt) ? Math.max(conditionDoneAt, clockStart, quoteAt, isFinite(rejectedAt) ? rejectedAt : -Infinity) : NaN) + ROOM_WINDOW_HOURS * ROOM_HOUR_MS;
   const unpaid = (fee.payers || []).filter(p => p.adminStatus === 'NOT_SUBMITTED' || p.adminStatus === 'ADMIN_REJECTED' || !p.adminStatus);
   const paymentPhase = accepted && !done[4];
@@ -26063,14 +26252,18 @@ function computeExchangeRoom_(input) {
     ? (fee.payers || []).map(p => (p.payerRole === viewer ? 'You' : p.payerRole === 'owner' ? 'The owner' : 'The requester') + ': ₹' + p.requiredAmount + ' — ' +
       (p.adminStatus === 'ADMIN_APPROVED' ? 'verified' : p.adminStatus === 'ADMIN_PENDING' ? 'paid, SwapSutra is verifying' : p.adminStatus === 'ADMIN_REJECTED' ? 'not accepted, pay again' : 'to pay')).join(' · ')
     : 'Nothing to pay on this exchange.';
-  if (waitingForDeposit) detail[4] = 'SwapSutra will enter the security deposit. Please wait before paying.';
-  else if (deposit && deposit.amount) detail[4] += ' · Security deposit ₹' + deposit.amount + '.';
-  if (paymentPhase && raw[3] && unpaid.length) detail[4] += ' · Pay by ' + when(payBy) + ', or the request closes.';
+  if (waitingForDeposit) detail[4] = checkout && checkout.pending ? 'Waiting for SwapSutra to set shipping charges.' : 'SwapSutra will enter the security deposit. Please wait before paying.';
+  if (checkout && checkout.mode === 'COD' && !waitingForDeposit) detail[4] = checkout.collected
+    ? 'COD funds received by SwapSutra.'
+    : 'Pay ₹' + checkout.total + ' on delivery.' + (checkout.codConfirmed ? ' COD confirmed.' : ' Review the condition video and confirm COD.');
+  if (!waitingForDeposit && deposit && deposit.amount) detail[4] += ' · Security deposit ₹' + deposit.amount + '.';
+  if (paymentPhase && raw[3] && unpaid.length) detail[4] += (checkout && checkout.mode === 'COD' ? ' · Confirm COD by ' : ' · Pay by ') + when(payBy) + ', or the request closes.';
   detail[6] = outRoute ? (outRoute.method === 'courier' ? 'Courier' : 'In person') : 'Decide together in the chat; either of you records it.';
   detail[7] = outRoute ? (outRoute.method === 'courier'
     ? out.map(l => legNames(l) + ': ' + (l.awb ? l.courierName + ' ' + l.awb : 'tracking ID to add')).join(' · ')
     : (outRoute.note || 'Meeting point pinned')) : '';
   detail[9] = out.map(l => legNames(l) + ': ' + (l.senderMarkedAt ? 'delivered ✓' : 'delivered —') + ' / ' + (l.receivedAt ? 'received ✓' : 'received —')).join(' · ');
+  if (codOutstanding && all(out, l => !!l.receivedAt)) detail[9] += ' · Waiting for SwapSutra to confirm receipt of COD funds.';
   if (needsReturn) {
     detail[10] = ret.started ? 'Return due by ' + when(ret.dueAt) + (ret.daysLeft > 0 ? ' (' + ret.daysLeft + ' days left)' : '') + '. You can return it any time before.' : 'Starts when the book reaches the reader.';
     detail[11] = noticeEvent ? 'Reminder posted in the chat.' : 'Posted in the chat when 7 days are left.';
@@ -26112,7 +26305,9 @@ function computeExchangeRoom_(input) {
     if (paymentPhase) {
       out.filter(l => l.youSend && !has(l, 'QUALITY')).forEach(l => push({ type: 'video', step: 3, leg: l.leg, kind: 'QUALITY' }));
       const myFee = (fee.payers || []).find(p => p.payerRole === me);
-      if (raw[3] && myFee && unpaid.indexOf(myFee) !== -1) push({ type: 'pay', step: 4, amount: myFee.requiredAmount });
+      if (raw[3] && myFee && unpaid.indexOf(myFee) !== -1) {
+        push({ type: checkout && checkout.mode === 'COD' ? 'confirmCod' : 'pay', step: 4, amount: myFee.requiredAmount });
+      }
       push({ type: 'close', step: 4 });
     } else if (accepted && !done[9]) {
       const legSteps = (legs, route, firstStep) => {
@@ -26193,9 +26388,10 @@ function computeExchangeRoom_(input) {
   else if (archived) waitingOn = '';
   else if (!actions.some(a => a.type !== 'close' && a.type !== 'payoutAccount')) {
     if (paymentPhase && !raw[3]) waitingOn = 'Waiting for ' + otherName + ' to record the book\'s condition video.';
-    else if (paymentPhase && waitingForDeposit) waitingOn = 'Waiting for SwapSutra to enter the security deposit.';
+    else if (paymentPhase && waitingForDeposit) waitingOn = checkout && checkout.pending ? 'Waiting for SwapSutra to set shipping charges.' : 'Waiting for SwapSutra to enter the security deposit.';
     else if (paymentPhase && unpaid.length) waitingOn = 'Waiting for the payment.';
     else if (paymentPhase) waitingOn = 'SwapSutra is verifying the payment — usually within a few hours.';
+    else if (codOutstanding && all(out, l => !!l.receivedAt)) waitingOn = 'Waiting for SwapSutra to confirm receipt of COD funds.';
     else if (needsReturn && done[9] && !done[12] && !(ret.extensionWindow || {}).open) waitingOn = ret.started ? 'Enjoy the book. The return is due by ' + when(ret.dueAt) + '.' : '';
     else if (exchangeDone && ratedBy(me)) waitingOn = 'Thanks for rating. The room closes once ' + otherName + ' rates too (or in ' + ROOM_RATING_WINDOW_DAYS + ' days).';
     else if (firstOpen) waitingOn = 'Waiting for ' + otherName + ' — step ' + firstOpen + ': ' + titles[firstOpen] + '.';
@@ -26282,7 +26478,7 @@ function getExchangeRoom(data) {
     // route for a trip still to happen, room open.
     let delivery = null;
     const outDone = room.steps.some(st => st.n === 9 && st.state === 'done');
-    const courierLeft = !room.closed && input.fee.allApproved &&
+    const courierLeft = !room.closed && (input.fee.readyToProceed || input.fee.allApproved) &&
       ((room.route.out && room.route.out.method === 'courier' && !outDone) ||
        (room.route.back && room.route.back.method === 'courier' && !room.exchangeDone));
     if (courierLeft && (input.viewerRole === 'owner' || input.viewerRole === 'requester')) {
@@ -26303,7 +26499,7 @@ function getExchangeRoom(data) {
       otherName: approvedPartner_(caller) ? 'the buyer' : roomName_(caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail),
       disputeOpen: input.disputeOpen,
       payment: Object.assign({ payers: input.fee.payers, allApproved: input.fee.allApproved, upi: paymentDetails_() },
-        input.fee.saleDeposit ? { saleDeposit: input.fee.saleDeposit } : {}),
+        input.fee.saleDeposit ? { saleDeposit: input.fee.saleDeposit } : {}, input.fee.checkout ? { checkout: input.fee.checkout, readyToProceed: input.fee.readyToProceed } : {}),
       returnInfo: ret.applies && ret.started ? { dueAt: ret.dueAt, daysLeft: ret.daysLeft, overdue: ret.overdue, extensionDays: ret.extensionDays,
         window: ret.extensionWindow || null, pendingExtension: pending } : null,
       sale: String(swap.obj.serviceType || '').toUpperCase() === 'SELL' ? saleStatusFor_(swap) : null,
@@ -26434,7 +26630,7 @@ function exchangeRoomAction(data) {
       let saleResult = null;
       if (isSale && saleEscrowActive_(swap)) saleResult = confirmSaleComplete({ swapId: swapId, happy: true });
       roomAfterMark_(swap);
-      return { success: true, message: isSale ? 'Purchase closed — the seller will be paid. Enjoy the book!' : 'Marked received.', sale: saleResult };
+      return { success: true, message: codPaymentOutstanding_(swap) ? 'Book received. SwapSutra will verify the COD funds before paying the seller.' : isSale ? 'Purchase closed — the seller will be paid. Enjoy the book!' : 'Marked received.', sale: saleResult };
     }
 
     if (act === 'requestExtension') {
@@ -26480,6 +26676,7 @@ function roomAfterMark_(swap) {
 
 /** The books have arrived (and come back, where they must): open the rating step. */
 function roomFinishExchange_(swap, room) {
+  if (codPaymentOutstanding_(swap)) return;
   const id = String(swap.obj.id);
   appendStageEvent({ swapId: id, stage: 'ROOM', party: 'system', actionType: 'exchange_done', actorEmail: 'swapsutra@gmail.com',
     note: room && room.needsReturn ? 'Returned and received by both readers.' : 'Delivered and received.' });
@@ -26507,6 +26704,11 @@ function roomFinishExchange_(swap, room) {
  * open. Idempotent: one refund record per reader.
  */
 function roomCreateRefunds_(swap, saleRuling) {
+  if (swap.obj.orderCheckout) return withSaleDepositLock_(() => roomCreateRefundsUnlocked_(swap, saleRuling));
+  return roomCreateRefundsUnlocked_(swap, saleRuling);
+}
+
+function roomCreateRefundsUnlocked_(swap, saleRuling) {
   const id = String(swap.obj.id);
   if (!saleRuling && swapHasOpenDispute(id)) return [];
   const sheet = getReturnForfeitSheet_();
@@ -26779,7 +26981,9 @@ function runExchangeRoomTicks_(nowMs) {
             tm.unpaidRoles.forEach(r => {
               const email = r === 'owner' ? swap.ownerEmail : swap.requesterEmail;
               returnNotify_(email, 'room_payment_reminder', 'Pay for "' + title + '" to continue',
-                'The condition video is in. Pay through the exchange room by ' + returnDateLabel_(new Date(tm.payBy)) + ', or the request closes automatically.',
+                (input.fee.checkout && input.fee.checkout.mode === 'COD'
+                  ? 'The condition video is in. Confirm cash on delivery in the exchange room by '
+                  : 'The condition video is in. Pay through the exchange room by ') + returnDateLabel_(new Date(tm.payBy)) + ', or the request closes automatically.',
                 id, 'room_pay_rem_' + id + '_' + r);
               summary.reminders++;
             });

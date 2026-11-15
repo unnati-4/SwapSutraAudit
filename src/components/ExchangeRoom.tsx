@@ -37,9 +37,14 @@ interface RoomAction {
   type: string; step: number; leg?: VmsLeg; kind?: VmsKind; phase?: 'out' | 'back'; amount?: number;
   method?: string; sale?: boolean; extensionId?: string; days?: number; reason?: string; closesAt?: string;
 }
+export interface OrderCheckout {
+  mode: 'ONLINE' | 'COD'; codAllowed: boolean; pending: boolean; editable: boolean;
+  onlineShipping?: number; codShipping?: number; shippingAmount: number | null;
+  total: number | null; revision?: string; codConfirmed: boolean; collected: boolean;
+}
 interface Payer {
   payerRole: string; requiredAmount: number; depositAmount?: number; platformFee?: number; saleAmount?: number;
-  adminStatus: string; utr?: string; screenshotUrl?: string; rejectedReason?: string;
+  shippingAmount?: number; adminStatus: string; utr?: string; screenshotUrl?: string; rejectedReason?: string;
 }
 export interface RoomData {
   success: boolean; message?: string;
@@ -49,7 +54,7 @@ export interface RoomData {
   legs: { out: RoomLeg[]; back: RoomLeg[] };
   route: { out: RoomRoute | null; back: RoomRoute | null };
   deadlines: { conditionBy: string; payBy: string };
-  payment: { saleDeposit?: { pending: boolean; amount: number | null; quotedAt: string }; payers: Payer[]; allApproved: boolean; upi: PayDetails };
+  payment: { checkout?: OrderCheckout; readyToProceed?: boolean; saleDeposit?: { pending: boolean; amount: number | null; quotedAt: string }; payers: Payer[]; allApproved: boolean; upi: PayDetails };
   returnInfo: { dueAt: string; daysLeft: number; overdue: boolean; extensionDays: number } | null;
   sale: { price: number; sellerReceives: number; payoutStatus: string } | null;
   /** A rental: the rent, taken from the deposit at the end and paid to the owner. */
@@ -115,6 +120,10 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   const [pinFor, setPinFor] = useState<'out' | 'back' | null>(null);
   const [utr, setUtr] = useState('');
   const [depositInput, setDepositInput] = useState('');
+  const [onlineShipping, setOnlineShipping] = useState('');
+  const [codShipping, setCodShipping] = useState('');
+  const [codReference, setCodReference] = useState('');
+  const [codReceivedAmount, setCodReceivedAmount] = useState('');
   const [payFile, setPayFile] = useState<File | null>(null);
   const [courier, setCourier] = useState<Record<string, { name: string; awb: string }>>({});
   const [happy, setHappy] = useState(false);
@@ -136,6 +145,8 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   }, [swapId]);
 
   useEffect(() => {
+    setDepositInput(''); setOnlineShipping(''); setCodShipping(''); setCodReference(''); setCodReceivedAmount('');
+    setMsg('');
     refresh();
     const t = setInterval(refresh, 20000);
     return () => clearInterval(t);
@@ -176,7 +187,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
     setBusy('pay'); setMsg('');
     try {
       const fileData = await fileToDataUrl(payFile);
-      const res = await post({ action: 'submitSecurityFeePayment', swapId, utr: utr.trim(), fileData, fileName: payFile.name, depositQuotedAt: room?.payment.saleDeposit?.quotedAt });
+      const res = await post({ action: 'submitSecurityFeePayment', swapId, utr: utr.trim(), fileData, fileName: payFile.name, depositQuotedAt: room?.payment.saleDeposit?.quotedAt, checkoutRevision: room?.payment.checkout?.revision });
       if (res?.success) { setUtr(''); setPayFile(null); }
       await after(res, 'Payment sent — SwapSutra will verify it shortly.');
     } catch { setMsg('Network error. Please try again.'); }
@@ -194,6 +205,13 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
       if (result.success) setDepositInput('');
       await after(result, 'Security deposit saved.');
     } catch { setMsg('Network error. Please try again.'); }
+    finally { setBusy(''); }
+  };
+
+  const checkoutAction = async (action: string, payload: Record<string, unknown>) => {
+    setBusy(action); setMsg('');
+    try { await after(await post({ action, swapId, ...payload })); }
+    catch { setMsg('Network error. Please try again.'); }
     finally { setBusy(''); }
   };
 
@@ -236,6 +254,16 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   const renderAction = (a: RoomAction, i: number) => {
     const leg = legOf(a.leg);
     switch (a.type) {
+      case 'confirmCod':
+        return card('cod', 'Cash on delivery', (
+          <div className="space-y-3">
+            <p className="text-xs">Pay the full ₹{room.payment.checkout?.total} on delivery, including ₹{room.payment.checkout?.shippingAmount} shipping.</p>
+            <button type="button" disabled={!!busy} className={btnSolid}
+              onClick={() => checkoutAction('confirmOrderCod', {
+                revision: room.payment.checkout?.revision, depositQuotedAt: room.payment.saleDeposit?.quotedAt
+              })}>Confirm cash on delivery</button>
+          </div>
+        ), 4);
       case 'pay': {
         const p = myPayer;
         if (!p) return null;
@@ -250,6 +278,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         return card('pay', `Pay ₹${p.requiredAmount}`, (
           <div className="space-y-3">
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{parts}</p>
+            {!!p.shippingAmount && <p className="text-xs">Shipping ₹{p.shippingAmount} · included in the total above.</p>}
             {p.adminStatus === 'ADMIN_REJECTED' && <p className="text-xs text-red-600">Your last payment was not accepted{p.rejectedReason ? `: ${p.rejectedReason}` : ''}. Please pay again.</p>}
             <UpiPayBox upi={room.payment.upi} amount={p.requiredAmount} note={'SwapSutra exchange ' + room.swapId.slice(-6)} size={156} />
             <p className="text-center text-2xs text-[var(--text-secondary)]">Scan with any UPI app (or tap it on your phone).{room.deadlines.payBy ? ` Pay by ${roomWhen(room.deadlines.payBy)}.` : ''}</p>
@@ -539,14 +568,80 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
         </details>
       )}
 
-      {!room.closed && room.payment.allApproved && room.role !== 'admin' && (
+      {!room.closed && (room.payment.readyToProceed || room.payment.allApproved) && room.role !== 'admin' && (
         showReport
           ? <DisputeReport swapId={swapId} />
           : <button type="button" onClick={() => setShowReport(true)} className="text-2xs underline text-[var(--text-secondary)]">Report a problem</button>
       )}
 
+      {room.payment.checkout && (
+        <div className="rounded-2xl border border-brand-border p-4 space-y-3">
+          <p className="text-xs font-bold">Payment and shipping</p>
+          {room.payment.checkout.pending ? (
+            <p className="text-xs">Waiting for SwapSutra to set shipping charges.</p>
+          ) : (
+            <>
+              {room.role === 'requester' && room.payment.checkout.codAllowed && room.payment.checkout.editable && (
+                <fieldset className="space-y-2" disabled={!!busy}>
+                  <legend className="text-xs mb-2">Choose payment mode</legend>
+                  {(['ONLINE', 'COD'] as const).map(mode => (
+                    <label key={mode} className="flex items-center gap-2 text-xs">
+                      <input type="radio" name={'payment-mode-' + swapId} checked={room.payment.checkout?.mode === mode}
+                        onChange={() => checkoutAction('selectOrderPaymentMode', { mode, revision: room.payment.checkout?.revision })} />
+                      {mode === 'COD' ? 'Cash on delivery' : 'Online payment'} · shipping ₹{mode === 'COD' ? room.payment.checkout?.codShipping : room.payment.checkout?.onlineShipping}
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+              <p className="text-xs">
+                {room.payment.checkout.mode === 'COD' ? 'Cash on delivery' : 'Online payment in advance'} · Shipping ₹{room.payment.checkout.shippingAmount}
+                {room.payment.checkout.total != null && <> · Total ₹{room.payment.checkout.total}</>}
+              </p>
+              {room.payment.checkout.codConfirmed && <p className="text-xs">
+                {room.payment.checkout.collected ? 'SwapSutra has received the COD funds.' : 'COD confirmed. Pay the full amount on delivery. Seller payout follows confirmation of the funds received by SwapSutra.'}
+              </p>}
+            </>
+          )}
+        </div>
+      )}
+
+      {isAdmin && !room.closed && !room.exchangeDone &&
+        (room.payment.checkout ? room.payment.checkout.editable : !room.payment.payers.some(p => p.utr || p.adminStatus === 'ADMIN_APPROVED' || p.adminStatus === 'ADMIN_PENDING')) && (
+        <div className="rounded-2xl border border-brand-border p-4 space-y-3">
+          <p className="text-xs font-bold">Set shipping charges for this order</p>
+          <label className="block text-xs">Online shipping (₹)
+            <input type="number" min="0" step="1" className="input-classic mt-2 w-full" value={onlineShipping}
+              placeholder={room.payment.checkout?.onlineShipping?.toString() || 'Enter amount'}
+              onChange={e => setOnlineShipping(e.target.value)} />
+          </label>
+          {room.type === 'SELL' && <label className="block text-xs">COD shipping (₹)
+            <input type="number" min="0" step="1" className="input-classic mt-2 w-full" value={codShipping}
+              placeholder={room.payment.checkout?.codShipping?.toString() || 'Enter amount'}
+              onChange={e => setCodShipping(e.target.value)} />
+          </label>}
+          <button type="button" className={btnSolid}
+            disabled={!!busy || !/^\d+$/.test(onlineShipping) || (room.type === 'SELL' && !/^\d+$/.test(codShipping))}
+            onClick={() => checkoutAction('adminSetOrderShipping', { onlineShipping, codShipping })}>Save shipping charges</button>
+        </div>
+      )}
+
+      {isAdmin && room.payment.checkout?.codConfirmed && !room.payment.checkout.collected && (
+        <div className="rounded-2xl border border-brand-border p-4 space-y-3">
+          <p className="text-xs font-bold">Confirm COD funds received</p>
+          <p className="text-xs">Expected ₹{room.payment.checkout.total}. Confirm after the courier has remitted the full amount to SwapSutra.</p>
+          <label className="block text-xs">Amount received (₹)
+            <input type="number" min="0" step="1" value={codReceivedAmount} onChange={e => setCodReceivedAmount(e.target.value)} className="input-classic mt-2 w-full" />
+          </label>
+          <label className="block text-xs">Remittance reference
+            <input value={codReference} maxLength={150} onChange={e => setCodReference(e.target.value)} className="input-classic mt-2 w-full" />
+          </label>
+          <button type="button" className={btnSolid} disabled={!!busy || !codReference.trim() || !codReceivedAmount}
+            onClick={() => checkoutAction('adminRecordCodReceived', { amount: Number(codReceivedAmount), reference: codReference })}>Confirm funds received</button>
+        </div>
+      )}
+
       {isAdmin && room.type === 'SELL' && !room.closed && !room.exchangeDone &&
-        !room.payment.payers.some(p => p.utr || p.adminStatus === 'ADMIN_APPROVED' || p.adminStatus === 'ADMIN_PENDING') && (
+        !room.payment.checkout?.codConfirmed && !room.payment.payers.some(p => p.utr || p.adminStatus === 'ADMIN_APPROVED' || p.adminStatus === 'ADMIN_PENDING') && (
         <div className="rounded-2xl border border-brand-border p-4 space-y-3">
           <label className="block text-xs font-bold">
             Security deposit (₹)
