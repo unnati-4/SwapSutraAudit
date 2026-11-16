@@ -46,7 +46,7 @@ check('7. ...before pricing runs', gs.indexOf('ISBN_REQUIRED') < gs.indexOf("con
 check('8. Scanning fills the ISBN box', /setManualIsbnValue\(isbn\);\s*performIsbnLookup\(isbn\);/.test(app));
 
 console.log('--- Shelf cover by ISBN ---');
-check('9. ShelfBook tries the ISBN cover, then own photo', /shelfCoverCandidates\(book\.isbn, images\[0\]\)/.test(app));
+check('9. ShelfBook uses the listing-photo candidates', /shelfCoverCandidates\(book\.isbn, images\[0\]\)/.test(app));
 check('10. A failed cover steps to the next source', /onError=\{\(\) => setCoverStep/.test(app));
 check('11. Book page still uses the reader\'s photos (getBookImages in detail modal)', /const images = getBookImages\(book\)/.test(app));
 
@@ -58,7 +58,13 @@ const bc = m1.exports;
 check('12. Cover URL built from a clean ISBN', bc.shelfCoverUrl('978-0-06-112008-4') === '/api/books?action=cover&isbn=9780061120084&v=2');
 check('13. No cover URL for a missing ISBN', bc.shelfCoverUrl('') === '' && bc.shelfCoverUrl('123') === '');
 const cands = bc.shelfCoverCandidates('0061120081', 'https://drive.google.com/thumbnail?id=abc');
-check('14. Candidates: ISBN cover → own photo → stock', cands.length === 3 && cands[0].includes('isbn=0061120081') && cands[1].includes('drive') && cands[2] === bc.SHELF_FALLBACK_COVER);
+check('14. Candidates contain only own photo and neutral placeholder', cands.length === 2 && cands[0].includes('drive') && cands[1] === bc.SHELF_FALLBACK_COVER);
+check('Missing listing photo never fetches another edition', JSON.stringify(bc.shelfCoverCandidates('0061120081')) === JSON.stringify([bc.SHELF_FALLBACK_COVER]));
+check('Named front photo wins over legacy cover', JSON.stringify(bc.uploadedBookImages({ frontCoverImage: 'https://photos/front', imageUrls: ['https://photos/legacy', 'https://photos/front'], backCoverImage: 'https://photos/back', internalBookVideo: 'https://video' })) === JSON.stringify(['https://photos/front', 'https://photos/legacy', 'https://photos/back']));
+check('Legacy pipe/comma galleries remain supported', bc.uploadedBookImages({ imageUrl: 'https://photos/one|https://photos/two,https://photos/three' }).length === 3);
+check('Empty, invalid and non-photo field values do not become images', bc.uploadedBookImages({ frontCoverImage: 'Yes', imageUrls: '', internalBookImage: {} }).length === 0);
+check('Data image comma is preserved', bc.uploadedBookImages({ frontCoverImage: 'data:image/png;base64,abc' })[0] === 'data:image/png;base64,abc');
+
 
 console.log('--- Cover route ---');
 check('15. books.ts routes action=cover and action=image', /case 'cover':/.test(books) && /case 'image':/.test(books));

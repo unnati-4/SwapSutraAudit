@@ -1,16 +1,6 @@
-/**
- * The cover a book shows on a shelf.
- *
- * Shelves show the publisher's front cover, fetched from Google Books by
- * ISBN (owner's decision, 23 Sep). The reader's own photos of their copy
- * are still what the book's page shows; only the shelf tile changes.
- *
- * The URL points at our own /api/books?action=cover route rather than at
- * Google directly: it is CDN-cached for a month, and being same-origin it
- * can be drawn onto the "share my shelf" canvas.
- */
+/** Listing covers use the owner-supplied photo. ISBN covers are for discovery only. */
 export const SHELF_FALLBACK_COVER =
-  'https://images.unsplash.com/photo-1543003928-a390cfd0b405?w=500&auto=format&fit=crop&q=60';
+  '/book-photo-unavailable.svg';
 
 export const cleanIsbn = (raw: unknown): string =>
   String(raw ?? '').replace(/[^0-9Xx]/g, '').toUpperCase();
@@ -23,7 +13,20 @@ export function shelfCoverUrl(isbn: unknown): string {
   return `/api/books?action=cover&isbn=${clean}&v=2`;
 }
 
-/** Sources to try in order: Google cover → the reader's front photo → stock. */
-export function shelfCoverCandidates(isbn: unknown, ownPhoto?: string): string[] {
-  return [shelfCoverUrl(isbn), ownPhoto || '', SHELF_FALLBACK_COVER].filter(Boolean);
+/** Never substitute another edition when a listing photo is absent or fails. */
+export function shelfCoverCandidates(_isbn: unknown, ownPhoto?: string): string[] {
+  return [ownPhoto || '', SHELF_FALLBACK_COVER].filter(Boolean);
+}
+
+/** Named front-cover uploads take precedence over legacy gallery fields. */
+export function uploadedBookImages(book: any): string[] {
+  if (!book) return [];
+  const split = (value: unknown): string[] => Array.isArray(value)
+    ? value.flatMap(split)
+    : typeof value === 'string' ? (value.startsWith('data:image/') ? [value] : value.split(/[|,]/)).map(s => s.trim()).filter(Boolean) : [];
+  return [...new Set([
+    ...split(book.frontCoverImage),
+    ...split(book.imageUrls || book.imageUrl || book.imageurl),
+    ...split(book.backCoverImage), ...split(book.internalBookImage),
+  ])].filter(url => /^(https?:\/\/|\/(?!\/)|data:image\/|blob:)/i.test(url));
 }
