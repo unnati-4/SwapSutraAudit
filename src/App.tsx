@@ -1,3 +1,4 @@
+import ListingImage from './components/ListingImage';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -197,7 +198,7 @@ const AdminMugProducts = lazyScreen<any>(
 );
 import {apiUrl, SHARE_ORIGIN} from './config/runtime';
 import { seoForPath, canonicalUrl, SITE_FAQS } from './seo/pages';
-import { shelfCoverCandidates, SHELF_FALLBACK_COVER, uploadedBookImages } from './utils/bookCover';
+import { shelfCoverCandidates, shelfCoverUrl, SHELF_FALLBACK_COVER, uploadedBookImages } from './utils/bookCover';
 import CartPage, { type CartView, type CartOrder } from './components/CartPage';
 import { depositLine, DEPOSIT_ESTIMATE_EXPLAINER } from './utils/deposit';
 import { buildShelfImage } from './utils/shelfImage';
@@ -2403,11 +2404,11 @@ const ShelfBook = memo(({ book, onShowBookDetail, onEdit, onRemove }: {
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const images = getBookImages(book);
-  // Use the listing photo; a missing photo must not suggest another edition.
+  // Use the listing photo first, then a labelled ISBN reference.
   const coverSources = shelfCoverCandidates(book.isbn, images[0]);
   const [coverStep, setCoverStep] = useState(0);
   const coverSrc = coverSources[Math.min(coverStep, coverSources.length - 1)];
-  useEffect(() => { setCoverStep(0); }, [book.id, images[0]]);
+  useEffect(() => { setCoverStep(0); }, [book.id, images[0], book.isbn]);
   const showPlate = coverSrc === SHELF_FALLBACK_COVER;
   const photoGaps = listingPhotoGaps(book);
   const availability = bookAvailabilityFromBook(book);
@@ -2445,6 +2446,7 @@ const ShelfBook = memo(({ book, onShowBookDetail, onEdit, onRemove }: {
         {photoGaps.length > 0 && (
           <span className="ss-shelf__tag" data-testid="more-photos-tag">{onEdit ? 'Add photos' : MORE_PHOTOS_LABEL}</span>
         )}
+        {coverSrc === shelfCoverUrl(book.isbn) && <span className="absolute bottom-1 left-1 right-1 z-[3] bg-[#F2EBE1]/95 p-1 text-center text-[10px] text-[#4A3B32]">Reference cover</span>}
         {showPlate && (
           <span className="ss-shelf__plate">
             <b>{book.title}</b>
@@ -2674,7 +2676,7 @@ const BookCard = memo(({ book, ownerMode = false, userCoords, onShowBookDetail }
         className="group relative bg-transparent transition-all duration-300 cursor-pointer flex flex-col h-full min-h-[430px] sm:min-h-[520px] rounded-sm"
       >
         <div className="book-cover-lift aspect-[3/4] overflow-hidden relative bg-[var(--bg-page)] border border-brand-border/40 shadow-[0_4px_10px_rgba(45,41,37,0.05)] rounded-sm">
-          <img 
+          <ListingImage isbn={book.isbn}
             src={primaryImage} 
             alt={book.author ? `Cover of ${book.title} by ${book.author}` : `Cover of ${book.title}`} 
             referrerPolicy="no-referrer"
@@ -3710,7 +3712,7 @@ const BookDetailModal = memo(({
                   aria-label={`Open photos of ${book.title || 'this book'} full screen`}
                   className="absolute inset-0 z-[1] cursor-zoom-in"
                 />
-                <img 
+                <ListingImage isbn={book.isbn}
                   src={activeImg} 
                   alt={book.title ? `Photo of ${book.title}${book.author ? ` by ${book.author}` : ''}` : 'Photo of this copy'} 
                   referrerPolicy="no-referrer"
@@ -3748,9 +3750,9 @@ const BookDetailModal = memo(({
                     type="button"
                     aria-label={`Photo ${i + 1}`}
                     onClick={() => { if (activeImg === img) setViewerIndex(i); else setActiveImg(img); }}
-                    className={`w-14 h-14 md:w-20 md:h-20 rounded-xl overflow-hidden border-2 transition-all flex-shrink-0 ${activeImg === img ? 'border-brand-gold scale-105 shadow-md' : 'border-transparent opacity-60 hover:opacity-100'}`}
+                    className={`relative w-14 h-14 md:w-20 md:h-20 rounded-xl overflow-hidden border-2 transition-all flex-shrink-0 ${activeImg === img ? 'border-brand-gold scale-105 shadow-md' : 'border-transparent opacity-60 hover:opacity-100'}`}
                   >
-                    <img 
+                    <ListingImage isbn={book.isbn}
                       src={img} 
                       alt="" 
                       className="w-full h-full object-contain bg-[#F2EBE1]"
@@ -3969,7 +3971,7 @@ const BookDetailModal = memo(({
                       url={`${SHARE_ORIGIN}/book/${encodeURIComponent(String(book.id))}`}
                       // The book's own attached photos go along with the link;
                       // a listing without photos uses an explicit unavailable placeholder.
-                      images={getBookImages(book).length ? getBookImages(book).slice(0, 3) : [SHELF_FALLBACK_COVER]}
+                      images={getBookImages(book).length ? getBookImages(book).slice(0, 3) : [shelfCoverUrl(book.isbn) || SHELF_FALLBACK_COVER]}
                       onClose={() => setBookShareOpen(false)}
                     />
                   )}
@@ -16041,7 +16043,7 @@ export default function App() {
                   coverFor={(bookId, title) => {
                     const b: any = books.find((x: any) => String(x.id) === String(bookId || ''))
                       || (title ? books.find((x: any) => String(x.title || '').toLowerCase() === String(title).toLowerCase()) : undefined);
-                    return b ? (getBookImages(b)[0] || SHELF_FALLBACK_COVER) : '';
+                    return b ? (getBookImages(b)[0] || shelfCoverUrl(b.isbn) || SHELF_FALLBACK_COVER) : '';
                   }}
                   bookTitleFor={(bookId) => String((books.find((x: any) => String(x.id) === String(bookId || '')) as any)?.title || '')}
                   hasChatFor={(req) => Boolean(findChatForRequest(req))}
@@ -18508,8 +18510,8 @@ export default function App() {
                         {swapPhotoIndex !== null && galleryImages.length > 0 && (
                           <PhotoViewer images={galleryImages} startIndex={swapPhotoIndex} title={showSwapModal.title} onClose={() => setSwapPhotoIndex(null)} />
                         )}
-                        <button type="button" onClick={() => galleryImages.length && setSwapPhotoIndex(0)} aria-label="Open photos full screen" className="col-span-1 sm:col-span-3 h-48 sm:h-full min-h-0 overflow-hidden rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-1 cursor-zoom-in">
-                          <img 
+                        <button type="button" onClick={() => galleryImages.length && setSwapPhotoIndex(0)} aria-label="Open photos full screen" className="relative col-span-1 sm:col-span-3 h-48 sm:h-full min-h-0 overflow-hidden rounded-2xl border border-brand-border bg-[var(--bg-surface)] p-1 cursor-zoom-in">
+                          <ListingImage isbn={showSwapModal.isbn}
                             src={primary} 
                             alt="Primary" 
                             referrerPolicy="no-referrer"
@@ -18522,7 +18524,7 @@ export default function App() {
                         <div className="col-span-1 sm:col-span-2 grid grid-cols-2 sm:grid-cols-1 sm:grid-rows-2 gap-2 h-24 sm:h-full min-h-0 overflow-hidden">
                           {thumbnailSlots.map((url, i) => (
                             <button type="button" key={i} onClick={() => galleryImages.length && setSwapPhotoIndex(Math.min(i + 1, galleryImages.length - 1))} aria-label={`Open photo ${i + 2} full screen`} className="relative h-full min-h-0 overflow-hidden rounded-xl border border-brand-border bg-[var(--bg-surface)] p-1 cursor-zoom-in">
-                              <img 
+                              <ListingImage isbn={showSwapModal.isbn}
                                 src={url} 
                                 alt={`Gallery ${i}`} 
                                 referrerPolicy="no-referrer"

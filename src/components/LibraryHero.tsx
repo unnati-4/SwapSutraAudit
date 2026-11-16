@@ -1,5 +1,6 @@
+import ListingImage from './ListingImage';
 import React, { useMemo, useRef } from 'react';
-import { uploadedBookImages, SHELF_FALLBACK_COVER } from '../utils/bookCover';
+import { uploadedBookImages, shelfCoverUrl, SHELF_FALLBACK_COVER } from '../utils/bookCover';
 import { adImageSrc, shuffled, type SponsoredAd } from '../utils/ads';
 import { adToSlide } from './SponsoredAds';
 import MascotBanner, { type BannerSlide } from './MascotBanner';
@@ -27,7 +28,7 @@ export interface HeroBook {
   createdAt?: string;
 }
 
-const coverOf = (b: HeroBook) => photoOf(b);
+const coverOf = (b: HeroBook) => photoOf(b) || shelfCoverUrl(b.isbn);
 /** The reader's own first photo of the book (Drive links made viewable). */
 const photoOf = (b: HeroBook) => {
   const raw = uploadedBookImages(b)[0];
@@ -72,7 +73,7 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
     }];
     return picks.map((b) => ({
       key: `book-${b.id}`,
-      eyebrow: 'Featured book',
+      eyebrow: photoOf(b) ? 'Featured book' : 'Reference cover · edition may vary',
       title: b.title || 'A book on the shelves',
       subtitle: b.author ? `by ${b.author}` : undefined,
       imageUrl: coverOf(b) || photoOf(b),
@@ -111,7 +112,7 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
             {row.map((b) => (
               <button key={String(b.id)} type="button" className="lib-row__item" onClick={() => onOpenBook(b)}>
                 <span className="lib-row__cover">
-                  <img src={coverOf(b)} alt={b.title ? `Cover of ${b.title}` : 'Book cover'} loading="lazy" decoding="async"
+                  <ListingImage isbn={b.isbn} src={photoOf(b)} alt={b.title ? `Cover of ${b.title}` : 'Book cover'} loading="lazy" decoding="async"
                     onError={(e) => { if (e.currentTarget.getAttribute('src') !== SHELF_FALLBACK_COVER) e.currentTarget.src = SHELF_FALLBACK_COVER; }} />
                 </span>
                 <span className="lib-row__title">{b.title}</span>

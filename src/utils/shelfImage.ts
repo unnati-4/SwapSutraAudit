@@ -1,3 +1,4 @@
+import { shelfCoverUrl } from './bookCover';
 /**
  * Draws a reader's bookshelf as one picture to share (1080×1350, the
  * portrait size Instagram and WhatsApp show uncropped).
@@ -39,7 +40,11 @@ function loadImage(src: string, timeoutMs = 8000): Promise<HTMLImageElement | nu
 }
 
 async function coverFor(book: ShelfImageBook): Promise<HTMLImageElement | null> {
-  return loadImage(readableImageUrl(book.photo || ''));
+  const photo = await loadImage(readableImageUrl(book.photo || ''));
+  if (photo) return photo;
+  const reference = await loadImage(shelfCoverUrl(book.isbn));
+  if (reference) reference.dataset.referenceCover = 'true';
+  return reference;
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -115,6 +120,14 @@ function drawCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement | null, 
       ctx.fillText(a, x + w / 2, y + h - 34);
       ctx.globalAlpha = 1;
     }
+  }
+  if (img?.dataset.referenceCover) {
+    ctx.fillStyle = C.band;
+    ctx.fillRect(x, y + h - 22, w, 22);
+    ctx.fillStyle = C.brown;
+    ctx.font = `500 12px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Reference cover', x + w / 2, y + h - 7);
   }
   // spine hinge + sheen, like the shelf on the site
   const g = ctx.createLinearGradient(x, 0, x + w, 0);

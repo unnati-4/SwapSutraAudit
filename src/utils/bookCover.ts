@@ -1,4 +1,4 @@
-/** Listing covers use the owner-supplied photo. ISBN covers are for discovery only. */
+/** Listing covers use the owner-supplied photo. ISBN covers are reference fallbacks. */
 export const SHELF_FALLBACK_COVER =
   '/book-photo-unavailable.svg';
 
@@ -13,9 +13,9 @@ export function shelfCoverUrl(isbn: unknown): string {
   return `/api/books?action=cover&isbn=${clean}&v=2`;
 }
 
-/** Never substitute another edition when a listing photo is absent or fails. */
-export function shelfCoverCandidates(_isbn: unknown, ownPhoto?: string): string[] {
-  return [ownPhoto || '', SHELF_FALLBACK_COVER].filter(Boolean);
+/** Uploaded photo → ISBN reference → unavailable placeholder. */
+export function shelfCoverCandidates(isbn: unknown, ownPhoto?: string): string[] {
+  return [ownPhoto && ownPhoto !== SHELF_FALLBACK_COVER ? ownPhoto : '', shelfCoverUrl(isbn), SHELF_FALLBACK_COVER].filter(Boolean);
 }
 
 /** Named front-cover uploads take precedence over legacy gallery fields. */
