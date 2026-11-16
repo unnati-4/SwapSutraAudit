@@ -1,15 +1,11 @@
+import { shelfCoverUrl } from './bookCover';
 /**
  * Draws a reader's bookshelf as one picture to share (1080×1350, the
  * portrait size Instagram and WhatsApp show uncropped).
  *
- * Covers are the publisher's covers by ISBN (same-origin /api/books
- * route, so the canvas stays readable); a book with no cover falls back
- * to the reader's own photo through the Drive relay, and failing that to
- * a drawn cover with the title on it. Nothing here can taint the canvas:
- * every image is requested with crossOrigin, and one that refuses simply
- * fails to load and gets the drawn cover instead.
+ * Uses the listing photo through the Drive relay, or a title placeholder.
+ * Images are contained without cropping or stretching the actual copy.
  */
-import { shelfCoverUrl } from './bookCover';
 import { readableImageUrl } from './share';
 
 export type ShelfImageBook = { title: string; author?: string; isbn?: string; photo?: string };
@@ -44,9 +40,11 @@ function loadImage(src: string, timeoutMs = 8000): Promise<HTMLImageElement | nu
 }
 
 async function coverFor(book: ShelfImageBook): Promise<HTMLImageElement | null> {
-  const fromIsbn = await loadImage(shelfCoverUrl(book.isbn));
-  if (fromIsbn) return fromIsbn;
-  return loadImage(readableImageUrl(book.photo || ''));
+  const photo = await loadImage(readableImageUrl(book.photo || ''));
+  if (photo) return photo;
+  const reference = await loadImage(shelfCoverUrl(book.isbn));
+  if (reference) reference.dataset.referenceCover = 'true';
+  return reference;
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -97,8 +95,10 @@ function drawCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement | null, 
   roundRect(ctx, x, y, w, h, 6);
   ctx.clip();
   if (img) {
-    // object-fit: cover
-    const s = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+    // Contain the complete uploaded photo without distorting its proportions.
+    ctx.fillStyle = C.band;
+    ctx.fillRect(x, y, w, h);
+    const s = Math.min(w / img.naturalWidth, h / img.naturalHeight);
     const dw = img.naturalWidth * s;
     const dh = img.naturalHeight * s;
     ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
@@ -120,6 +120,14 @@ function drawCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement | null, 
       ctx.fillText(a, x + w / 2, y + h - 34);
       ctx.globalAlpha = 1;
     }
+  }
+  if (img?.dataset.referenceCover) {
+    ctx.fillStyle = C.band;
+    ctx.fillRect(x, y + h - 22, w, 22);
+    ctx.fillStyle = C.brown;
+    ctx.font = `500 12px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Reference cover', x + w / 2, y + h - 7);
   }
   // spine hinge + sheen, like the shelf on the site
   const g = ctx.createLinearGradient(x, 0, x + w, 0);
