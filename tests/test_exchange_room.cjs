@@ -41,7 +41,7 @@ function makeEnv() {
       _data: data,
       getDataRange() { return { getValues: () => data.map(r => r.slice()) }; },
       appendRow(row) { data.push(row.slice()); },
-      getRange(r, c) { return { setValue: (v) => { while (data[r - 1].length < c) data[r - 1].push(''); data[r - 1][c - 1] = v; }, getValue: () => data[r - 1][c - 1] }; },
+      getRange(r, c, nr = 1, nc = 1) { return { getValues: () => data.slice(r - 1, r - 1 + nr).map(row => Array.from({ length: nc }, (_, i) => row[c - 1 + i] ?? '')), setValue: (v) => { while (data[r - 1].length < c) data[r - 1].push(''); data[r - 1][c - 1] = v; }, getValue: () => data[r - 1][c - 1] }; },
       getLastRow() { return data.length; },
       getLastColumn() { return data[0] ? data[0].length : 0; }
     };
@@ -446,22 +446,22 @@ check('111. An archived room is never pulled back to Completed', /!== 'Completed
   env.as('swapsutra@gmail.com');
   check('Reject negative shipping', env.api.adminSetOrderShipping({ swapId: 'COD1', onlineShipping: -10, codShipping: 70 }).success === false);
   check('Admin saves separate shipping rates', env.api.adminSetOrderShipping({ swapId: 'COD1', onlineShipping: 40, codShipping: 70 }).success);
-  check('Admin saves the sale deposit', env.api.adminSetSaleSecurityDeposit({ swapId: 'COD1', amount: 80 }).success);
+  check('Manual sale deposit entry retired', !env.api.adminSetSaleSecurityDeposit({ swapId: 'COD1', amount: 80 }).success);
   let r = room(env, 'req@x.com', 'COD1');
-  check('Online total includes book, deposit, fee and shipping', r.payment.checkout.total === 430 && r.payment.payers[0].shippingAmount === 40);
+  check('Online total includes book, fee and shipping only', r.payment.checkout.total === 350 && r.payment.payers[0].shippingAmount === 40);
   check('Stale shipping choice is rejected', env.api.selectOrderPaymentMode({ swapId: 'COD1', mode: 'COD', revision: 'old' }).success === false);
   env.as('own@x.com');
   check('Owner cannot select the requester payment mode', env.api.selectOrderPaymentMode({ swapId: 'COD1', mode: 'COD', revision: r.payment.checkout.revision }).success === false);
   env.as('req@x.com');
   check('Buyer can select COD', env.api.selectOrderPaymentMode({ swapId: 'COD1', mode: 'COD', revision: r.payment.checkout.revision }).success);
   r = room(env, 'req@x.com', 'COD1');
-  check('COD total uses COD shipping', r.payment.checkout.total === 460);
-  check('COD confirmation requires condition video', env.api.confirmOrderCod({ swapId: 'COD1', revision: r.payment.checkout.revision, depositQuotedAt: r.payment.saleDeposit.quotedAt }).success === false);
+  check('COD total uses COD shipping', r.payment.checkout.total === 380);
+  check('COD confirmation requires condition video', env.api.confirmOrderCod({ swapId: 'COD1', revision: r.payment.checkout.revision, depositQuotedAt: r.payment.saleDeposit?.quotedAt }).success === false);
   env.video('COD1', 'outbound', 'QUALITY', 'own@x.com');
   r = room(env, 'req@x.com', 'COD1');
   check('COD offers confirmation instead of advance payment', r.actions.some(a => a.type === 'confirmCod') && !r.actions.some(a => a.type === 'pay'));
   check('COD rejects online payment evidence', env.api.submitSecurityFeePayment({ swapId: 'COD1', utr: 'VALID123', screenshotUrl: 'https://proof', checkoutRevision: r.payment.checkout.revision }).success === false);
-  check('COD can be confirmed', env.api.confirmOrderCod({ swapId: 'COD1', revision: r.payment.checkout.revision, depositQuotedAt: r.payment.saleDeposit.quotedAt }).success);
+  check('COD can be confirmed', env.api.confirmOrderCod({ swapId: 'COD1', revision: r.payment.checkout.revision, depositQuotedAt: r.payment.saleDeposit?.quotedAt }).success);
   r = room(env, 'req@x.com', 'COD1');
   check('COD allows dispatch without marking money paid', r.payment.readyToProceed && !r.payment.allApproved && r.payment.payers[0].adminStatus === 'NOT_SUBMITTED');
   env.as('swapsutra@gmail.com');
@@ -480,15 +480,15 @@ check('111. An archived room is never pulled back to Completed', /!== 'Completed
   check('Rating waits for COD collection', !room(env, 'req@x.com', 'COD1').exchangeDone);
   env.api.runSaleAutoRelease_();
   check('Auto release cannot pay uncollected COD', env.payouts('COD1').length === 0);
-  check('Requester cannot mark COD funds received', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 460, reference: 'REMIT1' }).success === false);
+  check('Requester cannot mark COD funds received', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 380, reference: 'REMIT1' }).success === false);
   env.as('swapsutra@gmail.com');
-  check('Short COD receipt rejected', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 450, reference: 'REMIT1' }).success === false);
-  check('Admin records full COD receipt', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 460, reference: 'REMIT1' }).success);
+  check('Short COD receipt rejected', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 370, reference: 'REMIT1' }).success === false);
+  check('Admin records full COD receipt', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 380, reference: 'REMIT1' }).success);
   const payouts = env.payouts('COD1');
   check('Seller receives only the sale proceeds', payouts.some(p => p.leg === 'sale' && p.amount === 290), JSON.stringify(payouts));
-  check('Deposit refund excludes shipping and fee', payouts.some(p => p.leg === 'refund:requester' && p.amount === 80));
+  check('Shipping is not refunded as a security deposit', !payouts.some(p => p.leg === 'refund:requester'));
   env.as('swapsutra@gmail.com');
-  check('COD receipt retry is idempotent', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 460, reference: 'REMIT1' }).success && env.payouts('COD1').length === payouts.length);
+  check('COD receipt retry is idempotent', env.api.adminRecordCodReceived({ swapId: 'COD1', amount: 380, reference: 'REMIT1' }).success && env.payouts('COD1').length === payouts.length);
   check('Verified COD completes the exchange', room(env, 'req@x.com', 'COD1').exchangeDone);
 }
 for (const kind of ['SWAP', 'RENT', 'LEND']) {
@@ -506,6 +506,56 @@ for (const kind of ['SWAP', 'RENT', 'LEND']) {
   check(kind + ' accepts online evidence with current quote', env.api.submitSecurityFeePayment({ swapId: kind, utr: 'VALID123', screenshotUrl: 'https://proof', checkoutRevision: r.payment.checkout.revision }).success);
   env.as('swapsutra@gmail.com');
   check(kind + ' freezes rates after online submission', env.api.adminSetOrderShipping({ swapId: kind, onlineShipping: 60 }).success === false);
+}
+
+// Book-request offers: authorization, fresh consent, standard order creation and retries.
+for (const serviceType of ['SELL', 'RENT', 'SWAP']) {
+  const e = makeEnv();
+  const api = e.api, c = e.ctx;
+  const listing = { id: 'BOOK1', title: 'Dune', ownerEmail: 'own@x.com', status: 'Approved', sell: true, rent: true, permanent_exchange: true, stock: 1 };
+  const counter = { ...listing, id: 'BOOK2', ownerEmail: 'req@x.com' };
+  const books = c.getOrCreateSheet('Books', Object.keys(listing));
+  books.appendRow(Object.values(listing)); books.appendRow(Object.keys(listing).map(k => counter[k]));
+  const chats = c.getOrCreateSheet('Chats', ['chatId', 'bookId', 'ownerEmail', 'requesterEmail', 'chatType', 'swapId', 'requestId']);
+  chats.appendRow(['OFFER', 'BOOK1', 'own@x.com', 'req@x.com', 'BookRequest', 'WANTED', 'WANTED']);
+  c.getOrCreateSheet('BookRequests', ['requestId', 'status']).appendRow(['WANTED', 'Open']);
+  c.getOrCreateSheet('SwapRequests', []);
+  let creates = 0;
+  Object.assign(c, {
+    findBookById: id => id === 'BOOK1' ? listing : id === 'BOOK2' ? counter : null,
+    isApprovedActiveMember: () => true,
+    approvedPartner_: () => null,
+    bookTransactionEligibility: () => ({ authenticity: 'AUTHORISED', can_swap: true, can_rent: true, can_sell: true }),
+    swapBooksMatch_: () => ({ ok: true }),
+    computeMutualDeposit: () => ({ salePrice: 300, requesterDeposit: 180, ownerDeposit: serviceType === 'SWAP' ? 180 : 0, requestedBookValue: 300, offeredBookValue: 300 }),
+    monthlyRentForBook: () => 30,
+    updateBookAvailabilityState: () => {}, logReaderActivity: () => {},
+  });
+  // Fail immediately if any nested call tries to acquire the same Apps Script lock.
+  let locked = false;
+  c.LockService.getScriptLock = () => ({ waitLock() { if (locked) throw new Error('Nested lock'); locked = true; }, releaseLock() { locked = false; } });
+  e.as('stranger@x.com');
+  check(serviceType + ' offer is private', !api.getBookRequestOffer({ chatId: 'OFFER' }).success);
+  e.as('req@x.com');
+  check(serviceType + ' requester cannot impersonate offering owner', !api.saveBookRequestOffer({ chatId: 'OFFER', bookId: 'BOOK1', serviceType }).success);
+  e.as('own@x.com');
+  check(serviceType + ' owner cannot offer someone else’s book', !api.saveBookRequestOffer({ chatId: 'OFFER', bookId: 'BOOK2', serviceType }).success);
+  const offered = api.saveBookRequestOffer({ chatId: 'OFFER', bookId: 'BOOK1', serviceType, durationDays: 30 });
+  check(serviceType + ' owner can send offer', offered.success);
+  check(serviceType + ' owner cannot consent as requester', !api.confirmBookRequestOffer({ chatId: 'OFFER', revision: offered.offer.revision }).success);
+  e.as('req@x.com');
+  check(serviceType + ' stale offer cannot be accepted', !api.confirmBookRequestOffer({ chatId: 'OFFER', revision: 'stale' }).success);
+  const yes = api.confirmBookRequestOffer({ chatId: 'OFFER', revision: offered.offer.revision, offeredBookId: 'BOOK2' });
+  check(serviceType + ' requester consent creates accepted standard order', yes.success && c.loadSwapForCirculation(yes.swapId)?.obj.status === 'Accepted', JSON.stringify(yes));
+  check(serviceType + ' original chat opens the transaction', api.getBookRequestOffer({ chatId: 'OFFER' }).swapId === yes.swapId);
+  const again = api.confirmBookRequestOffer({ chatId: 'OFFER', revision: offered.offer.revision, offeredBookId: 'BOOK2' });
+  check(serviceType + ' confirmation retry reuses order', again.success && again.swapId === yes.swapId && e.sheets.SwapRequests._data.length === 2);
+  e.as('own@x.com');
+  check(serviceType + ' confirmed terms cannot be edited', !api.saveBookRequestOffer({ chatId: 'OFFER', bookId: 'BOOK1', serviceType }).success);
+  if (serviceType === 'SELL' && yes.success) {
+    const obj = c.loadSwapForCirculation(yes.swapId).obj;
+    check('New sales have no manual deposit gate', !api.saleDepositState_(obj).manual && obj.securityDeposit === 0);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

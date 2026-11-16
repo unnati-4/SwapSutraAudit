@@ -184,7 +184,7 @@ export default function AdminSecurityFeeQueue({ onOpenSwap }: { onOpenSwap?: (sw
                 <td className="p-3 space-y-1">
                   {r.checkout?.pending && <p>Waiting for admin shipping charges.</p>}
                   {r.checkout?.codConfirmed && !r.checkout.collected && <p>COD ₹{r.checkout.total} · awaiting funds.</p>}
-                  {r.saleDeposit?.pending && <p>Waiting for admin to enter the security deposit. Open the exchange room to set it.</p>}
+                  {r.saleDeposit?.pending && <p>Waiting for admin to set prepaid/COD shipping charges. Open the exchange room to enter them.</p>}
                   {r.payers.map(p => (
                     <div key={p.payerRole} className={`font-bold uppercase ${p.adminStatus === 'ADMIN_APPROVED' ? 'text-green-600' : p.adminStatus === 'ADMIN_PENDING' ? 'text-amber-600' : 'text-[var(--text-secondary)]'}`}>
                       {p.payerRole}: ₹{p.requiredAmount}{p.estimated ? ' (estimate — price not verified)' : ''} — {p.adminStatus.replace('_', ' ')}

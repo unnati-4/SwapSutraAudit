@@ -137,6 +137,7 @@ const PricingAdmin = lazyScreen<any>(
   () => import('./components/PricingAdmin'),
   'Opening pricing'
 );
+const BookRequestOffer = lazyScreen<any>(() => import('./components/BookRequestOffer'), 'Opening the book offer');
 const ExchangeRoom = lazyScreen<any>(
   () => import('./components/ExchangeRoom'),
   'Opening the exchange'
@@ -5551,6 +5552,11 @@ const ChatModal = memo(({
             {/* Full screen (Oct 2026): the steps on the left, the chat on the
                 right. On a phone the steps sit above the chat and can be hidden. */}
             <div className="flex-1 min-h-0 flex flex-col md:flex-row">
+            {isBookRequestChat && !isAdminUser && (
+              <div className="shrink-0 max-h-[45%] md:max-h-none md:h-full md:w-[400px] overflow-y-auto border-b md:border-r border-brand-border p-3">
+                <BookRequestOffer chatId={currentChat.chatId} onChanged={onActionTaken} />
+              </div>
+            )}
             {hasRealSwap && roomOpen && (
               <div className="shrink-0 max-h-[45%] md:max-h-none md:h-full md:w-[400px] lg:w-[460px] overflow-y-auto border-b md:border-b-0 md:border-r border-brand-border bg-[var(--bg-page)] p-3 sm:p-4 space-y-3" data-testid="room-panel">
                 <ExchangeRoom swapId={String(currentChat.swapId)} isAdmin={isAdminUser} onChanged={onActionTaken} />
