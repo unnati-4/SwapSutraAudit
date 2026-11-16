@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import MascotBanner, { type BannerSlide } from '../MascotBanner';
-import { newShelfSeed, shuffled } from '../../utils/ads';
+import { newShelfSeed, shuffled, mugPurchaseUrl } from '../../utils/ads';
 import { apiUrl } from '../../config/runtime';
 import { MUG_CATEGORIES } from '../../data/mugCategories';
 import type { MugCategoryId, MugProduct } from '../../types/mugs';
@@ -95,7 +95,11 @@ export default function MugsPage({ defaultName, defaultEmail }: { defaultName?: 
     return picks.map((p) => ({
       key: `mug-${p.id}`, eyebrow: 'Featured mug', title: p.title,
       subtitle: [p.price ? formatInr(p.price) : '', p.sourceMarketplace ? `Sold on ${p.sourceMarketplace}` : ''].filter(Boolean).join(' · ') || undefined,
-      imageUrl: p.imageUrl || undefined, cta: 'View mug', onOpen: () => setViewing(p),
+      imageUrl: p.imageUrl || undefined,
+      cta: mugPurchaseUrl(p) ? 'Buy this mug' : 'View mug',
+      href: mugPurchaseUrl(p) || undefined,
+      external: !!mugPurchaseUrl(p),
+      onOpen: mugPurchaseUrl(p) ? undefined : () => setViewing(p),
     }));
   }, [loaded.state, items, bannerSeed]);
 

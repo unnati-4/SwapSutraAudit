@@ -1,6 +1,6 @@
 import React from 'react';
 import type { MugProduct } from '../types/mugs';
-import { AD_KIND_LABEL, adCta, adImageSrc, recordAdClick, type SponsoredAd } from '../utils/ads';
+import { AD_KIND_LABEL, adCta, adImageSrc, mugPurchaseUrl, recordAdClick, type SponsoredAd } from '../utils/ads';
 import type { BannerSlide } from './MascotBanner';
 
 /**
@@ -82,16 +82,19 @@ export const ShelfAdCard: React.FC<{ ad: SponsoredAd; onOpenBook?: OpenBook }> =
   );
 };
 
-export const ShelfMugCard: React.FC<{ mug: Pick<MugProduct, 'id' | 'title' | 'imageUrl' | 'price'>; onOpen: () => void }> = ({ mug, onOpen }) => {
+export const ShelfMugCard: React.FC<{ mug: Pick<MugProduct, 'id' | 'title' | 'imageUrl' | 'price'> & Partial<Pick<MugProduct, 'affiliateUrl' | 'sourceUrl'>>; onOpen: () => void }> = ({ mug, onOpen }) => {
+  const buyUrl = mugPurchaseUrl(mug);
   return (
-    <button type="button" className="ss-shelf__book ss-shelf__mug" onClick={onOpen}
-      aria-label={`Mug: ${mug.title}${mug.price ? `, ₹${mug.price}` : ''} — open the mug shop`} data-testid="shelf-mug">
+    <a href={buyUrl || '/mugs'} className="ss-shelf__book ss-shelf__mug"
+      target={buyUrl ? '_blank' : undefined} rel={buyUrl ? 'sponsored noopener noreferrer' : undefined}
+      onClick={(e) => { if (!buyUrl) { e.preventDefault(); onOpen(); } }}
+      aria-label={`Mug: ${mug.title}${mug.price ? `, ₹${mug.price}` : ''} — ${buyUrl ? 'buy this mug' : 'open the mug shop'}`} data-testid="shelf-mug">
       <span className="ss-shelf__mug-stand">
         {mug.imageUrl
           ? <img src={mug.imageUrl} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
           : <span className="ss-shelf__mug-blank" aria-hidden="true">☕</span>}
       </span>
       <span className="ss-shelf__mug-tag">Mug{mug.price ? ` · ₹${mug.price}` : ''}</span>
-    </button>
+    </a>
   );
 };
