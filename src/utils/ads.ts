@@ -144,7 +144,16 @@ export function mixShelf<B extends { id: string | number }, M extends { id: stri
 export const newShelfSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 /** The mugs on sale (the mug shop's live list), for the Library shelf. */
-export interface ShelfMug { id: string; title: string; imageUrl: string; price: number | null }
+export interface ShelfMug { id: string; title: string; imageUrl: string; price: number | null; affiliateUrl?: string; sourceUrl?: string }
+
+/** Use the configured purchase destination, with the merchant URL as fallback. */
+export function mugPurchaseUrl(mug: { affiliateUrl?: string; sourceUrl?: string }): string {
+  for (const value of [mug.affiliateUrl, mug.sourceUrl]) {
+    const url = String(value || '').trim();
+    try { if (['https:', 'http:'].includes(new URL(url).protocol)) return url; } catch { /* Try the merchant link next. */ }
+  }
+  return '';
+}
 let mugsPromise: Promise<ShelfMug[]> | null = null;
 export function loadShelfMugs(): Promise<ShelfMug[]> {
   if (mugsPromise) return mugsPromise;

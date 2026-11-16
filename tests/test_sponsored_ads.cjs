@@ -271,6 +271,10 @@ const A = loadTs('src/utils/ads.ts', { '../config/runtime': { apiUrl: (p) => p }
   C('A short shelf (3 books) still gets one ad', A.mixShelf(books.slice(0, 3), mugs, ads, 5).filter(x => x.type === 'ad').length === 1);
   C('Ads choose banner / shelf', A.adShowsOn({ placement: 'both' }, 'banner') && A.adShowsOn({ placement: 'shelf' }, 'shelf') && !A.adShowsOn({ placement: 'shelf' }, 'banner'));
   C('A Google Drive share link becomes a picture link', A.adImageSrc('https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/view?usp=sharing') === 'https://drive.google.com/thumbnail?id=1AbCdEfGhIjKlMnOpQrStUvWxYz&sz=w1600');
+  C('Mug purchase prefers the affiliate link', A.mugPurchaseUrl({ affiliateUrl: 'https://amzn.to/mug', sourceUrl: 'https://store.example/mug' }) === 'https://amzn.to/mug');
+  C('Mug purchase uses merchant link without an affiliate', A.mugPurchaseUrl({ sourceUrl: 'https://store.example/mug' }) === 'https://store.example/mug');
+  C('Invalid affiliate falls back to merchant', A.mugPurchaseUrl({ affiliateUrl: 'javascript:alert(1)', sourceUrl: 'https://store.example/mug' }) === 'https://store.example/mug');
+  C('Missing purchase links preserve the shop fallback', A.mugPurchaseUrl({}) === '');
   const cta = (k) => A.adCta({ kind: k, ctaLabel: '' });
   C('Publisher and promoter ads have their own labels and buttons', A.AD_KIND_LABEL.publisher === 'Publisher' && A.AD_KIND_LABEL.promoter === 'Promoter' && cta('publisher') === 'See their books' && cta('promoter') === 'Find out more');
   C('Default button words per kind', cta('bookstore') === 'Visit the store' && cta('author') === 'Meet the author' && cta('book') === 'See the book');
