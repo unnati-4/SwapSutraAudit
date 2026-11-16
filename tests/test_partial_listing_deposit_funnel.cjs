@@ -188,7 +188,7 @@ const q3 = plain(call('computeMutualDeposit', { id: 'y', userEnteredMRP: 500, pr
 check('42. Each side is judged on its own book', q3.requesterDepositEstimated === false && q3.ownerDepositEstimated === true);
 check('43. getDepositQuote returns both flags', /requesterDepositEstimated: q\.requesterDepositEstimated,\s*ownerDepositEstimated: q\.ownerDepositEstimated/.test(gs));
 check('44. The basis is recorded on the swap when it is created',
-  /"requesterDepositBasis", "ownerDepositBasis"/.test(gs) && /h === 'requesterDepositBasis'\) row\[i\] = deposits\.requesterDepositEstimated \? 'ESTIMATE' : 'KNOWN'/.test(gs));
+  /"requesterDepositBasis", "ownerDepositBasis"/.test(gs) && /h === 'requesterDepositBasis'\) row\[i\] = \(serviceType !== 'SELL' && deposits\.requesterDepositEstimated\) \? 'ESTIMATE' : 'KNOWN'/.test(gs));
 check('45. Recorded basis wins; legacy rows fall back to the book',
   call('swapDepositEstimated_', { requesterDepositBasis: 'ESTIMATE' }, 'requester') === true
   && call('swapDepositEstimated_', { requesterDepositBasis: 'KNOWN' }, 'requester') === false);

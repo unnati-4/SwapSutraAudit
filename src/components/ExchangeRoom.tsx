@@ -119,7 +119,6 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   const [progress, setProgress] = useState<{ key: string; p: number } | null>(null);
   const [pinFor, setPinFor] = useState<'out' | 'back' | null>(null);
   const [utr, setUtr] = useState('');
-  const [depositInput, setDepositInput] = useState('');
   const [onlineShipping, setOnlineShipping] = useState('');
   const [codShipping, setCodShipping] = useState('');
   const [codReference, setCodReference] = useState('');
@@ -145,7 +144,7 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
   }, [swapId]);
 
   useEffect(() => {
-    setDepositInput(''); setOnlineShipping(''); setCodShipping(''); setCodReference(''); setCodReceivedAmount('');
+    setOnlineShipping(''); setCodShipping(''); setCodReference(''); setCodReceivedAmount('');
     setMsg('');
     refresh();
     const t = setInterval(refresh, 20000);
@@ -190,20 +189,6 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
       const res = await post({ action: 'submitSecurityFeePayment', swapId, utr: utr.trim(), fileData, fileName: payFile.name, depositQuotedAt: room?.payment.saleDeposit?.quotedAt, checkoutRevision: room?.payment.checkout?.revision });
       if (res?.success) { setUtr(''); setPayFile(null); }
       await after(res, 'Payment sent — SwapSutra will verify it shortly.');
-    } catch { setMsg('Network error. Please try again.'); }
-    finally { setBusy(''); }
-  };
-
-  const saveDeposit = async () => {
-    if (!/^\d+$/.test(depositInput) || !Number.isSafeInteger(Number(depositInput)) || Number(depositInput) < 1) {
-      setMsg('Enter a positive deposit in whole rupees.');
-      return;
-    }
-    setBusy('deposit'); setMsg('');
-    try {
-      const result = await post({ action: 'adminSetSaleSecurityDeposit', swapId, amount: Number(depositInput) });
-      if (result.success) setDepositInput('');
-      await after(result, 'Security deposit saved.');
     } catch { setMsg('Network error. Please try again.'); }
     finally { setBusy(''); }
   };
@@ -637,24 +622,6 @@ export default function ExchangeRoom({ swapId, isAdmin = false, onChanged }: { s
           </label>
           <button type="button" className={btnSolid} disabled={!!busy || !codReference.trim() || !codReceivedAmount}
             onClick={() => checkoutAction('adminRecordCodReceived', { amount: Number(codReceivedAmount), reference: codReference })}>Confirm funds received</button>
-        </div>
-      )}
-
-      {isAdmin && room.type === 'SELL' && !room.closed && !room.exchangeDone &&
-        !room.payment.checkout?.codConfirmed && !room.payment.payers.some(p => p.utr || p.adminStatus === 'ADMIN_APPROVED' || p.adminStatus === 'ADMIN_PENDING') && (
-        <div className="rounded-2xl border border-brand-border p-4 space-y-3">
-          <label className="block text-xs font-bold">
-            Security deposit (₹)
-            <input type="number" min="1" step="1" value={depositInput}
-              placeholder={room.payment.saleDeposit?.amount?.toString() || 'Enter amount'}
-              onChange={e => setDepositInput(e.target.value)}
-              className="input-classic mt-2 w-full" />
-          </label>
-          <p className="text-xs text-[var(--text-secondary)]">
-            {room.payment.saleDeposit?.pending ? 'The buyer is waiting for the deposit amount.' :
-              room.payment.saleDeposit?.amount ? `Current deposit ₹${room.payment.saleDeposit.amount}.` : 'Enter the deposit for this purchase.'}
-          </p>
-          <button type="button" className={btnSolid} disabled={!!busy || !depositInput} onClick={saveDeposit}>Save deposit</button>
         </div>
       )}
 

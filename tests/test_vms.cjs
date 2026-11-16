@@ -55,7 +55,7 @@ function makeEnv() {
     UrlFetchApp: { fetch() { throw new Error('no network'); } },
     Utilities: { getUuid: () => crypto.randomUUID() },
     CacheService: { getScriptCache: () => ({ get: () => null, put() {}, remove() {}, putAll() {}, getAll: () => ({}) }) },
-    SpreadsheetApp: { getActiveSpreadsheet: () => null },
+    SpreadsheetApp: { getActiveSpreadsheet: () => null, flush() {} },
     MailApp: { sendEmail() {} },
     ContentService: { MimeType: { JSON: 'JSON' }, createTextOutput: (t) => ({ setMimeType: () => ({ __text: t }) }) },
     DriveApp: {},
@@ -89,6 +89,7 @@ function makeEnv() {
     swapChatUnlocked: () => true,
     getOrCreateFolder: (name) => ({ getId: () => 'folder_' + name }),
     findChatBySwapId: () => ({ chatId: 'CHAT1' }),
+    enqueueChatEmail_: (event, sender, recipients) => { emails.push({ event, sender, recipients }); },
     sendChatMessage: (m) => { chats.push(m); return { success: true }; },
     swapHasOpenDispute: (id) => !!openDisputes[id],
     appendJourneyEvent: (e) => { journeyLog.push(e); return { success: true }; }
@@ -227,8 +228,22 @@ console.log('--- chunked upload ---');
   env.as('req@x.com');
   check('31. Someone else cannot finish your upload', env.api.vmsFinishUpload({ uploadId: st.uploadId }).error === 'UNAUTHORIZED');
   env.as('own@x.com');
+  const enqueue = env.ctx.enqueueChatEmail_;
+  env.ctx.enqueueChatEmail_ = () => { throw new Error('Temporary queue failure'); };
   const fin = env.api.vmsFinishUpload({ uploadId: st.uploadId, durationSec: 42, recordedInApp: true });
+  check('Queue failure preserves successful video upload', fin.success && env.api.vmsVideosForSwap_('S1')[0].notificationPending === 'YES');
+  env.ctx.enqueueChatEmail_ = enqueue;
+  env.api.recoverConditionVideoEmails_();
+  check('Worker recovers pending condition email', env.api.vmsVideosForSwap_('S1')[0].notificationPending === '');
+  const queuedCount = env.emails.length;
+  env.api.recoverConditionVideoEmails_();
+  check('Recovery does not queue an acknowledged video twice', env.emails.length === queuedCount);
+
   check('32. Finishing registers the video', fin.success && fin.video.kind === 'QUALITY');
+  check('Condition video queues an email for requester only', env.emails.some(m => m.event && m.event.id.startsWith('condition:') && JSON.stringify(m.recipients) === JSON.stringify(['req@x.com'])));
+  const countBeforeRetry = env.api.vmsVideosForSwap_('S1').length;
+  const retry = env.api.vmsFinishUpload({ uploadId: st.uploadId });
+  check('Finishing the same upload is idempotent', retry.success && env.api.vmsVideosForSwap_('S1').length === countBeforeRetry);
   check('33. ...and posts a note in the exchange chat', env.chats.some(c => /book condition video/.test(c.message) && /Step 3/.test(c.message)));
   const view = env.api.getExchangeVideos({ swapId: 'S1' });
   check('34. The checklist shows it done, by you', view.legs[0].items.find(i => i.kind === 'QUALITY').done && view.legs[0].items.find(i => i.kind === 'QUALITY').byYou);

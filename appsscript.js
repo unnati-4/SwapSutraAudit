@@ -11,9 +11,9 @@
  * Chat email: run installChatEmailTrigger() once as the deployment owner.
  * CHAT_CONVERSATION_PATH can override /profile?chatId={chatId} with the
  * actual frontend route. It accepts {chatId} and optionally {swapId}.
- * The admin UI can POST adminSetSaleSecurityDeposit with swapId and amount.
- * Read payment.saleDeposit from getExchangeRoom; send its quotedAt as
- * depositQuotedAt on payment submission to detect an outdated quote.
+ * Admin shipping: adminSetOrderShipping with swapId, onlineShipping and
+ * codShipping (selling only). New sales have no manual security deposit.
+ * Condition-video email retries use the same chat-email trigger.
  */
 
 let SPREADSHEET_ID = "1VgXsJgoJTaqOmwAe_hxCxO9L69I5sKbIpPq_Tjmfgu8";
@@ -7047,6 +7047,9 @@ function doPostHandler_(e) {
     if (action === 'updateUserBook' || action === 'editBook') result = updateUserBook(data);
     if (action === 'removeUserBook') result = removeUserBook(data);
     if (action === 'createBookRequest') result = createBookRequest(data);
+    if (action === 'getBookRequestOffer') result = getBookRequestOffer(data);
+    if (action === 'saveBookRequestOffer') result = saveBookRequestOffer(data);
+    if (action === 'confirmBookRequestOffer') result = confirmBookRequestOffer(data);
     if (action === 'respondToBookRequest') result = respondToBookRequest(data);
     if (action === 'updateBookRequestStatus') result = updateBookRequestStatus(data);
     if (action === 'createNotification') result = handleCreateNotificationApi(data);
@@ -8816,6 +8819,107 @@ function clearAllNotifications(data) {
   }
 }
 
+// Book-request offers use the same listings, pricing and exchange validation as the Library.
+function bookRequestOfferContext_(chatId) {
+  const sheet = getOrCreateSheet('Chats', []);
+  const t = readSheetObjects_(sheet);
+  const row = t.rows.find(r => String(r.obj.chatId) === String(chatId));
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!row || !caller || ![row.obj.ownerEmail, row.obj.requesterEmail].map(normalizeEmail).includes(caller)) return null;
+  let offer = null;
+  try { offer = JSON.parse(row.obj.requestOffer || 'null'); } catch (e) { /* invalid offers cannot be accepted */ }
+  return { sheet, row, caller, offer };
+}
+function getBookRequestOffer(data) {
+  const c = bookRequestOfferContext_(data.chatId);
+  if (!c) return { success: false, message: 'This conversation is not yours.' };
+  const books = readSheetObjects_(getOrCreateSheet('Books', [])).rows.map(r => r.obj)
+    .filter(b => normalizeEmail(b.ownerEmail) === c.caller && ['approved', 'live', 'active'].includes(String(b.status || '').toLowerCase()))
+    .map(b => ({ id: String(b.id), title: b.title }));
+  return { success: true, books: books, offer: c.offer, isOwner: c.caller === normalizeEmail(c.row.obj.ownerEmail),
+    swapId: c.row.obj.chatType !== 'BookRequest' ? c.row.obj.swapId : '' };
+}
+function saveBookRequestOffer(data) {
+  const result = saveBookRequestOffer_(data);
+  if (result.success) {
+    try { sendChatMessage({ chatId: data.chatId, senderEmail: getAuthenticatedEmail(),
+      message: 'I can offer ' + result.offer.title + ' for ' + result.offer.serviceType.toLowerCase() + '. Please review the offer above and confirm if you agree.' }); }
+    catch (e) { Logger.log('Offer chat notice: ' + e); }
+  }
+  return result;
+}
+function saveBookRequestOffer_(data) {
+  return withSaleDepositLock_(() => {
+    const c = bookRequestOfferContext_(data.chatId);
+    if (!c || c.caller !== normalizeEmail(c.row.obj.ownerEmail) || c.row.obj.chatType !== 'BookRequest' || (c.offer && c.offer.orderId)) {
+      return { success: false, message: 'Only the owner can offer a book before confirmation.' };
+    }
+    const book = findBookById(data.bookId);
+    const type = String(data.serviceType || '').toUpperCase();
+    const preference = data.swapPreference === 'Temporary' ? 'Temporary' : 'Permanent';
+    if (!book || normalizeEmail(book.ownerEmail) !== c.caller || !['approved', 'live', 'active'].includes(String(book.status || '').toLowerCase())) {
+      return { success: false, message: 'Select an approved book from your own shelf. List it first if needed.' };
+    }
+    const flags = bookAvailabilityFlags(book);
+    if (!['SWAP', 'RENT', 'SELL'].includes(type) || !(type === 'SELL' ? flags.sell : type === 'RENT' ? flags.rent : preference === 'Temporary' ? flags.temporary_exchange : flags.permanent_exchange)) {
+      return { success: false, message: 'Enable this availability on your book listing first.' };
+    }
+    const duration = type === 'RENT' ? Number(data.durationDays || 30) : 21;
+    if (!Number.isInteger(duration) || duration < 1 || duration > 365) return { success: false, message: 'Choose a rental duration between 1 and 365 days.' };
+    const price = type === 'SELL' ? Number(computeMutualDeposit(book, null, 'SELL').salePrice) : type === 'RENT' ? monthlyRentForBook(book) : null;
+    if (type !== 'SWAP' && !(price > 0)) return { success: false, message: 'Complete the price/MRP on this listing first.' };
+    const offer = { revision: Utilities.getUuid(), bookId: String(book.id), title: book.title, serviceType: type,
+      swapPreference: preference, durationDays: duration, price: price, at: new Date().toISOString() };
+    const h = ensureSheetHeaders(c.sheet, ['requestOffer']);
+    c.sheet.getRange(c.row.rowIndex + 1, h.indexOf('requestOffer') + 1).setValue(JSON.stringify(offer));
+    return { success: true, offer };
+  });
+}
+function confirmBookRequestOffer(data) {
+  const result = withSaleDepositLock_(() => {
+    const c = bookRequestOfferContext_(data.chatId);
+    if (!c || c.caller !== normalizeEmail(c.row.obj.requesterEmail) || !c.offer) return { success: false, message: 'Only the requester can confirm this offer.' };
+    const o = c.offer;
+    if (o.acceptedAt) return { success: true, swapId: o.orderId };
+    if (data.revision !== o.revision) return { success: false, message: 'The offer changed. Review the latest offer before agreeing.' };
+    const request = readSheetObjects_(getOrCreateSheet('BookRequests', [])).rows.find(r => String(r.obj.requestId) === String(c.row.obj.requestId));
+    if (!request || ['closed', 'fulfilled', 'cancelled'].includes(String(request.obj.status).toLowerCase())) return { success: false, message: 'This book request is no longer open.' };
+    const book = findBookById(o.bookId);
+    if (!book || normalizeEmail(book.ownerEmail) !== normalizeEmail(c.row.obj.ownerEmail) || !['approved', 'live', 'active'].includes(String(book.status || '').toLowerCase())) return { success: false, message: 'This listing is no longer available from the owner.' };
+    const price = o.serviceType === 'SELL' ? Number(computeMutualDeposit(book, null, 'SELL').salePrice) : o.serviceType === 'RENT' ? monthlyRentForBook(book) : null;
+    if (price !== o.price) return { success: false, message: 'The listing price changed. Ask the owner to send a new offer.' };
+    const h = ensureSheetHeaders(c.sheet, ['requestOffer']);
+    const save = () => c.sheet.getRange(c.row.rowIndex + 1, h.indexOf('requestOffer') + 1).setValue(JSON.stringify(o));
+    // Persist the order identity before creation, allowing a retry to repair partial writes.
+    if (!o.orderId) { o.orderId = generateId('SS_REQ_'); save(); }
+    let swap = loadSwapForCirculation(o.orderId);
+    if (!swap) {
+      const created = createSwapRequest({ requesterEmail: c.caller, requestedBookId: o.bookId, serviceType: o.serviceType,
+        swapPreference: o.swapPreference, durationDays: o.durationDays, offeredBookId: data.offeredBookId,
+        readerLat: data.readerLat, readerLng: data.readerLng }, { id: o.orderId, quiet: true });
+      if (!created.success) { delete o.orderId; save(); return created; }
+      swap = loadSwapForCirculation(o.orderId);
+    }
+    const values = swap.sheet.getDataRange().getValues();
+    const busy = copiesInExchange_(values, values[0], o.bookId, o.orderId);
+    const stock = approvedPartner_(swap.ownerEmail) ? partnerBookStock_(o.bookId) : 1;
+    if (busy >= stock) return { success: false, message: 'This copy is already in another exchange. Try again after it is available.' };
+    if (!['pending', 'accepted'].includes(String(swap.obj.status).toLowerCase())) return { success: false, message: 'This order is no longer available for confirmation.' };
+    swap.sheet.getRange(swap.rowIndex + 1, swap.headers.indexOf('status') + 1).setValue('Accepted');
+    swap.sheet.getRange(swap.rowIndex + 1, swap.headers.indexOf('updatedAt') + 1).setValue(new Date());
+    c.sheet.getRange(c.row.rowIndex + 1, h.indexOf('swapId') + 1).setValue(o.orderId);
+    c.sheet.getRange(c.row.rowIndex + 1, h.indexOf('bookId') + 1).setValue(o.bookId);
+    c.sheet.getRange(c.row.rowIndex + 1, h.indexOf('chatType') + 1).setValue('Exchange');
+    o.acceptedAt = new Date().toISOString(); save();
+    return { success: true, swapId: o.orderId, newlyAccepted: true };
+  });
+  if (result.newlyAccepted) {
+    try { roomPost_(result.swapId, 'The requester agreed to the owner’s offer. Follow the exchange steps above, starting with the condition video.'); }
+    catch (e) { Logger.log('Offer confirmation notice: ' + e); }
+  }
+  return result;
+}
+
 function respondToBookRequest(data) {
   try {
     const responderEmail = normalizeEmail(data.responderEmail || data.userEmail || data.email);
@@ -8842,7 +8946,7 @@ function respondToBookRequest(data) {
       return { success: false, message: "You cannot respond to your own book request.", error: "OWN_REQUEST" };
     }
     const currentStatus = String(request.status || 'Open').trim().toLowerCase();
-    if (currentStatus === 'closed' || currentStatus === 'fulfilled') {
+    if (currentStatus === 'closed' || currentStatus === 'fulfilled' || currentStatus === 'cancelled') {
       return { success: false, message: "This request is no longer open for responses.", error: "REQUEST_CLOSED" };
     }
 
@@ -9060,7 +9164,8 @@ function resolveSwapRequestParties(headers, row) {
   };
 }
 
-function createSwapRequest(data) {
+function createSwapRequest(data, internalOptions) {
+  internalOptions = internalOptions || {};
   const swapHeaders = [
     "id", "serviceType", "requesterName", "requesterEmail", "requesterPhone",
     "ownerEmail", "requestedBookId", "requestedBookTitle", "offeredBook", 
@@ -9079,7 +9184,7 @@ function createSwapRequest(data) {
   ];
   const sheet = getOrCreateSheet('SwapRequests', swapHeaders);
   ensureSheetHeaders(sheet, swapHeaders);
-  const id = generateId('SS_REQ_');
+  const id = internalOptions.id || generateId('SS_REQ_');
   const normalizedEmail = normalizeEmail(data.requesterEmail || data.senderEmail);
   const serviceType = String(data.serviceType || 'SWAP').trim().toUpperCase();
   const swapPreference = String(data.swapPreference || data.exchangeType || (serviceType === 'LEND' ? 'Temporary' : 'Permanent')).trim();
@@ -9318,13 +9423,13 @@ function createSwapRequest(data) {
       ? Number(deposits.salePrice)
       : (serviceType === 'RENT' ? Number(rentCharge || 0) : 0);
     else if (h === 'monthlyRent') row[i] = serviceType === 'RENT' ? Number(monthlyRent || 0) : '';
-    else if (h === 'orderCheckout') row[i] = JSON.stringify({ mode: 'ONLINE' });
-    else if (h === 'securityDeposit') row[i] = serviceType === 'SELL' ? '' : deposits.requesterDeposit;
+    else if (h === 'orderCheckout') row[i] = JSON.stringify({ mode: 'ONLINE', shippingOnly: true });
+    else if (h === 'securityDeposit') row[i] = serviceType === 'SELL' ? 0 : deposits.requesterDeposit;
     else if (h === 'offeredBookId') row[i] = offeredBook ? String(offeredBook.id || '') : '';
     else if (h === 'requestedBookValue') row[i] = deposits.requestedBookValue;
     else if (h === 'offeredBookValue') row[i] = deposits.offeredBookValue;
     else if (h === 'ownerDeposit') row[i] = deposits.ownerDeposit;
-    else if (h === 'requesterDepositBasis') row[i] = serviceType === 'SELL' ? 'MANUAL' : (deposits.requesterDepositEstimated ? 'ESTIMATE' : 'KNOWN');
+    else if (h === 'requesterDepositBasis') row[i] = (serviceType !== 'SELL' && deposits.requesterDepositEstimated) ? 'ESTIMATE' : 'KNOWN';
     else if (h === 'ownerDepositBasis') row[i] = deposits.ownerDeposit > 0 ? (deposits.ownerDepositEstimated ? 'ESTIMATE' : 'KNOWN') : '';
     else if (h === 'ownerDepositUtr') row[i] = '';
     else if (h === 'ownerDepositStatus') row[i] = deposits.ownerDeposit > 0 ? 'Pending' : 'N/A';
@@ -9358,7 +9463,7 @@ function createSwapRequest(data) {
 
   // Launch check (11 Oct 2026): the owner is told by SwapSutra itself — in
   // the app and by email — with the reader's public name, never their email.
-  try {
+  if (!internalOptions.quiet) try {
     const ownerEmail = normalizeEmail(requestedBook.ownerEmail);
     const who = publicReaderName('', normalizedEmail) || 'A reader';
     const verb = { SWAP: 'wants to swap', RENT: 'wants to rent', SELL: 'wants to buy', LEND: 'wants to borrow' }[serviceType] || 'asked for';
@@ -13175,7 +13280,7 @@ if (typeof module !== 'undefined' && module.exports) {
   };
 }
 
-function sendChatMessage(data) {
+function sendChatMessage(data, internalOptions) {
   const chatId = data.chatId;
   const senderEmail = normalizeEmail(data.senderEmail);
   const senderRole = data.senderRole || 'User';
@@ -13285,7 +13390,7 @@ function sendChatMessage(data) {
   msgSheet.appendRow(row);
   chatThreadCacheClear_(chatId);
 
-  const emailQueued = queueChatEmailSafely_(() => queueTransactionChatEmail_(chat, msgId, senderEmail, message, data.mediaType, now));
+  const emailQueued = (internalOptions && internalOptions.skipEmail) || queueChatEmailSafely_(() => queueTransactionChatEmail_(chat, msgId, senderEmail, message, data.mediaType, now));
   return emailQueued ? { success: true, messageId: msgId } : { success: true, messageId: msgId, emailQueued: false };
 }
 
@@ -23840,6 +23945,8 @@ function isEscrowSaleOrder_(obj) {
 }
 
 function saleDepositState_(obj) {
+  const checkout = orderCheckout_(obj);
+  if (checkout && checkout.shippingOnly) return { manual: false, pending: false, amount: null, quotedAt: '' };
   const manual = isEscrowSaleOrder_(obj) && (obj.requesterDepositBasis === 'MANUAL' || Boolean(obj.saleDepositQuote));
   if (!manual) return { manual: false, pending: false, amount: null };
   let quote;
@@ -23860,40 +23967,7 @@ function withSaleDepositLock_(run) {
 
 /** Admin POST action: { action: 'adminSetSaleSecurityDeposit', swapId, amount }. */
 function adminSetSaleSecurityDeposit(data) {
-  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
-  const raw = String((data && data.amount) || '').trim();
-  const amount = Number(raw);
-  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(amount) || amount < 1) {
-    return { success: false, error: 'INVALID_DEPOSIT', message: 'Enter a positive security deposit in whole rupees.' };
-  }
-  try {
-    return withSaleDepositLock_(() => {
-      const swap = loadSwapForCirculation(String((data && data.swapId) || '').trim());
-      if (!swap || !isEscrowSaleOrder_(swap.obj)) {
-        return { success: false, message: 'This action requires a SwapSutra purchase order.' };
-      }
-      const status = String(swap.obj.status || '').trim().toLowerCase();
-      if (status !== 'pending' && !['accepted', 'approved', 'active'].includes(status)) {
-        return { success: false, message: 'This purchase is past the deposit entry stage.' };
-      }
-      const payment = loadSecurityFeeRows(swap.obj.id).rows.map(r => r.obj)
-        .find(r => r.payerRole === 'requester');
-      if ((payment && (payment.utr || payment.submittedAt || ['ADMIN_APPROVED', 'ADMIN_PENDING', 'ADMIN_REJECTED'].includes(payment.adminStatus))) ||
-          swap.obj.paymentUtr) {
-        return { success: false, error: 'PAYMENT_ALREADY_SUBMITTED', message: 'The buyer has already submitted payment evidence.' };
-      }
-      if (!checkoutEditable_(swap)) return { success: false, message: 'This amount is locked after COD confirmation or payment submission.' };
-      const previous = saleDepositState_(swap.obj);
-      if (previous.amount === amount) return { success: true, saleDeposit: previous };
-      const headers = ensureSheetHeaders(swap.sheet, ['saleDepositQuote']);
-      swap.obj.saleDepositQuote = JSON.stringify({ amount: amount, quotedAt: new Date().toISOString() });
-      swap.sheet.getRange(swap.rowIndex + 1, headers.indexOf('saleDepositQuote') + 1).setValue(swap.obj.saleDepositQuote);
-      return { success: true, saleDeposit: saleDepositState_(swap.obj) };
-    });
-  } catch (e) {
-    Logger.log('adminSetSaleSecurityDeposit failed: ' + e);
-    return { success: false, message: 'The security deposit could not be saved. Try again.' };
-  }
+  return { success: false, message: 'Use the prepaid and COD shipping charges fields. Sales do not require a new manual security deposit.' };
 }
 
 // Admin shipping quotes and requester payment mode. Existing orders opt in when quoted.
@@ -23938,8 +24012,8 @@ function adminSetOrderShipping(data) {
     const cod = sale ? parse(data.codShipping) : null;
     if (online === null || (sale && cod === null)) return { success: false, message: 'Enter shipping charges in whole rupees. Enter 0 for free shipping.' };
     const previous = orderCheckout_(swap.obj) || { mode: 'ONLINE' };
-    if (!previous.pending && previous.onlineShipping === online && previous.codShipping === cod) return { success: true };
-    saveOrderCheckout_(swap, { mode: previous.mode, onlineShipping: online, codShipping: cod,
+    if (previous.shippingOnly && !previous.pending && previous.onlineShipping === online && previous.codShipping === cod) return { success: true };
+    saveOrderCheckout_(swap, { mode: previous.mode, shippingOnly: true, onlineShipping: online, codShipping: cod,
       revision: Utilities.getUuid(), quotedAt: new Date().toISOString() });
     return { success: true, message: 'Shipping charges saved.' };
   });
@@ -23973,7 +24047,7 @@ function confirmOrderCod(data) {
     if (!checkoutEditable_(swap) || !roomSwapAccepted_(swap.obj.status) || saleDepositState_(swap.obj).pending) {
       return { success: false, message: 'Wait for acceptance and the deposit quote before confirming COD.' };
     }
-    if (data.revision !== checkout.revision || data.depositQuotedAt !== saleDepositState_(swap.obj).quotedAt) {
+    if (data.revision !== checkout.revision || (saleDepositState_(swap.obj).manual && data.depositQuotedAt !== saleDepositState_(swap.obj).quotedAt)) {
       return { success: false, message: 'The amount changed. Refresh and review it before confirming.' };
     }
     const videos = vmsVideosForSwap_(swap.obj.id);
@@ -25333,7 +25407,44 @@ function vmsUploadChunk(data) {
 }
 
 /** Action: vmsFinishUpload { uploadId, durationSec, recordedInApp } — registers the stored video. */
+function queueConditionVideoEmail_(v) {
+  const swap = loadSwapForCirculation(v.swapId);
+  if (!swap) throw new Error('Exchange not found');
+  const recipient = journeyLegParties_(swap, v.leg).receiver;
+  const chat = findChatBySwapId(v.swapId);
+  enqueueChatEmail_({ id: 'condition:' + v.fileId, conversation: 'video:' + v.swapId,
+    name: 'Book condition · ' + swap.obj.requestedBookTitle,
+    sender: roomName_(v.uploaderEmail), preview: 'The book condition video is ready. Open the exchange room to review it before payment.',
+    at: new Date(v.createdAt).getTime(),
+    link: swapSutraSiteUrl() + '/profile?chatId=' + encodeURIComponent(chat ? chat.chatId || chat.id : '')
+  }, v.uploaderEmail, [recipient]);
+  const sheet = getVmsVideoSheet_();
+  const t = readSheetObjects_(sheet);
+  const row = t.rows.find(r => String(r.obj.id) === String(v.id));
+  if (row && t.headers.includes('notificationPending')) sheet.getRange(row.rowIndex + 1, t.headers.indexOf('notificationPending') + 1).setValue('');
+}
+function recoverConditionVideoEmails_() {
+  const pending = readSheetObjects_(getVmsVideoSheet_()).rows.filter(r => r.obj.notificationPending === 'YES').slice(0, 25);
+  pending.forEach(r => { try { queueConditionVideoEmail_(r.obj); } catch (e) { Logger.log('Condition email will retry: ' + e); } });
+}
 function vmsFinishUpload(data) {
+  const result = withSaleDepositLock_(() => registerVmsVideo_(data));
+  if (!result.success) return result;
+  const v = result.video;
+  if (v.notificationPending === 'YES') {
+    try { queueConditionVideoEmail_(v); } catch (e) { Logger.log('Condition email will retry: ' + e); }
+  }
+  if (result.newlyRegistered) {
+    try {
+      const chat = findChatBySwapId(v.swapId);
+      if (chat) sendChatMessage({ chatId: chat.chatId || chat.id, senderEmail: 'swapsutra@gmail.com', senderRole: 'Admin',
+        message: '🎥 Step ' + roomStepForVideo_(v.leg, v.kind) + ' · ' + roomName_(v.uploaderEmail) + ' recorded the ' + VMS_KIND_LABELS[v.kind] + '. It is saved with this exchange in case it is ever needed.' }, { skipEmail: v.kind === 'QUALITY' });
+    } catch (e) { Logger.log('Video chat notice failed: ' + e); }
+  }
+  return { success: true, video: { id: v.id, url: v.url, kind: v.kind, leg: v.leg } };
+}
+
+function registerVmsVideo_(data) {
   const caller = normalizeEmail(getAuthenticatedEmail());
   const usheet = getVmsUploadSheet_();
   const t = readSheetObjects_(usheet);
@@ -25341,6 +25452,8 @@ function vmsFinishUpload(data) {
   if (!row) return { success: false, message: 'That upload could not be found.' };
   const up = row.obj;
   if (normalizeEmail(up.uploaderEmail) !== caller) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  const existing = vmsVideosForSwap_(up.swapId).find(v => String(v.fileId) === String(up.fileId) && up.fileId);
+  if (existing) return { success: true, video: existing };
   if (up.status !== 'STORED' || !up.fileId) return { success: false, message: 'The video has not finished uploading yet.' };
 
   const swap = loadSwapForCirculation(up.swapId);
@@ -25355,28 +25468,20 @@ function vmsFinishUpload(data) {
   }
   const parties = journeyLegParties_(swap, up.leg);
   const vsheet = getVmsVideoSheet_();
-  const headers = ensureSheetHeaders(vsheet, VMS_VIDEO_HEADERS);
+  const headers = ensureSheetHeaders(vsheet, VMS_VIDEO_HEADERS.concat(['notificationPending']));
   const rec = {
     id: generateId('SS_VID_'), swapId: up.swapId, leg: up.leg, kind: up.kind, uploaderEmail: caller,
     role: parties.sender === caller ? 'sender' : 'receiver', method: route ? route.method : '',
     fileId: up.fileId, url: url, mimeType: up.mimeType, sizeBytes: up.sizeBytes,
     durationSec: Math.max(0, Math.round(Number(data && data.durationSec) || 0)),
     recordedInApp: data && (data.recordedInApp === true || data.recordedInApp === 'true') ? 'true' : 'false',
-    stampCode: vmsStampCode_(up.swapId), createdAt: new Date()
+    stampCode: vmsStampCode_(up.swapId), createdAt: new Date(), notificationPending: up.kind === 'QUALITY' ? 'YES' : ''
   };
   vsheet.appendRow(headers.map(k => rec[k] !== undefined ? rec[k] : ''));
   const set = (name, v) => { const i = t.headers.indexOf(name); if (i !== -1) usheet.getRange(row.rowIndex + 1, i + 1).setValue(v); };
   set('status', 'DONE'); set('sessionUrl', ''); set('updatedAt', new Date());
 
-  try {
-    const chat = findChatBySwapId(up.swapId);
-    const chatId = chat && (chat.chatId || chat.id);
-    if (chatId) {
-      sendChatMessage({ chatId: chatId, senderEmail: 'swapsutra@gmail.com', senderRole: 'Admin',
-        message: '🎥 Step ' + roomStepForVideo_(up.leg, up.kind) + ' · ' + roomName_(caller) + ' recorded the ' + VMS_KIND_LABELS[up.kind] + '. It is saved with this exchange in case it is ever needed.' });
-    }
-  } catch (e) { Logger.log('vmsFinishUpload chat notice failed: ' + e); }
-  return { success: true, video: { id: rec.id, url: url, kind: rec.kind, leg: rec.leg } };
+  return { success: true, video: rec, newlyRegistered: true };
 }
 
 
@@ -26243,7 +26348,7 @@ function computeExchangeRoom_(input) {
   const current = closedEarly ? 16 : (firstOpen || 16);
   const sale = type === 'SELL';
   const titles = Object.assign({}, ROOM_STEP_TITLES);
-  if (sale) { titles[4] = deposit ? 'Payment (book price, fee and security deposit)' : 'Payment (book price + fee) — or close'; titles[9] = 'Delivered & received — buyer closes the purchase'; }
+  if (sale) { titles[4] = checkout && checkout.shippingOnly ? 'Payment (book price, fee and shipping)' : deposit ? 'Payment (book price, fee and security deposit)' : 'Payment (book price + fee) — or close'; titles[9] = 'Delivered & received — buyer closes the purchase'; }
   const legNames = l => out.length > 1 ? (l.sender === viewer ? 'your book' : 'their book') : 'the book';
   const detail = {};
   detail[3] = (out.length > 1 ? 'Each of you records your own book\'s condition' : (viewer === 'owner' ? 'You record the book\'s condition' : 'The owner records the book\'s condition')) +
@@ -28959,6 +29064,7 @@ function runChatEmailOutbox() {
     lock.releaseLock();
   }
   try {
+    try { recoverConditionVideoEmails_(); } catch (e) { Logger.log('Condition-email recovery will retry: ' + e); }
     return deliverChatEmailOutbox_();
   } finally {
     props.deleteProperty(CHAT_EMAIL_LEASE_KEY);
