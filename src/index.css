@@ -4701,3 +4701,63 @@ body { overflow-x: clip; }
 @media (prefers-reduced-motion: reduce) {
   .ss-mascot__talk--bounce-a, .ss-mascot__talk--bounce-b { animation: none; }
 }
+
+
+/* Keep the Café's tag list and message composer in full-width stacked rows. */
+.cafe-compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.6rem;
+  grid-template-areas:
+    "tags tags"
+    "reply reply"
+    "input send";
+  align-items: end;
+  width: 100%;
+  gap: .5rem;
+}
+.cafe-compose__taggable {
+  grid-area: tags;
+  width: 100%;
+  max-height: 5rem;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  align-content: flex-start;
+}
+.cafe-compose__reply {
+  grid-area: reply;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  padding: .55rem .75rem;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-surface);
+  font-size: var(--font-size-xs);
+}
+.cafe-compose__pill {
+  grid-area: input;
+  width: 100%;
+  min-height: 3.5rem;
+  align-items: center;
+}
+.cafe-compose__input {
+  min-height: 2.9rem;
+  align-self: center;
+}
+.cafe-compose__send {
+  grid-area: send;
+  align-self: end;
+}
+@media (max-width: 520px) {
+  .cafe-compose {
+    grid-template-columns: minmax(0, 1fr) 2.35rem;
+    gap: .4rem;
+  }
+  .cafe-compose__pill { min-height: 3.25rem; }
+  .cafe-compose__input { min-height: 2.7rem; }
+}
