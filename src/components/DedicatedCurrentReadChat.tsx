@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+
+const renderTaggedText = (text: string) => String(text || '').split(/(@[A-Za-z0-9_]{1,30})/g).map((part, i) => part.startsWith('@') ? <span key={i} className="text-[#8E4A59] font-semibold">{part}</span> : <React.Fragment key={i}>{part}</React.Fragment>);
 import { shareLink, siteUrl } from '../utils/share';
 import ShareSheet from './ShareSheet';
 import { motion, AnimatePresence } from 'motion/react';
@@ -929,7 +931,7 @@ export const DedicatedCurrentReadChat: React.FC<DedicatedCurrentReadChatProps> =
                           ) : (
                             /* Clean Text Bubble */
                             <p className="whitespace-pre-wrap break-words font-normal text-[var(--text-primary)]">
-                              {message.message}
+                              {renderTaggedText(message.message)}
                             </p>
                           )}
 
