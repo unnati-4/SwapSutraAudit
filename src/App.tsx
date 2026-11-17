@@ -5386,7 +5386,6 @@ const ChatModal = memo(({
 }: any) => {
     const [msgText, setMsgText] = useState('');
     const [replyingTo, setReplyingTo] = useState<any | null>(null);
-    const taggableChatUsers = Array.from(new Set([activeChat?.ownerEmail, activeChat?.requesterEmail, activeChat?.adminEmail].filter((email: string) => email && String(email).toLowerCase() !== String(activeUserEmail).toLowerCase()).map((email: string) => getChatName(email))));
     const insertChatMention = (name: string) => setMsgText(current => `${current}${current && !/\s$/.test(current) ? ' ' : ''}@${name.replace(/\s+/g, '')} `);
     // Oct 2026: a meeting-point pin, sent as structured data (typed phone
     // numbers and addresses are blocked in the chat; a pin is not).
@@ -5497,6 +5496,17 @@ const ChatModal = memo(({
       if (normEmail === normalizeEmail(currentChat.requesterEmail)) return (normEmail === activeUserEmail) ? 'You (Requester)' : 'Reader';
       return email.split('@')[0] || 'Reader';
     };
+
+    // Resolve display names only after both `currentChat` and `getChatName`
+    // have initialized. Doing this map near the top of the function hit the
+    // temporal dead zone and blanked the app whenever a chat was active.
+    const taggableChatUsers = Array.from(new Set([
+      currentChat.ownerEmail,
+      currentChat.requesterEmail,
+      currentChat.adminEmail,
+    ].filter((email: string) =>
+      email && String(email).toLowerCase() !== String(activeUserEmail).toLowerCase()
+    ).map((email: string) => getChatName(email))));
 
     const otherParticipant = normalizeEmail(currentChat.ownerEmail) === activeUserEmail ? currentChat.requesterEmail : currentChat.ownerEmail;
     const displayRecipient = String((currentChat as any).otherName || '').trim() || getChatName(otherParticipant);
