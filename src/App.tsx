@@ -4,7 +4,9 @@ import ListingImage from './components/ListingImage';
  * SPDX-License-Identifier: Apache-2.0
  */
 
+
 import React, { useState, useEffect, useLayoutEffect, useMemo, memo, useRef, useCallback, lazy, Suspense } from 'react';
+const renderAtUsernameMentions = (value: string) => String(value || '').split(/(@[A-Za-z0-9_]{1,30})/g).map((part, index) => part.startsWith('@') ? <span key={index} className="font-semibold underline decoration-dotted underline-offset-2">{part}</span> : <React.Fragment key={index}>{part}</React.Fragment>);
 import { createPortal } from 'react-dom';
 import { actionOf, isReadRequest, isTransientFailure, isSafeToRetryWrite, rememberGood, recallGood, RETRY_DELAYS_MS } from './services/resilience';
 import { motion, AnimatePresence } from 'motion/react';
@@ -5612,7 +5614,7 @@ const ChatModal = memo(({
                               <span className="block truncate opacity-80">{repliedMessage ? (repliedMessage.message || (repliedMessage.mediaType === 'location' ? 'Shared a meeting point' : 'Attachment')) : 'This message is no longer available'}</span>
                             </div>
                           )}
-                          <div className="whitespace-pre-wrap">{m.message}</div>
+                          <div className="whitespace-pre-wrap">{renderAtUsernameMentions(m.message)}</div>
                           {m.mediaType === 'location' && parseGeoUrl(m.mediaUrl) ? (
                             <div className="mt-2 text-left not-italic">
                               <LocationCard {...parseGeoUrl(m.mediaUrl)!} compact />
@@ -12732,7 +12734,7 @@ export default function App() {
     return first ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : 'Reader';
   }, [profileData, activeUserEmail]);
 
-  const handleCafeSend = useCallback(async (message: string, isSpoiler: boolean) => {
+  const handleCafeSend = useCallback(async (message: string, isSpoiler: boolean, replyToMessageId?: string) => {
     if (!activeUserEmail) return false;
     setCafeSending(true);
     try {
@@ -12752,7 +12754,8 @@ export default function App() {
           // but the client should not be sending one in the first place.
           user_name: cafeDisplayName,
           message,
-          is_spoiler: isSpoiler
+          is_spoiler: isSpoiler,
+          reply_to_message_id: replyToMessageId || ''
         })
       });
       const data = await res.json();
