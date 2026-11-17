@@ -12262,11 +12262,63 @@ export default function App() {
   const cartNeedsYou = activeUserEmail
     ? swapRequests.filter((r: any) => normalizeEmail(r.receiverEmail) === activeUserEmail && String(r.status || '').toLowerCase() === 'pending').length
     : 0;
+  // Match chat IDs as strings because sheet/API responses can vary their type.
+  const chatIdOf = (chat: any) => String(chat?.chatId || chat?.chat_id || chat?.id || '').trim();
+  const chatOwnerOf = (chat: any) => normalizeEmail(chat?.ownerEmail || chat?.owner_email);
+  const chatRequesterOf = (chat: any) => normalizeEmail(chat?.requesterEmail || chat?.requester_email);
+  const findChatForRequestIn = (list: any[], req: { senderEmail?: string; receiverEmail?: string }) =>
+    list.find((c) =>
+      (chatOwnerOf(c) === normalizeEmail(req.receiverEmail) && chatRequesterOf(c) === normalizeEmail(req.senderEmail)) ||
+      (chatOwnerOf(c) === normalizeEmail(req.senderEmail) && chatRequesterOf(c) === normalizeEmail(req.receiverEmail)));
+  // A cart row can open a chat by ID or by the accepted swap request. If the
+  // list is stale, refresh it once before showing an error.
+  const openCartChat = async (target: any) => {
+    const targetId = typeof target === 'string' || typeof target === 'number'
+      ? String(target).trim()
+      : chatIdOf(target);
+    const request = target && typeof target === 'object' && target.senderEmail && target.receiverEmail ? target : null;
+    const findTarget = (list: any[]) =>
+      (targetId ? list.find(c => chatIdOf(c) === targetId) : undefined) ||
+      (request ? findChatForRequestIn(list, request) : undefined) ||
+      (target && typeof target === 'object' && !request ? list.find(c => chatIdOf(c) === chatIdOf(target)) : undefined);
+
+    let chat = findTarget(activeChats);
+    if (!chat && activeUserEmail) {
+      try {
+        const fresh = await fetch(`${API_URL}?action=getUserChats&email=${encodeURIComponent(activeUserEmail)}`).then(r => r.json());
+        if (Array.isArray(fresh)) {
+          setActiveChats(fresh);
+          chat = findTarget(fresh);
+        }
+      } catch {
+        // Keep the current list and report the same recoverable empty state below.
+      }
+    }
+    if (!chat) {
+      setErrorMessage('This chat is still syncing. Please try again in a moment.');
+      return;
+    }
+    const id = chatIdOf(chat);
+    if (!id) {
+      setErrorMessage('This chat is missing its conversation ID. Please reopen Cart and try again.');
+      return;
+    }
+    const normalizedChat = {
+      ...chat,
+      chatId: id,
+      ownerEmail: chat.ownerEmail || chat.owner_email || '',
+      requesterEmail: chat.requesterEmail || chat.requester_email || '',
+      adminEmail: chat.adminEmail || chat.admin_email || '',
+      chatStatus: chat.chatStatus || chat.chat_status || ''
+    };
+    setCartView('chats');
+    setMessages([]);
+    setLoadingMessages(true);
+    setActiveChat(normalizedChat as any);
+  };
   // The private chat for a swap request: the two readers, either way round.
   const findChatForRequest = (req: { senderEmail?: string; receiverEmail?: string }) =>
-    activeChats.find((c) =>
-      (normalizeEmail(c.ownerEmail) === normalizeEmail(req.receiverEmail) && normalizeEmail(c.requesterEmail) === normalizeEmail(req.senderEmail)) ||
-      (normalizeEmail(c.ownerEmail) === normalizeEmail(req.senderEmail) && normalizeEmail(c.requesterEmail) === normalizeEmail(req.receiverEmail)));
+    findChatForRequestIn(activeChats, req);
   useEffect(() => {
     if (activeTab !== 'profile' || activeProfileGroup !== 'requests') return;
     const sub = profileActiveSubTab;
@@ -16103,17 +16155,9 @@ export default function App() {
                   bookTitleFor={(bookId) => String((books.find((x: any) => String(x.id) === String(bookId || '')) as any)?.title || '')}
                   hasChatFor={(req) => Boolean(findChatForRequest(req))}
                   responsesFor={(requestId) => bookRequestResponses.filter((r: any) => r.requestId === requestId) as any}
-                  onOpenRequestChat={(req) => {
-                    const chat = findChatForRequest(req);
-                    if (chat) setActiveChat(chat);
-                    else setErrorMessage('Your private chat is being set up. It will appear under Chats in a moment.');
-                  }}
-                  onOpenChat={(chat) => setActiveChat(chat as any)}
-                  onOpenChatById={(chatId) => {
-                    const chat = activeChats.find((c) => c.chatId === chatId);
-                    if (chat) setActiveChat(chat);
-                    else setErrorMessage('That chat is still being set up. Try again in a moment.');
-                  }}
+                  onOpenRequestChat={(req) => { void openCartChat(req); }}
+                  onOpenChat={(chat) => { void openCartChat(chat); }}
+                  onOpenChatById={(chatId) => { void openCartChat(String(chatId)); }}
                   onAccept={(id) => { if (requireMember()) handleUpdateSwapStatus(id, 'Accepted'); }}
                   onDecline={(id) => { if (requireMember()) handleUpdateSwapStatus(id, 'Declined'); }}
                   onCancelWanted={(id) => handleCancelBookRequest(id)}
