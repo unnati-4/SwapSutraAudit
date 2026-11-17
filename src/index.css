@@ -4490,8 +4490,10 @@ body { overflow-x: clip; }
    walking mug (mug shelf) comes towards the reader, walks right and
    unrolls a banner: an ad, or a featured book / mug. See MascotBanner.tsx.
    ═══════════════════════════════════════════════════════════════════ */
-.ss-mascot { --char-w: 76px; max-width: 80rem; margin: 1.25rem auto 0; padding: 0 1rem; }
-@media (min-width: 640px) { .ss-mascot { --char-w: 104px; padding: 0 1.5rem; } }
+.ss-mascot { --char-w: 148px; max-width: 80rem; margin: 1.25rem auto 0; padding: 0 1rem; }
+@media (min-width: 640px) { .ss-mascot { --char-w: 204px; padding: 0 1.5rem; } }
+@media (min-width: 1024px) { .ss-mascot { --char-w: 224px; } }
+.ss-mascot__fox { object-fit: contain; object-position: bottom center; max-height: 210px; }
 .ss-mascot__stage { position: relative; height: 210px; }
 @media (min-width: 700px) { .ss-mascot__stage { height: 236px; } }
 

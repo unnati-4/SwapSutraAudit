@@ -39,34 +39,9 @@ const reducedMotion = () => {
   try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
 };
 
-/** A walking book: maroon cloth cover, cream pages, two eyes and a smile. */
+/** The SwapSutra fox mascot from the Library banner asset. */
 function BookMascot() {
-  return (
-    <svg viewBox="0 0 100 130" className="ss-mascot__svg" aria-hidden="true">
-      <g className="ss-mascot__legs">
-        <path className="ss-mascot__leg ss-mascot__leg--l" d="M40 100 L36 122 L28 124" />
-        <path className="ss-mascot__leg ss-mascot__leg--r" d="M60 100 L64 122 L72 124" />
-      </g>
-      <g className="ss-mascot__body">
-        <rect x="22" y="14" width="58" height="88" rx="6" fill="#F2EBE1" stroke="#5A371D" strokeWidth="2" />
-        <rect x="18" y="10" width="58" height="88" rx="6" fill="#8E4A59" stroke="#5A371D" strokeWidth="2" />
-        <rect x="18" y="10" width="9" height="88" rx="3" fill="#6E3343" />
-        <rect x="34" y="22" width="34" height="5" rx="2.5" fill="#E7B98A" />
-        <rect x="38" y="31" width="26" height="3" rx="1.5" fill="#E7B98A" opacity="0.7" />
-        <g className="ss-mascot__face">
-          <ellipse cx="42" cy="56" rx="5" ry="6.5" fill="#FFF7EC" />
-          <ellipse cx="62" cy="56" rx="5" ry="6.5" fill="#FFF7EC" />
-          <circle className="ss-mascot__pupil" cx="43" cy="57" r="2.6" fill="#2E2522" />
-          <circle className="ss-mascot__pupil" cx="63" cy="57" r="2.6" fill="#2E2522" />
-          <path d="M44 72 Q52 79 60 72" fill="none" stroke="#FFF7EC" strokeWidth="2.6" strokeLinecap="round" />
-          <circle cx="36" cy="68" r="3" fill="#C98B9B" opacity="0.8" />
-          <circle cx="68" cy="68" r="3" fill="#C98B9B" opacity="0.8" />
-        </g>
-      </g>
-      <path className="ss-mascot__arm ss-mascot__arm--wave" d="M18 62 Q6 58 4 46" />
-      <path className="ss-mascot__arm ss-mascot__arm--hold" d="M78 60 Q90 52 96 40" />
-    </svg>
-  );
+  return <img src="/swapsutra-fox-mascot.webp" alt="" aria-hidden="true" className="ss-mascot__svg ss-mascot__fox" decoding="async" />;
 }
 
 /** A walking mug: cream glaze, a handle, steam, two eyes and a smile. */
