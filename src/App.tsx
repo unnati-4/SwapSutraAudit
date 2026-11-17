@@ -5,9 +5,8 @@ import ListingImage from './components/ListingImage';
  */
 
 
-const renderAtUsernameMentions = (value: string) => String(value || '').split(/(@[A-Za-z0-9_]{1,30})/g).map((part, index) => part.startsWith('@') ? <span key={index} className="font-semibold underline decoration-dotted underline-offset-2">{part}</span> : <React.Fragment key={index}>{part}</React.Fragment>);
-
 import React, { useState, useEffect, useLayoutEffect, useMemo, memo, useRef, useCallback, lazy, Suspense } from 'react';
+const renderAtUsernameMentions = (value: string) => String(value || '').split(/(@[A-Za-z0-9_]{1,30})/g).map((part, index) => part.startsWith('@') ? <span key={index} className="font-semibold underline decoration-dotted underline-offset-2">{part}</span> : <React.Fragment key={index}>{part}</React.Fragment>);
 import { createPortal } from 'react-dom';
 import { actionOf, isReadRequest, isTransientFailure, isSafeToRetryWrite, rememberGood, recallGood, RETRY_DELAYS_MS } from './services/resilience';
 import { motion, AnimatePresence } from 'motion/react';
