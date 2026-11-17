@@ -46,6 +46,7 @@ export interface CafeMessage {
   id: string;
   firstName: string;
   message: string;
+  replyToMessageId?: string;
   isSpoiler: boolean;
   createdAt: string;
   imageUrl?: string;
@@ -95,6 +96,7 @@ export function toCafeSnapshot(payload: any): CafeSnapshot {
       id: String(m.message_id || m.id || ''),
       firstName: publicName(m.user_name),
       message: String(m.message || ''),
+      replyToMessageId: String(m.reply_to_message_id || m.replyToMessageId || ''),
       isSpoiler: m.is_spoiler === true || String(m.is_spoiler).toLowerCase() === 'true',
       createdAt: String(m.created_at || ''),
       imageUrl: String(m.image_url || m.imageUrl || ''),
@@ -330,7 +332,7 @@ const ReadersCafe = ({
   isSignedIn: boolean;
   /** Why this reader cannot speak yet, so the invitation tells the truth. */
   inviteReason?: 'guest' | 'pending' | 'expired';
-  onSend: (message: string, isSpoiler: boolean) => Promise<boolean>;
+  onSend: (message: string, isSpoiler: boolean, replyToMessageId?: string) => Promise<boolean>;
   onRetry: () => void;
   onRequestJoin: () => void;
   sending?: boolean;
@@ -351,6 +353,7 @@ const ReadersCafe = ({
   const [draft, setDraft] = useState('');
   const [spoiler, setSpoiler] = useState(false);
   const [revealed, setRevealed] = useState<string[]>([]);
+  const [replyingTo, setReplyingTo] = useState<CafeMessage | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [viewerGroup, setViewerGroup] = useState<number | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -412,9 +415,10 @@ const ReadersCafe = ({
     if (e) e.preventDefault();
     const text = draft.trim();
     if (!text || sending) return;
-    const ok = await onSend(text, spoiler);
+    const ok = await onSend(text, spoiler, replyingTo?.id);
     if (ok) {
       setDraft('');
+      setReplyingTo(null);
       setSpoiler(false);
       setEmojiOpen(false);
       stickToBottom.current = true;
@@ -638,6 +642,10 @@ const ReadersCafe = ({
 
                   <div className="cafe-line__stack">
                     <article className={`cafe-bubble${m.isMine ? ' cafe-bubble--mine' : ''}`}>
+                      {m.replyToMessageId && (() => {
+                        const quoted = messages.find(item => item.id === m.replyToMessageId);
+                        return quoted ? <div className="cafe-bubble__replyQuote"><b>{quoted.firstName}</b><span>{quoted.isSpoiler ? 'Spoiler hidden' : quoted.message.slice(0, 110)}</span></div> : null;
+                      })()}
                       {!m.isMine && !grouped && (
                         <p className="cafe-bubble__head">
                           {onOpenReader && m.authorId ? (
@@ -676,6 +684,7 @@ const ReadersCafe = ({
                         </>
                       )}
                       <time className="cafe-bubble__when" dateTime={m.createdAt}>{bubbleClock(m.createdAt)}</time>
+                      <button type="button" className="cafe-bubble__reply" onClick={() => { setReplyingTo(m); inputRef.current?.focus(); }}>Reply ↩</button>
                     </article>
 
                     {(m.reactions.length > 0 || canReact) && (
@@ -755,6 +764,7 @@ const ReadersCafe = ({
                 every reader already has on their phone. The send button
                 is the only thing outside it. */}
             <form onSubmit={submit} className="cafe-compose">
+              {replyingTo && <div className="cafe-compose__reply"><span>Replying to <b>{replyingTo.firstName}</b>: {replyingTo.isSpoiler ? 'Spoiler hidden' : replyingTo.message.slice(0, 90)}</span><button type="button" aria-label="Cancel reply" onClick={() => setReplyingTo(null)}>×</button></div>}
               <div className="cafe-compose__pill">
                 <button
                   type="button"
