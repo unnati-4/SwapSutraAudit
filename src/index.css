@@ -4665,10 +4665,13 @@ body { overflow-x: clip; }
 
 .cafe-compose__taggable {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: .4rem;
-  overflow-x: auto;
-  padding: .15rem 0 .35rem;
+  max-height: 4.75rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: .15rem .1rem .35rem;
   color: #7c6e65;
   font-size: .7rem;
 }

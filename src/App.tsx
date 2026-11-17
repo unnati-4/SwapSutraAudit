@@ -5706,7 +5706,7 @@ const ChatModal = memo(({
                         <button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancel reply" className="shrink-0 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">×</button>
                       </div>
                     )}
-                    {taggableChatUsers.length > 0 && <div className="mb-2 flex items-center gap-2 overflow-x-auto" aria-label="People you can tag"><span className="shrink-0 text-2xs font-semibold text-[var(--text-secondary)]">Tag a reader</span>{taggableChatUsers.map(name => <button key={name} type="button" onClick={() => insertChatMention(name)} className="shrink-0 rounded-full border border-brand-border bg-[var(--bg-page)] px-2.5 py-1 text-2xs font-medium text-brand-gold-text">@{name}</button>)}</div>}
+                    {taggableChatUsers.length > 0 && <div className="mb-2 flex flex-wrap items-center gap-2 max-h-20 overflow-y-auto overflow-x-hidden" aria-label="People you can tag"><span className="shrink-0 text-2xs font-semibold text-[var(--text-secondary)]">Tag a reader</span>{taggableChatUsers.map(name => <button key={name} type="button" onClick={() => insertChatMention(name)} className="shrink-0 rounded-full border border-brand-border bg-[var(--bg-page)] px-2.5 py-1 text-2xs font-medium text-brand-gold-text">@{name}</button>)}</div>}
                     <form onSubmit={(e) => {
                       e.preventDefault();
                       if (msgText.trim()) {
