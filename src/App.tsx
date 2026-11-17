@@ -1554,6 +1554,7 @@ const mapCurrentReadCircle = (circle: any): CurrentReadCircle => ({
 
 const secureFetch = async (url: string, options: RequestInit = {}, retries = 3, backoff = 1000): Promise<Response> => {
   try {
+    if (options.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
     const response = await fetch(url, options);
     if (!response.ok && retries > 0) {
       if (response.status === 401) {
@@ -1569,6 +1570,7 @@ const secureFetch = async (url: string, options: RequestInit = {}, retries = 3, 
     }
     return response;
   } catch (error) {
+    if (options.signal?.aborted) throw error;
     if (retries > 0) {
       await new Promise(resolve => setTimeout(resolve, backoff));
       return secureFetch(url, options, retries - 1, backoff * 2);
@@ -7621,6 +7623,8 @@ export default function App() {
   const [swapRequests, setSwapRequests] = useState<SwapRequestExt[]>([]);
   const [activeChats, setActiveChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
+  const activeChatIdRef = useRef<string | null>(null);
+  activeChatIdRef.current = activeChat?.chatId || null;
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -8327,10 +8331,16 @@ export default function App() {
   useEffect(() => {
     if (!activeChat || !activeUserEmail) {
       setMessages([]);
+      setLoadingMessages(false);
       return;
     }
 
-    let isVisible = true;
+    const controller = new AbortController();
+    let stopped = false;
+    let inFlight = false;
+    let refreshPending = false;
+    setMessages([]);
+    let isVisible = document.visibilityState === 'visible';
     const handleVisibilityChange = () => {
       isVisible = document.visibilityState === 'visible';
     };
@@ -8358,11 +8368,16 @@ export default function App() {
     let timer: any = null;
 
     const fetchChatMessages = async (isInitial = false) => {
+      if (stopped) return;
+      if (inFlight) { refreshPending = true; return; }
+      inFlight = true;
       if (isInitial) setLoadingMessages(true);
       try {
-        const msgs = await secureFetch(`${API_URL}?action=getChatMessages&chatId=${activeChat.chatId}&email=${encodeURIComponent(activeUserEmail)}`).then(r => r.json());
+        const msgs = await secureFetch(`${API_URL}?action=getChatMessages&chatId=${activeChat.chatId}&email=${encodeURIComponent(activeUserEmail)}`, { signal: controller.signal }).then(r => r.json());
+        if (stopped) return;
         if (Array.isArray(msgs)) {
           setMessages(prev => {
+            if (stopped) return prev;
             if (prev.length === msgs.length && prev.length > 0) {
               const lastPrev = prev[prev.length - 1];
               const lastNew = msgs[msgs.length - 1];
@@ -8380,19 +8395,24 @@ export default function App() {
           else if (idleRounds >= 6) currentDelay = 6000;
         }
       } catch (e) {
-        console.error("Message polling error:", e);
+        if (!stopped) console.error("Message polling error:", e);
       } finally {
-        if (isInitial) setLoadingMessages(false);
+        inFlight = false;
+        if (!stopped) setLoadingMessages(false);
       }
     };
 
     // Self-rescheduling loop rather than a fixed setInterval, so the
     // delay computed above actually takes effect between polls.
     const scheduleNext = () => {
+      if (stopped || inFlight) return;
+      if (timer) clearTimeout(timer);
+      const delay = refreshPending ? 0 : currentDelay;
+      refreshPending = false;
       timer = setTimeout(async () => {
         if (isVisible) await fetchChatMessages(false);
         scheduleNext();
-      }, currentDelay);
+      }, delay);
     };
 
     fetchChatMessages(true).then(scheduleNext);
@@ -8400,6 +8420,7 @@ export default function App() {
     // Check right now (after sending, or on returning to the tab) instead
     // of waiting out the current delay.
     const refreshNow = () => {
+      if (stopped) return;
       idleRounds = 0;
       currentDelay = FAST_MS;
       if (timer) clearTimeout(timer);
@@ -8410,8 +8431,10 @@ export default function App() {
     document.addEventListener('visibilitychange', onVisibleAgain);
 
     return () => {
+      stopped = true;
+      controller.abort();
       if (timer) clearTimeout(timer);
-      chatRefreshNowRef.current = null;
+      if (chatRefreshNowRef.current === refreshNow) chatRefreshNowRef.current = null;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       document.removeEventListener('visibilitychange', onVisibleAgain);
     };
@@ -11581,7 +11604,7 @@ export default function App() {
         }
       } else {
         // Swap the pending bubble for the saved message right away.
-        chatRefreshNowRef.current?.();
+        if (activeChatIdRef.current === activeChat.chatId) chatRefreshNowRef.current?.();
         // Dispatch Direct Message notification to counterparty
         const recipientEmail = activeChat.user1Email === activeUserEmail ? activeChat.user2Email : activeChat.user1Email;
         if (recipientEmail) {
@@ -17487,7 +17510,7 @@ export default function App() {
         {/* Modals & Dialogs */}
         <AnimatePresence>
           {activeChat && (
-            <ChatModal 
+            <ChatModal key={activeChat.chatId}
               activeChat={activeChat} 
               setActiveChat={setActiveChat} 
               activeUserEmail={activeUserEmail} 
