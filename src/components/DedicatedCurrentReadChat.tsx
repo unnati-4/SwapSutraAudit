@@ -239,6 +239,8 @@ export const DedicatedCurrentReadChat: React.FC<DedicatedCurrentReadChatProps> =
   const isArchived = String(circle?.status || '').toLowerCase() === 'archived';
 
   const userEmail = (currentUser?.email || currentUser?.id || '').toLowerCase();
+  const taggableMembers = membersList.filter((member: any) => String(member.user_id || member.userId || '').toLowerCase() !== userEmail);
+  const insertMemberMention = (name: string) => setMessageText(current => `${current}${current && !/\s$/.test(current) ? ' ' : ''}@${name.replace(/\s+/g, '')} `);
   const creatorEmail = (circle?.createdByUserId || circle?.created_by_user_id || '').toLowerCase();
   const isCreator = Boolean((creatorEmail && creatorEmail === userEmail) || currentUser?.isAdmin);
   const isMember = Boolean(membersList.some((m: any) => (m.userId || m.user_id || m.email || m.id || '').toLowerCase() === userEmail));
@@ -1100,6 +1102,7 @@ export const DedicatedCurrentReadChat: React.FC<DedicatedCurrentReadChatProps> =
               <input type="file" ref={docInputRef} className="hidden" onChange={handleDocumentChange} />
 
               {/* Input Bar */}
+              {taggableMembers.length > 0 && <div className="mb-2 flex items-center gap-2 overflow-x-auto rounded-xl border border-[#E7DED4] bg-[#FFFDF9] px-3 py-2 shadow-sm" aria-label="Readers you can tag"><span className="shrink-0 text-[10px] font-semibold text-[#7C6E65]">Tag reader</span>{taggableMembers.map((member: any, index: number) => { const name = String(member.user_name || member.userName || member.name || 'Reader').split(/\s+/)[0]; return <button key={member.user_id || member.userId || index} type="button" onClick={() => insertMemberMention(name)} className="shrink-0 rounded-full bg-[#F2EBE1] px-2.5 py-1 text-[10px] font-medium text-[#6B3F48]">@{name}</button>; })}</div>}
               <form onSubmit={handleSend} className="w-full max-w-4xl mx-auto flex items-center gap-1.5 sm:gap-2 bg-[var(--bg-page)] border border-[#E5DEC9] rounded-full px-2.5 py-1.5 focus-within:border-[#5C3A21] focus-within:bg-[var(--bg-surface)] transition-all shadow-2xs">
                 
                 {/* Attachment + Button */}
@@ -1129,8 +1132,7 @@ export const DedicatedCurrentReadChat: React.FC<DedicatedCurrentReadChatProps> =
                 >
                   <Smile size={18} className="sm:w-5 sm:h-5" />
                 </button>
-
-                {/* Text Input Field */}
+{/* Text Input Field */}
                 <input
                   type="text"
                   value={messageText}

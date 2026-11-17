@@ -4661,3 +4661,40 @@ body { overflow-x: clip; }
 @media (prefers-reduced-motion: reduce) {
   .ss-mascot__speech { animation: none; }
 }
+
+
+.cafe-compose__taggable {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  overflow-x: auto;
+  padding: .15rem 0 .35rem;
+  color: #7c6e65;
+  font-size: .7rem;
+}
+.cafe-compose__taggable > span { flex: 0 0 auto; font-weight: 700; }
+.cafe-compose__taggable button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(142, 74, 89, .18);
+  border-radius: 999px;
+  background: #f2ebe1;
+  padding: .25rem .55rem;
+  color: #6b3f48;
+  cursor: pointer;
+}
+.ss-mascot__char { pointer-events: auto; }
+.ss-mascot__talk--bounce-a { animation: ss-fox-tap-a .52s ease-out; }
+.ss-mascot__talk--bounce-b { animation: ss-fox-tap-b .52s ease-out; }
+@keyframes ss-fox-tap-a {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  28% { transform: translateY(-13px) rotate(-5deg); }
+  62% { transform: translateY(0) rotate(4deg); }
+}
+@keyframes ss-fox-tap-b {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  28% { transform: translateY(-13px) rotate(5deg); }
+  62% { transform: translateY(0) rotate(-4deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss-mascot__talk--bounce-a, .ss-mascot__talk--bounce-b { animation: none; }
+}

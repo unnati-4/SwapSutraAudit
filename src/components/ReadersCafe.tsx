@@ -366,6 +366,8 @@ const ReadersCafe = ({
   const stickToBottom = useRef(true);
 
   const messages = snapshot.messages;
+  const taggableReaders = Array.from(new Map(messages.filter(m => !m.isMine && m.firstName).map(m => [m.firstName.toLowerCase(), m.firstName])).values());
+  const insertReaderMention = (name: string) => setDraft(current => `${current}${current && !/\s$/.test(current) ? ' ' : ''}@${name.replace(/\s+/g, '')} `);
   const lastId = messages.length ? messages[messages.length - 1].id : '';
 
   // Follow the conversation only while the reader is already at the
@@ -764,6 +766,7 @@ const ReadersCafe = ({
                 every reader already has on their phone. The send button
                 is the only thing outside it. */}
             <form onSubmit={submit} className="cafe-compose">
+              {taggableReaders.length > 0 && <div className="cafe-compose__taggable" aria-label="Readers you can tag"><span>Tag a reader</span>{taggableReaders.map(name => <button key={name} type="button" onClick={() => insertReaderMention(name)}>@{name}</button>)}</div>}
               {replyingTo && <div className="cafe-compose__reply"><span>Replying to <b>{replyingTo.firstName}</b>: {replyingTo.isSpoiler ? 'Spoiler hidden' : replyingTo.message.slice(0, 90)}</span><button type="button" aria-label="Cancel reply" onClick={() => setReplyingTo(null)}>×</button></div>}
               <div className="cafe-compose__pill">
                 <button

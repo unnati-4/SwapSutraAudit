@@ -62,6 +62,7 @@ export default function MascotBanner({ mascot, slides, label, interval = 10000, 
   const [i, setI] = useState(() => (slides.length ? Math.abs(startAt) % slides.length : 0));
   const [paused, setPaused] = useState(false);
   const [foxMessage, setFoxMessage] = useState('');
+  const [foxTap, setFoxTap] = useState(0);
   const rootRef = useRef<HTMLElement>(null);
   const timers = useRef<number[]>([]);
   const later = (fn: () => void, ms: number) => { timers.current.push(window.setTimeout(fn, ms)); };
@@ -145,7 +146,7 @@ export default function MascotBanner({ mascot, slides, label, interval = 10000, 
           <span className="ss-mascot__rod ss-mascot__rod--r" aria-hidden="true" />
         </div>
         <div className="ss-mascot__char">
-          <button type="button" className="ss-mascot__talk" aria-label="Say hello to the SwapSutra fox" onClick={() => setFoxMessage(current => current ? '' : 'Found a lovely read lately?')}>
+          <button type="button" className={`ss-mascot__talk ${foxTap % 2 ? 'ss-mascot__talk--bounce-a' : 'ss-mascot__talk--bounce-b'}`} aria-label="Say hello to the SwapSutra fox" onClick={() => { const greetings = ['Found a lovely read lately?', 'Tap me for your next bookish spark!', 'Psst… there are readers to meet here.']; setFoxMessage(greetings[foxTap % greetings.length]); setFoxTap(value => value + 1); }}>
             {mascot === 'mug' ? <MugMascot /> : <BookMascot />}
           </button>
           {foxMessage && <span className="ss-mascot__speech" role="status">{foxMessage}</span>}
