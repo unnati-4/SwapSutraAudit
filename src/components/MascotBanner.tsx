@@ -46,37 +46,7 @@ function BookMascot() {
 
 /** A walking mug: cream glaze, a handle, steam, two eyes and a smile. */
 function MugMascot() {
-  return (
-    <svg viewBox="0 0 100 130" className="ss-mascot__svg" aria-hidden="true">
-      <g className="ss-mascot__steam">
-        <path d="M38 16 C34 10 42 8 38 2" />
-        <path d="M50 18 C46 11 54 9 50 2" />
-        <path d="M62 16 C58 10 66 8 62 2" />
-      </g>
-      <g className="ss-mascot__legs">
-        <path className="ss-mascot__leg ss-mascot__leg--l" d="M38 100 L34 122 L26 124" />
-        <path className="ss-mascot__leg ss-mascot__leg--r" d="M58 100 L62 122 L70 124" />
-      </g>
-      <g className="ss-mascot__body">
-        <path d="M74 44 h6 c10 0 14 7 14 14 s-4 14 -14 14 h-6" fill="none" stroke="#5A371D" strokeWidth="6" strokeLinecap="round" />
-        <path d="M74 44 h6 c10 0 14 7 14 14 s-4 14 -14 14 h-6" fill="none" stroke="#FFF7EC" strokeWidth="2.5" strokeLinecap="round" />
-        <path d="M20 26 h56 v56 c0 12 -10 20 -22 20 h-12 c-12 0 -22 -8 -22 -20 z" fill="#FFF7EC" stroke="#5A371D" strokeWidth="2" />
-        <path d="M20 26 h56 v10 h-56 z" fill="#B7705D" />
-        <ellipse cx="48" cy="26" rx="28" ry="5" fill="#6E4A3B" stroke="#5A371D" strokeWidth="2" />
-        <g className="ss-mascot__face">
-          <ellipse cx="38" cy="58" rx="5" ry="6.5" fill="#2E2522" />
-          <ellipse cx="58" cy="58" rx="5" ry="6.5" fill="#2E2522" />
-          <circle cx="39.5" cy="56" r="1.8" fill="#FFF" />
-          <circle cx="59.5" cy="56" r="1.8" fill="#FFF" />
-          <path d="M40 73 Q48 80 56 73" fill="none" stroke="#2E2522" strokeWidth="2.6" strokeLinecap="round" />
-          <circle cx="31" cy="70" r="3.2" fill="#C98B9B" opacity="0.8" />
-          <circle cx="65" cy="70" r="3.2" fill="#C98B9B" opacity="0.8" />
-        </g>
-      </g>
-      <path className="ss-mascot__arm ss-mascot__arm--wave" d="M20 62 Q8 58 6 46" />
-      <path className="ss-mascot__arm ss-mascot__arm--hold" d="M74 76 Q88 70 96 58" />
-    </svg>
-  );
+  return <img src="/swapsutra-fox-mascot.webp" alt="" aria-hidden="true" className="ss-mascot__svg ss-mascot__fox" decoding="async" />;
 }
 
 export default function MascotBanner({ mascot, slides, label, interval = 10000, startAt = 0, testId }: {
@@ -91,6 +61,7 @@ export default function MascotBanner({ mascot, slides, label, interval = 10000, 
   const [phase, setPhase] = useState<Phase>(reduce ? 'show' : 'idle');
   const [i, setI] = useState(() => (slides.length ? Math.abs(startAt) % slides.length : 0));
   const [paused, setPaused] = useState(false);
+  const [foxMessage, setFoxMessage] = useState('');
   const rootRef = useRef<HTMLElement>(null);
   const timers = useRef<number[]>([]);
   const later = (fn: () => void, ms: number) => { timers.current.push(window.setTimeout(fn, ms)); };
@@ -173,8 +144,11 @@ export default function MascotBanner({ mascot, slides, label, interval = 10000, 
           )}
           <span className="ss-mascot__rod ss-mascot__rod--r" aria-hidden="true" />
         </div>
-        <div className="ss-mascot__char" aria-hidden="true">
-          {mascot === 'mug' ? <MugMascot /> : <BookMascot />}
+        <div className="ss-mascot__char">
+          <button type="button" className="ss-mascot__talk" aria-label="Say hello to the SwapSutra fox" onClick={() => setFoxMessage(current => current ? '' : 'Found a lovely read lately?')}>
+            {mascot === 'mug' ? <MugMascot /> : <BookMascot />}
+          </button>
+          {foxMessage && <span className="ss-mascot__speech" role="status">{foxMessage}</span>}
           <span className="ss-mascot__shadow" />
         </div>
       </div>
