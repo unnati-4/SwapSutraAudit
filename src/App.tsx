@@ -5386,6 +5386,8 @@ const ChatModal = memo(({
 }: any) => {
     const [msgText, setMsgText] = useState('');
     const [replyingTo, setReplyingTo] = useState<any | null>(null);
+    const taggableChatUsers = Array.from(new Set([activeChat?.ownerEmail, activeChat?.requesterEmail, activeChat?.adminEmail].filter((email: string) => email && String(email).toLowerCase() !== String(activeUserEmail).toLowerCase()).map((email: string) => getChatName(email))));
+    const insertChatMention = (name: string) => setMsgText(current => `${current}${current && !/\s$/.test(current) ? ' ' : ''}@${name.replace(/\s+/g, '')} `);
     // Oct 2026: a meeting-point pin, sent as structured data (typed phone
     // numbers and addresses are blocked in the chat; a pin is not).
     const [showPinPicker, setShowPinPicker] = useState(false);
@@ -5695,7 +5697,7 @@ const ChatModal = memo(({
                         {pinError && <p className="text-xs text-red-600" role="alert">{pinError}</p>}
                       </div>
                     )}
-                    {replyingTo && (
+{replyingTo && (
                       <div className="mb-3 flex items-start justify-between gap-3 rounded-xl border border-brand-border bg-[var(--bg-page)] px-3 py-2" data-testid="reply-preview">
                         <div className="min-w-0 border-l-2 border-brand-gold pl-2">
                           <p className="text-2xs font-bold text-brand-gold-text">Replying to {getChatName(replyingTo.senderEmail)}</p>
@@ -5704,6 +5706,7 @@ const ChatModal = memo(({
                         <button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancel reply" className="shrink-0 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">×</button>
                       </div>
                     )}
+                    {taggableChatUsers.length > 0 && <div className="mb-2 flex items-center gap-2 overflow-x-auto" aria-label="People you can tag"><span className="shrink-0 text-2xs font-semibold text-[var(--text-secondary)]">Tag a reader</span>{taggableChatUsers.map(name => <button key={name} type="button" onClick={() => insertChatMention(name)} className="shrink-0 rounded-full border border-brand-border bg-[var(--bg-page)] px-2.5 py-1 text-2xs font-medium text-brand-gold-text">@{name}</button>)}</div>}
                     <form onSubmit={(e) => {
                       e.preventDefault();
                       if (msgText.trim()) {
