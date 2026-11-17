@@ -13363,17 +13363,32 @@ function sendChatMessage(data, internalOptions) {
   const msgSheet = getOrCreateSheet('Messages', []);
   const msgId = generateId('SS_MSG_');
   const now = new Date();
-  
-  const msgHeaders = msgSheet.getRange(1, 1, 1, msgSheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
-  
-  // Ensure headers exist if they don't
-  if (msgHeaders.indexOf('mediaUrl') === -1) {
-    msgSheet.getRange(1, msgHeaders.length + 1).setValue('mediaUrl');
-    msgHeaders.push('mediaUrl');
-  }
-  if (msgHeaders.indexOf('mediaType') === -1) {
-    msgSheet.getRange(1, msgHeaders.length + 1).setValue('mediaType');
-    msgHeaders.push('mediaType');
+
+  // Keep the original message shape and append the optional reply reference
+  // for existing sheets. Old messages remain valid with an empty value.
+  const msgHeaders = ensureSheetHeaders(msgSheet, [
+    'messageId', 'chatId', 'senderEmail', 'senderRole', 'message',
+    'createdAt', 'mediaUrl', 'mediaType', 'replyToMessageId'
+  ]);
+
+  // A reply may only point to a message in this same conversation. The
+  // frontend can resolve the quoted preview from the returned thread using
+  // this stable ID; no copied message text is trusted or stored.
+  const replyToMessageId = String(data.replyToMessageId || '').trim();
+  if (replyToMessageId) {
+    if (replyToMessageId.length > 120 || replyToMessageId === msgId) {
+      return { success: false, error: 'INVALID_REPLY_TARGET', message: 'Choose a message in this chat to reply to.' };
+    }
+    const threadRows = msgSheet.getDataRange().getValues();
+    const threadHeaders = (threadRows[0] || []).map(h => String(h || '').trim());
+    const messageIdIndex = threadHeaders.indexOf('messageId');
+    const chatIdIndex = threadHeaders.indexOf('chatId');
+    const targetExists = messageIdIndex !== -1 && chatIdIndex !== -1 && threadRows.slice(1).some(row =>
+      String(row[messageIdIndex]) === replyToMessageId && String(row[chatIdIndex]) === String(chatId)
+    );
+    if (!targetExists) {
+      return { success: false, error: 'INVALID_REPLY_TARGET', message: 'That message is no longer available in this chat.' };
+    }
   }
 
   const row = new Array(msgHeaders.length).fill("");
@@ -13386,6 +13401,7 @@ function sendChatMessage(data, internalOptions) {
     else if (h === 'createdAt') row[i] = now;
     else if (h === 'mediaUrl') row[i] = data.mediaUrl || "";
     else if (h === 'mediaType') row[i] = data.mediaType || "";
+    else if (h === 'replyToMessageId') row[i] = replyToMessageId;
   });
   msgSheet.appendRow(row);
   chatThreadCacheClear_(chatId);
@@ -21567,7 +21583,6 @@ function adminListSecurityFeeBacklog(data) {
         status: status,
         createdAt: obj.createdAt,
         updatedAt: obj.updatedAt,
-        saleDeposit: fee.saleDeposit,
         checkout: fee.checkout,
         payers: fee.payers.map(p => ({
           payerRole: p.payerRole, payerEmail: p.payerEmail, requiredAmount: p.requiredAmount,

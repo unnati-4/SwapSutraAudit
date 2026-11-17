@@ -1210,6 +1210,7 @@ interface ChatMessage {
   createdAt: string;
   mediaUrl?: string;
   mediaType?: string;
+  replyToMessageId?: string;
 }
 
 interface SwapProof {
@@ -5382,6 +5383,7 @@ const ChatModal = memo(({
   onUpgrade
 }: any) => {
     const [msgText, setMsgText] = useState('');
+    const [replyingTo, setReplyingTo] = useState<any | null>(null);
     // Oct 2026: a meeting-point pin, sent as structured data (typed phone
     // numbers and addresses are blocked in the chat; a pin is not).
     const [showPinPicker, setShowPinPicker] = useState(false);
@@ -5414,6 +5416,8 @@ const ChatModal = memo(({
       if (!activeChat) return null;
       return activeChats.find(c => c.chatId === activeChat.chatId) || activeChat;
     }, [activeChat, activeChats]);
+
+    useEffect(() => { setReplyingTo(null); setMsgText(''); }, [currentChat?.chatId]);
 
     if (!currentChat) return null;
 
@@ -5593,6 +5597,7 @@ const ChatModal = memo(({
                   ) : messages.length > 0 ? messages.map((m: any, idx: number) => {
                     const isMine = normalizeEmail(m.senderEmail) === activeUserEmail;
                     const isSystem = m.senderRole === 'Admin';
+                    const repliedMessage = m.replyToMessageId ? messages.find((x: any) => x.messageId === m.replyToMessageId) : null;
                     return (
                       <div key={m.messageId || `msg-${idx}`} className={`flex ${isMine ? 'justify-end' : (isSystem ? 'justify-center' : 'justify-start')}`}>
                         <div className={`max-w-[75%] p-4 rounded-2xl text-xs leading-relaxed ${
@@ -5601,6 +5606,12 @@ const ChatModal = memo(({
                             : (isMine ? 'bg-brand-gold text-[var(--text-primary)] rounded-tr-none shadow-premium-sm font-medium' : 'bg-[var(--bg-surface)] text-[var(--text-primary)] border border-brand-border rounded-tl-none')
                         }`}>
                           {!isMine && !isSystem && <p className="text-2xs font-bold uppercase mb-1 opacity-60">{getChatName(m.senderEmail)}</p>}
+                          {m.replyToMessageId && (
+                            <div className={`mb-2 block w-full rounded-lg border-l-2 px-2 py-1.5 text-left text-2xs ${isMine ? 'border-brand-brown/40 bg-black/5' : 'border-brand-gold bg-[var(--bg-page)]'}`}>
+                              <span className="block font-bold opacity-70">{repliedMessage ? getChatName(repliedMessage.senderEmail) : 'Replied message'}</span>
+                              <span className="block truncate opacity-80">{repliedMessage ? (repliedMessage.message || (repliedMessage.mediaType === 'location' ? 'Shared a meeting point' : 'Attachment')) : 'This message is no longer available'}</span>
+                            </div>
+                          )}
                           <div className="whitespace-pre-wrap">{m.message}</div>
                           {m.mediaType === 'location' && parseGeoUrl(m.mediaUrl) ? (
                             <div className="mt-2 text-left not-italic">
@@ -5623,6 +5634,9 @@ const ChatModal = memo(({
                           )}
                           <p className={`text-2xs mt-1 opacity-60 flex items-center justify-between ${isMine ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
                             <span>{m.pending ? 'Sending…' : new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                            {m.messageId && !m.pending && (!isArchived || isAdminUser) && (
+                              <button type="button" onClick={() => setReplyingTo(m)} className="ml-2 underline hover:opacity-100 transition-colors" title="Reply to this message">Reply ↩</button>
+                            )}
                             {isMine && m.messageId && !m.pending && (
                               <button
                                 type="button"
@@ -5679,11 +5693,21 @@ const ChatModal = memo(({
                         {pinError && <p className="text-xs text-red-600" role="alert">{pinError}</p>}
                       </div>
                     )}
+                    {replyingTo && (
+                      <div className="mb-3 flex items-start justify-between gap-3 rounded-xl border border-brand-border bg-[var(--bg-page)] px-3 py-2" data-testid="reply-preview">
+                        <div className="min-w-0 border-l-2 border-brand-gold pl-2">
+                          <p className="text-2xs font-bold text-brand-gold-text">Replying to {getChatName(replyingTo.senderEmail)}</p>
+                          <p className="truncate text-2xs text-[var(--text-secondary)]">{replyingTo.message || (replyingTo.mediaType === 'location' ? 'Shared a meeting point' : 'Attachment')}</p>
+                        </div>
+                        <button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancel reply" className="shrink-0 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">×</button>
+                      </div>
+                    )}
                     <form onSubmit={(e) => {
                       e.preventDefault();
                       if (msgText.trim()) {
-                        handleSendMessage(msgText);
+                        handleSendMessage(msgText, replyingTo?.messageId);
                         setMsgText('');
+                        setReplyingTo(null);
                       }
                     }} className="flex gap-2 sm:gap-4">
                       <button
@@ -11557,7 +11581,7 @@ export default function App() {
     }
   };
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, replyToMessageId?: string) => {
     if (!activeChat || !activeUserEmail || !text.trim()) return;
     // 9 Oct 2026: membership is free, so every registered reader is 'trial'
     // — this used to require 'premium', which silently stopped EVERY normal
@@ -11576,6 +11600,7 @@ export default function App() {
       senderRole: isAdmin ? 'Admin' : 'User',
       message: text,
       createdAt: new Date().toISOString(),
+      replyToMessageId,
       pending: true,
     } as any]);
     const dropPending = () => setMessages(prev => prev.filter((m: any) => m.messageId !== tempId));
@@ -11588,7 +11613,8 @@ export default function App() {
           chatId: activeChat.chatId,
           senderEmail: activeUserEmail,
           senderRole: isAdmin ? 'Admin' : 'User',
-          message: text
+          message: text,
+          replyToMessageId
         })
       });
       const data = await res.json();
