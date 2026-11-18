@@ -214,7 +214,7 @@ export class NotificationEngine {
           entityName: entityType ? `${entityType.toUpperCase()} #${entityId || ''}` : undefined
         });
 
-        this.sendEmailNotificationToServer(recipient, emailSubjectText, emailHtml).catch(err => {
+        this.sendEmailNotificationToServer(recipient, emailSubjectText, emailHtml, cleanSender, entityId || '').catch(err => {
           console.warn('Email notification server sync warning:', err);
         });
       }
@@ -251,17 +251,26 @@ export class NotificationEngine {
   /**
    * Helper: Send Email notification request to backend mail dispatcher
    */
-  private static async sendEmailNotificationToServer(toEmail: string, subject: string, htmlContent: string): Promise<void> {
+  private static async sendEmailNotificationToServer(toEmail: string, subject: string, htmlContent: string, senderEmail: string, entityId: string): Promise<void> {
     try {
-      await fetch(apiUrl('/api/notifications/send-email'), {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      try {
+        const token = localStorage.getItem('swapsutraSessionToken') || '';
+        if (token) headers.Authorization = `Bearer ${token}`;
+      } catch { /* storage can be unavailable in private browsing */ }
+      const response = await fetch(apiUrl('/api/notifications/send-email'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           to: toEmail,
           subject,
-          html: htmlContent
+          html: htmlContent,
+          senderEmail,
+          entityId
         })
       });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.success) throw new Error(result?.message || 'Email notification was not accepted.');
     } catch (e) {
       console.error('Failed to send email notification request:', e);
     }

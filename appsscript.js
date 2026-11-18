@@ -7053,6 +7053,7 @@ function doPostHandler_(e) {
     if (action === 'respondToBookRequest') result = respondToBookRequest(data);
     if (action === 'updateBookRequestStatus') result = updateBookRequestStatus(data);
     if (action === 'createNotification') result = handleCreateNotificationApi(data);
+    if (action === 'sendNotificationEmail') result = sendNotificationEmail(data);
     if (action === 'markNotificationRead') result = markNotificationRead(data);
     if (action === 'markNotificationsReadBulk') result = markNotificationsReadBulk(data);
     if (action === 'clearNotification') result = clearNotification(data);
@@ -8685,6 +8686,31 @@ function handleCreateNotificationApi(data) {
     }
   } catch (e) {
     return { success: false, message: "Unable to create notification.", error: e.toString() };
+  }
+}
+
+/** Sends one notification email for an event the signed-in reader may create. */
+function sendNotificationEmail(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    const recipient = normalizeEmail(data && data.toEmail);
+    const subject = String((data && data.subject) || '').trim().slice(0, 180);
+    const html = String((data && data.htmlBody) || '').trim();
+    const entityId = String((data && data.entityId) || '').slice(0, 120);
+    const declaredSender = normalizeEmail(data && data.senderEmail);
+    if (!caller || !recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) return { success: false, error: 'INVALID_RECIPIENT', message: 'A valid signed-in sender and recipient are required.' };
+    if (!isAuthenticatedAdmin() && declaredSender && declaredSender !== caller) return { success: false, error: 'SENDER_MISMATCH', message: 'Notification sender does not match the signed-in reader.' };
+    if (!isAuthenticatedAdmin() && !canNotifyReader_(caller, recipient, entityId)) return { success: false, error: 'NOT_ALLOWED', message: 'You can only notify readers you are exchanging or talking with.' };
+    if (!subject || !html || html.length > 30000) return { success: false, error: 'INVALID_EMAIL', message: 'Notification email content is missing or too large.' };
+    const safeHtml = html
+      .replace(/<\s*(script|iframe|object|embed|form)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+      .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+      .replace(/(href|src)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi, '$1="#"');
+    sendSwapSutraEmail({ to: recipient, subject: subject, htmlBody: safeHtml });
+    return { success: true, message: 'Notification email sent.' };
+  } catch (e) {
+    Logger.log('sendNotificationEmail failed: ' + e);
+    return { success: false, error: 'EMAIL_SEND_FAILED', message: 'Could not send notification email.' };
   }
 }
 
@@ -13530,6 +13556,14 @@ function buildNewsletterHtml(data) {
 
   // Process body text to support trust cards and highlighting
   const formattedBody = formatNewsletterBody(data.bodyContent);
+  const mascotSection = `
+    <div style="text-align:center; margin:32px 0 8px; padding:24px 16px; border:1px solid #EBE3D5; border-radius:16px; background:#fffdf9;">
+      <a href="https://swapsutra.in/mascot-hi.html" style="display:inline-block; color:#4A3B32; text-decoration:none;">
+        <img src="https://swapsutra.in/swapsutra-fox-mascot.webp" width="150" alt="Tap to say hi to the SwapSutra fox" style="display:block; width:150px; max-width:100%; height:auto; margin:0 auto 10px; border:0;">
+        <span style="color:#8E4A59; font:italic 16px Georgia,serif;">Tap our little fox to say hi</span>
+      </a>
+    </div>
+  `;
 
   return `
     <!DOCTYPE html>
@@ -13564,7 +13598,9 @@ function buildNewsletterHtml(data) {
               ${formattedBody}
             </div>
             ${highlightSection}
+
             ${ctaSection}
+            ${mascotSection}
           </div>
           <div class="footer">
             <div style="margin-bottom: 40px;">

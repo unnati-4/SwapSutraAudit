@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f9f6f0">
+  <title>A little hello from SwapSutra</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; color: #4a3b32; background: #f9f6f0; font-family: Georgia, serif; text-align: center; }
+    main { width: min(100%, 520px); padding: 28px 22px 34px; border: 1px solid #e9dfd3; border-radius: 24px; background: #fffdf9; box-shadow: 0 18px 50px #4a3b3214; }
+    .brand { color: #8e4a59; font: 700 12px/1.4 Arial, sans-serif; letter-spacing: .24em; }
+    button { display: block; width: 100%; margin: 16px auto 6px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+    img { display: block; width: min(100%, 390px); height: auto; margin: auto; transform-origin: 50% 82%; }
+    .wave img { animation: hello .9s ease-in-out 2; }
+    @keyframes hello { 0%,100% { transform: rotate(0) translateY(0); } 20% { transform: rotate(-3deg) translateY(-5px); } 45% { transform: rotate(3deg) translateY(-3px); } 70% { transform: rotate(-2deg) translateY(-4px); } }
+    .bubble { min-height: 34px; margin: 0; color: #8e4a59; font-size: 24px; font-style: italic; }
+    .hint { margin: 12px 0 0; color: #7c6e65; font: 13px/1.6 Arial, sans-serif; }
+    a { color: #8e4a59; }
+    @media (prefers-reduced-motion: reduce) { .wave img { animation: none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">SWAPSUTRA</div>
+    <button id="mascot" type="button" aria-label="Tap to say hello to the SwapSutra fox">
+      <img src="/swapsutra-fox-mascot.webp" alt="SwapSutra's cozy reading fox mascot">
+    </button>
+    <p class="bubble" id="hello" aria-live="polite">Hii, reader!</p>
+    <p class="hint">A little hello from your reading community.<br><a href="/">Come back to SwapSutra</a></p>
+  </main>
+  <script>
+    const mascot = document.getElementById('mascot');
+    const hello = document.getElementById('hello');
+    function wave() {
+      mascot.classList.remove('wave');
+      void mascot.offsetWidth;
+      mascot.classList.add('wave');
+      hello.textContent = 'Hii, reader!';
+    }
+    mascot.addEventListener('click', wave);
+    wave();
+  </script>
+</body>
+</html>
