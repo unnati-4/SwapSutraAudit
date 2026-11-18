@@ -8698,20 +8698,10 @@ function sendNotificationEmail(data) {
     const html = String((data && data.htmlBody) || '').trim();
     const entityId = String((data && data.entityId) || '').slice(0, 120);
     const declaredSender = normalizeEmail(data && data.senderEmail);
-    if (!caller || !recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
-      return { success: false, error: 'INVALID_RECIPIENT', message: 'A valid signed-in sender and recipient are required.' };
-    }
-    if (!isAuthenticatedAdmin() && declaredSender && declaredSender !== caller) {
-      return { success: false, error: 'SENDER_MISMATCH', message: 'Notification sender does not match the signed-in reader.' };
-    }
-    if (!isAuthenticatedAdmin() && !canNotifyReader_(caller, recipient, entityId)) {
-      return { success: false, error: 'NOT_ALLOWED', message: 'You can only notify readers you are exchanging or talking with.' };
-    }
-    if (!subject || !html || html.length > 30000) {
-      return { success: false, error: 'INVALID_EMAIL', message: 'Notification email content is missing or too large.' };
-    }
-    // Email bodies are built by the app, but strip executable markup and
-    // event handlers at the server boundary before handing them to mail.
+    if (!caller || !recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) return { success: false, error: 'INVALID_RECIPIENT', message: 'A valid signed-in sender and recipient are required.' };
+    if (!isAuthenticatedAdmin() && declaredSender && declaredSender !== caller) return { success: false, error: 'SENDER_MISMATCH', message: 'Notification sender does not match the signed-in reader.' };
+    if (!isAuthenticatedAdmin() && !canNotifyReader_(caller, recipient, entityId)) return { success: false, error: 'NOT_ALLOWED', message: 'You can only notify readers you are exchanging or talking with.' };
+    if (!subject || !html || html.length > 30000) return { success: false, error: 'INVALID_EMAIL', message: 'Notification email content is missing or too large.' };
     const safeHtml = html
       .replace(/<\s*(script|iframe|object|embed|form)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
       .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
@@ -10962,9 +10952,13293 @@ function finishListingPhotos_(sheet, headers, row, rowIndex, bookId, data) {
 // Server-side allow-lists. The client says what it thinks a file is; this
 // is where that claim stops being taken on faith. A caller posting straight
 // to the API can put any string in mimeType, so the declared type is
-// checked against a list AND against the data URI the bytes 
-... 616372 bytes omitted ...
-tch (e) { return null; }
+// checked against a list AND against the data URI the bytes arrived in.
+var BOOK_MEDIA_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+var BOOK_MEDIA_VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v', 'video/3gpp'];
+var BOOK_MEDIA_MAX_IMAGE_BYTES = 5 * 1024 * 1024;    // the client downscales to ~1MB
+var BOOK_MEDIA_MAX_VIDEO_BYTES = 40 * 1024 * 1024;
+
+/**
+ * Is this a media URL SwapSutra itself issued?
+ *
+ * Two shapes are accepted: the Supabase storage bucket the browser uploads
+ * into, and the Drive links this script produced before that existed, so
+ * every listing already in the sheet keeps working.
+ */
+function isTrustedBookMediaUrl(url) {
+  const value = String(url || '');
+  const supabaseUrl = getScriptSetting('SUPABASE_URL');
+  if (supabaseUrl && value.indexOf(
+        String(supabaseUrl).replace(/\/+$/, '') + '/storage/v1/object/public/book-media/') === 0) {
+    return true;
+  }
+  return /^https:\/\/(drive|docs)\.google\.com\//i.test(value);
+}
+
+/** Base64 payload length → decoded byte count, without decoding it. */
+function base64ByteLength(b64) {
+  const body = String(b64 || '').split(',').pop() || '';
+  const padding = (body.match(/=+$/) || [''])[0].length;
+  return Math.max(0, Math.floor(body.length * 3 / 4) - padding);
+}
+
+/**
+ * Checks one submitted media object: is it there, is it the right KIND of
+ * thing, and is it within the size limit.
+ */
+function inspectBookMedia(obj, spec) {
+  if (!obj) return { ok: false, reason: spec.prompt };
+
+  // A URL is not a file. If a caller sends one where bytes belong, it is
+  // refused rather than trusted: an unchecked URL means a listing whose
+  // "photograph of the copy" is a link to somebody else's website.
+  const asUrl = typeof obj === 'string' ? obj : String(obj.url || obj.publicUrl || '');
+  if (asUrl && /^https?:\/\//i.test(asUrl)) {
+    return { ok: false, reason: 'Please choose the file from your device rather than pasting a link.' };
+  }
+
+  const raw = obj.base64Data || obj.base64 || '';
+  if (typeof raw !== 'string' || !raw) return { ok: false, reason: spec.prompt };
+
+  // The type is taken from the data URI the bytes actually came in, and
+  // only falls back to the declared mimeType when there is no URI prefix.
+  // Trusting the declared value alone is what lets a caller post a video
+  // as "image/png" or an executable as either.
+  let declared = String(obj.mimeType || '').toLowerCase();
+  const uriMatch = raw.indexOf('data:') === 0 ? raw.split(',')[0].match(/:(.*?);/) : null;
+  const fromUri = uriMatch ? String(uriMatch[1]).toLowerCase() : '';
+  const contentType = fromUri || declared;
+
+  if (!contentType) {
+    return { ok: false, reason: 'We could not tell what kind of file that is. Please choose it again.' };
+  }
+  if (fromUri && declared && fromUri !== declared) {
+    return { ok: false, reason: 'That file does not match the type it claims to be.' };
+  }
+
+  const allowed = spec.kind === 'video' ? BOOK_MEDIA_VIDEO_TYPES : BOOK_MEDIA_IMAGE_TYPES;
+  if (allowed.indexOf(contentType) === -1) {
+    return {
+      ok: false,
+      reason: spec.kind === 'video'
+        ? 'The inside-the-book file has to be a video (MP4, MOV or WebM).'
+        : 'That has to be an image (JPEG, PNG, WebP or HEIC).'
+    };
+  }
+
+  const bytes = base64ByteLength(raw);
+  const cap = spec.kind === 'video' ? BOOK_MEDIA_MAX_VIDEO_BYTES : BOOK_MEDIA_MAX_IMAGE_BYTES;
+  if (bytes > cap) {
+    return {
+      ok: false,
+      reason: spec.kind === 'video'
+        ? 'That video is too large. Please keep it under 40 MB.'
+        : 'That image is too large. Please keep it under 5 MB.'
+    };
+  }
+
+  return { ok: true, contentType: contentType, bytes: bytes, base64: raw,
+           fileName: obj.fileName || (spec.field + (spec.kind === 'video' ? '.mp4' : '.jpg')) };
+}
+
+/**
+ * All four requirements, answered independently.
+ *
+ * Returns every missing item rather than the first, because a reader who
+ * is told one thing at a time has to submit four times to discover four
+ * problems.
+ */
+function validateRequiredBookMedia(data, opts) {
+  // opts.onlySubmitted: "finish your listing" — the owner is adding the
+  // photos that were missing, so no group is required; each file sent is
+  // still checked, and at least one has to be usable.
+  const onlySubmitted = !!(opts && opts.onlySubmitted);
+  const accepted = {};
+  const rejected = {};
+
+  // Every submitted item is inspected first. A file that was supplied but
+  // is the wrong type or too large must be reported as a problem with THAT
+  // file, not silently treated as "not supplied" — otherwise a reader who
+  // attached a 90 MB video is told to attach a video.
+  REQUIRED_BOOK_MEDIA.forEach(function (spec) {
+    const supplied = data && data[spec.payload];
+    if (!supplied) return;
+    const result = inspectBookMedia(supplied, spec);
+    if (result.ok) accepted[spec.field] = result;
+    else rejected[spec.field] = result.reason;
+  });
+
+  const missing = [];
+  const messages = [];
+
+  BOOK_MEDIA_GROUPS.forEach(function (group) {
+    const satisfied = group.fields.some(function (f) { return accepted[f]; });
+    if (satisfied) return;
+
+    // Nothing usable for this requirement. If something WAS sent for it and
+    // was rejected, the reader hears why; otherwise they hear what is
+    // missing.
+    const withReason = group.fields.filter(function (f) { return rejected[f]; });
+
+    // An optional group that was simply left empty is not a problem — that
+    // is what optional means. One the reader tried to fill and we refused
+    // still gets said out loud, because dropping a file somebody chose
+    // without telling them is worse than asking them to try again.
+    if ((onlySubmitted || !group.required) && !withReason.length) return;
+
+    group.fields.forEach(function (f) { missing.push(f); });
+    messages.push(withReason.length ? rejected[withReason[0]] : group.prompt);
+  });
+
+  if (missing.length) {
+    return { ok: false, missing: missing, messages: messages, message: messages.join(' ') };
+  }
+  if (onlySubmitted && !Object.keys(accepted).length) {
+    return { ok: false, missing: [], messages: ['Please choose a photo or video to add.'],
+             message: 'Please choose a photo or video to add.' };
+  }
+
+  // The legacy imageUrls array is still written so every existing screen
+  // keeps working. It is a copy of the truth now, not the truth.
+  const legacy = REQUIRED_BOOK_MEDIA
+    .filter(function (spec) { return spec.kind === 'image' && accepted[spec.field]; })
+    .map(function (spec) {
+      const item = accepted[spec.field];
+      return { base64Data: item.base64, mimeType: item.contentType, fileName: item.fileName };
+    });
+
+  return { ok: true, missing: [], messages: [], accepted: accepted, imagesForLegacyArray: legacy };
+}
+
+/**
+ * Uploads the four required media, each to its own known slot.
+ *
+ * Returns a map of field name to URL, so the caller can write four
+ * columns. uploadBookImages below returns a joined string instead, which
+ * is exactly why it cannot answer "where is the back cover".
+ */
+function uploadRequiredBookMedia(bookId, accepted) {
+  const out = { folderId: '', urls: {} };
+  try {
+    const folder = getBookUploadFolder().createFolder(bookId);
+    out.folderId = folder.getId();
+
+    REQUIRED_BOOK_MEDIA.forEach(function (spec) {
+      const item = accepted[spec.field];
+      if (!item) return;
+      try {
+        const body = item.base64.split(',').pop();
+        const blob = Utilities.newBlob(Utilities.base64Decode(body), item.contentType, item.fileName);
+        const file = folder.createFile(blob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        out.urls[spec.field] = file.getUrl();
+      } catch (err) {
+        Logger.log('Failed to upload ' + spec.field + ' for ' + bookId + ': ' + err);
+      }
+    });
+  } catch (e) {
+    Logger.log('Critical error in uploadRequiredBookMedia: ' + e.toString());
+  }
+  return out;
+}
+
+function uploadBookImages(bookId, images) {
+  let urls = [];
+  let folder;
+  try {
+    Logger.log("Starting image upload for Book ID: " + bookId + ". Total images: " + images.length);
+    // Every Drive call here is a round trip, and this runs while the
+    // reader watches a spinner. getFoldersByName scans Drive, so it is
+    // resolved once per request rather than once per listing.
+    const parentFolder = getBookUploadFolder();
+    folder = parentFolder.createFolder(bookId);
+    Logger.log("Created folder: " + folder.getName() + " (ID: " + folder.getId() + ")");
+    
+    images.forEach((imgObj, index) => {
+      try {
+        const base64Data = imgObj.base64Data || imgObj.base64 || imgObj;
+        if (typeof base64Data !== 'string') {
+          Logger.log("Skipping image at index " + index + ": base64Data is not a string.");
+          return;
+        }
+
+        const split = base64Data.split(',');
+        let contentType = imgObj.mimeType || "image/png";
+        
+        // If it's a data URI, extract content type if not provided
+        if (split.length > 1 && base64Data.includes('data:')) {
+           const match = split[0].match(/:(.*?);/);
+           if (match) contentType = match[1];
+        }
+
+        const base64String = split.length > 1 ? split[1] : split[0];
+        const data = Utilities.base64Decode(base64String);
+        const fileName = imgObj.fileName || `book_image_${index}.png`;
+        
+        const blob = Utilities.newBlob(data, contentType, fileName);
+        const file = folder.createFile(blob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        urls.push(file.getUrl());
+        Logger.log("Successfully uploaded image " + (index + 1) + ": " + fileName + " (ID: " + file.getId() + ")");
+      } catch (innerError) {
+        Logger.log("Error uploading individual image at index " + index + ": " + innerError.toString());
+      }
+    });
+  } catch (e) {
+    Logger.log("Critical error in uploadBookImages: " + e.toString());
+  }
+  
+  const finalUrls = urls.join('|');
+  Logger.log("Upload completed. Saved " + urls.length + " images. URLs: " + finalUrls);
+  return { imageUrls: finalUrls, folderId: folder ? folder.getId() : "" };
+}
+
+function recalculateBooksListedCount(email, knownCount) {
+  const normEmail = normalizeEmail(email);
+  const bookSheet = getOrCreateSheet('Books', []);
+  const bookData = bookSheet.getDataRange().getValues();
+  if (bookData.length <= 1) return 0;
+  
+  const headers = bookData[0];
+  const emailIdx = headers.indexOf('ownerEmail');
+  const statusIdx = headers.indexOf('status');
+  const count = bookData.slice(1).filter(row => {
+    if (normalizeEmail(row[emailIdx]) !== normEmail) return false;
+    const status = statusIdx !== -1 ? String(row[statusIdx] || '').toLowerCase() : '';
+    // 'rejected' is excluded alongside removed/inactive. A listing that was
+    // turned down — for photo quality, say — is not occupying a slot in the
+    // Library, so charging it against the reader's 10-book allowance meant
+    // they could hit "You've reached your 10-book trial listing limit" while
+    // having nothing visible to show for it.
+    return status !== 'removed' && status !== 'inactive' && status !== 'rejected';
+  }).length;
+
+  // Nothing to write when the stored count is already right — the write
+  // (and the extra full read of Subscriptions) ran on every membership
+  // check and slowed down every "Verifying your account…".
+  if (knownCount !== undefined && knownCount !== null && knownCount !== '' && Number(knownCount) === count) return count;
+  
+  // Sync to Subscriptions
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const subData = subSheet.getDataRange().getValues();
+  const subHeaders = subData[0];
+  const subEmailIdx = subHeaders.indexOf('email');
+  const subCountIdx = subHeaders.indexOf('booksListedCount');
+  
+  if (subEmailIdx !== -1 && subCountIdx !== -1) {
+    for (let i = 1; i < subData.length; i++) {
+      if (normalizeEmail(subData[i][subEmailIdx]) === normEmail) {
+        subSheet.getRange(i + 1, subCountIdx + 1).setValue(count);
+        break;
+      }
+    }
+  }
+  return count;
+}
+
+// =====================================================================
+// OTP THROTTLING
+// ---------------------------------------------------------------------
+// server.ts had express-rate-limit rules (10 login attempts/hour), but
+// production routes /api/swapsutra to api/swapsutra.ts, so they never
+// ran — leaving unlimited OTP emails to any address and unlimited
+// guesses at a six-digit code. The limits belong here instead: this is
+// the one choke point that cannot be bypassed by calling the Apps Script
+// deployment directly, and the OTP sheet already holds the history
+// needed to enforce them.
+// =====================================================================
+
+/* ── How long a login code stays valid ────────────────────────────────
+   Was a flat 10 minutes. Now 50 seconds by default, and tunable from the
+   Apps Script UI (Project Settings → Script Properties → OTP_TTL_SECONDS)
+   so the window can be changed without a redeploy.
+
+   Read this before shortening it further. A code is only usable once it
+   has actually landed in someone's inbox, and that is not instant:
+   MailApp itself takes about a second to hand the message off, Gmail to
+   Gmail is typically a few seconds, and Gmail to another provider — or
+   anything that greylists — routinely takes 30 seconds to a couple of
+   minutes. At 30 seconds a meaningful share of real readers would be
+   typing a code that died before they saw it, so the floor here is 30
+   and the honest sweet spot is 120–180.
+
+   A short window is only safe because of the three things that go with
+   it: the code screen counts down, an expired code says so specifically
+   instead of reading as "wrong code", and asking for a new one is one
+   tap and barely throttled. Shorten the window without those and you
+   have not tightened security, you have broken login.
+   ──────────────────────────────────────────────────────────────────── */
+const OTP_TTL_DEFAULT_SECONDS = 50;
+const OTP_TTL_MIN_SECONDS = 30;
+const OTP_TTL_MAX_SECONDS = 600;
+
+function getOtpTtlSeconds() {
+  // Cached per request like the QA flag: sendOTP asks for the window and
+  // then asks again to word the email, and one unchanging setting should
+  // not cost two round trips on the login path we just made fast.
+  if (__SS_OTP_TTL__ !== null && __SS_OTP_TTL__ !== undefined) return __SS_OTP_TTL__;
+  let configured = OTP_TTL_DEFAULT_SECONDS;
+  try {
+    const raw = getScriptSetting("OTP_TTL_SECONDS");
+    const parsed = parseInt(String(raw || ""), 10);
+    if (!isNaN(parsed) && parsed > 0) configured = parsed;
+  } catch (err) {
+    Logger.log("OTP_TTL_SECONDS unreadable, using default: " + err);
+  }
+  __SS_OTP_TTL__ = Math.min(OTP_TTL_MAX_SECONDS, Math.max(OTP_TTL_MIN_SECONDS, configured));
+  return __SS_OTP_TTL__;
+}
+
+function getOtpTtlMs() {
+  return getOtpTtlSeconds() * 1000;
+}
+
+/** "60 seconds" / "2 minutes" — for the email and the error copy. */
+function describeOtpTtl() {
+  const seconds = getOtpTtlSeconds();
+  if (seconds < 120) return seconds + " seconds";
+  const minutes = Math.round(seconds / 60);
+  return minutes + " minute" + (minutes === 1 ? "" : "s");
+}
+
+/* ── Two limits, two windows ──────────────────────────────────────────
+   These used to share one 60-minute window, which made them look like
+   one knob. They are not: they defend against different things and must
+   be tuned separately.
+
+   SENDS  — how many codes may be mailed to one address. This exists to
+            stop somebody mailbombing a victim's inbox. Four per fifteen
+            minutes: the first code plus three resends, after which the
+            address rests until the oldest of those four ages out.
+
+   GUESSES — how many wrong codes may be tried. THIS is the account
+            takeover control, and it stays at eight per SIXTY minutes.
+            Folding it into the fifteen-minute window would have quietly
+            quadrupled an attacker's budget from 8 guesses an hour to 32,
+            as an invisible side effect of a resend-policy change.
+   ──────────────────────────────────────────────────────────────────── */
+const OTP_SENDS_PER_WINDOW_DEFAULT = 4;      // 1 original + 3 resends
+const OTP_SEND_WINDOW_MINUTES_DEFAULT = 15;
+
+function getOtpMaxSends() {
+  // Cached per request, like every other script setting on this path —
+  // the throttle check and the success response both ask for it.
+  if (__SS_OTP_MAX_SENDS__ !== null && __SS_OTP_MAX_SENDS__ !== undefined) return __SS_OTP_MAX_SENDS__;
+  let value = OTP_SENDS_PER_WINDOW_DEFAULT;
+  try {
+    const raw = getScriptSetting("OTP_MAX_SENDS");
+    const parsed = parseInt(String(raw || ""), 10);
+    if (!isNaN(parsed) && parsed > 0) value = parsed;
+  } catch (err) {
+    Logger.log("OTP_MAX_SENDS unreadable, using default: " + err);
+  }
+  // At least two, so a single undelivered email can never be a dead end.
+  __SS_OTP_MAX_SENDS__ = Math.min(20, Math.max(2, value));
+  return __SS_OTP_MAX_SENDS__;
+}
+
+function getOtpSendWindowMs() {
+  // Same: counting recent sends and computing the retry instant both
+  // need it, and it cannot change mid-request.
+  if (__SS_OTP_SEND_WINDOW__ !== null && __SS_OTP_SEND_WINDOW__ !== undefined) return __SS_OTP_SEND_WINDOW__;
+  let minutes = OTP_SEND_WINDOW_MINUTES_DEFAULT;
+  try {
+    const raw = getScriptSetting("OTP_SEND_WINDOW_MINUTES");
+    const parsed = parseInt(String(raw || ""), 10);
+    if (!isNaN(parsed) && parsed > 0) minutes = parsed;
+  } catch (err) {
+    Logger.log("OTP_SEND_WINDOW_MINUTES unreadable, using default: " + err);
+  }
+  __SS_OTP_SEND_WINDOW__ = Math.min(120, Math.max(1, minutes)) * 60 * 1000;
+  return __SS_OTP_SEND_WINDOW__;
+}
+
+const OTP_MAX_FAILED_ATTEMPTS = 8;                        // per address, per hour
+const OTP_FAILED_WINDOW_MS = 60 * 60 * 1000;              // deliberately NOT the send window
+
+// Kept as an alias so nothing outside this block breaks; the send path
+// and the guess path now each name the window they actually mean.
+const OTP_THROTTLE_WINDOW_MS = OTP_FAILED_WINDOW_MS;
+
+// Same schema the rest of the OTP code already uses — failed attempts
+// are tracked in their own OTPAttempts sheet rather than widening this
+// one, so no existing OTP row needs migrating.
+function getOtpSheet() {
+  return getOrCreateSheet('OTP', ["id", "email", "otp", "expiresAt", "verified", "createdAt"]);
+}
+
+/**
+ * How many rows at the end of a log sheet could possibly fall inside the
+ * one-hour throttle window. Both OTP sheets are append-only and in time
+ * order, so a row further back than this cannot be recent — and reading
+ * the whole sheet to count three rows was the single most expensive step
+ * in the login path. At SwapSutra's scale this is far more than an hour
+ * of site-wide traffic; the purge below keeps the sheets near this size
+ * anyway.
+ */
+const OTP_RECENT_ROWS_SCAN = 1000;
+
+/** The last N rows of a sheet, as objects, without reading the whole thing. */
+function readRecentRows(sheet, scanLimit) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { headers: [], rows: [] };
+
+  // A sheet small enough to read whole costs one round trip that way;
+  // splitting it into header + tail reads would cost three.
+  if (lastRow - 1 <= scanLimit) {
+    const values = sheet.getDataRange().getValues();
+    return {
+      headers: values[0].map(h => String(h).trim()),
+      rows: values.slice(1)
+    };
+  }
+
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h).trim());
+  const startRow = lastRow - scanLimit + 1;
+  const rows = sheet.getRange(startRow, 1, lastRow - startRow + 1, lastCol).getValues();
+  return { headers: headers, rows: rows };
+}
+
+/**
+ * Codes issued to this address inside the send window, plus the instant
+ * the oldest of them ages out.
+ *
+ * That second value is the point. "Please wait 15 minutes" is almost
+ * always wrong — a reader who used their last code fourteen minutes ago
+ * waits one, not fifteen — and being told to wait longer than you have
+ * to is the kind of small lie that makes people give up on signing in.
+ * Returning `oldestAt` lets the caller say exactly how long is left.
+ */
+function countRecentOtpSends(normEmail) {
+  const empty = { count: 0, oldestAt: 0 };
+  try {
+    const sheet = getOtpSheet();
+    const { headers, rows } = readRecentRows(sheet, OTP_RECENT_ROWS_SCAN);
+    if (!rows.length) return empty;
+    const emailIdx = headers.indexOf('email');
+    const createdIdx = headers.indexOf('createdAt');
+    if (emailIdx === -1 || createdIdx === -1) return empty;
+
+    const cutoff = Date.now() - getOtpSendWindowMs();
+    let count = 0;
+    let oldestAt = 0;
+    for (let i = 0; i < rows.length; i++) {
+      if (normalizeEmail(rows[i][emailIdx]) !== normEmail) continue;
+      const created = new Date(rows[i][createdIdx]);
+      if (isNaN(created.getTime()) || created.getTime() < cutoff) continue;
+      count++;
+      if (!oldestAt || created.getTime() < oldestAt) oldestAt = created.getTime();
+    }
+    return { count: count, oldestAt: oldestAt };
+  } catch (err) {
+    // Fail open on a counting error rather than locking a real reader
+    // out of login; the guess limit is the harder guarantee.
+    Logger.log("countRecentOtpSends failed: " + err);
+    return empty;
+  }
+}
+
+/** "in about 12 minutes" / "in under a minute" — never a flat "15 minutes". */
+function describeRetryWait(seconds) {
+  if (seconds <= 60) return "in under a minute";
+  const minutes = Math.ceil(seconds / 60);
+  return "in about " + minutes + " minute" + (minutes === 1 ? "" : "s");
+}
+
+/**
+ * Drops OTP rows that are long past both their expiry and the throttle
+ * window. Rows are appended in time order, so everything stale sits in
+ * one block at the top and goes in a SINGLE deleteRows call.
+ *
+ * Nothing depends on this running — every read path is bounded by
+ * OTP_RECENT_ROWS_SCAN regardless. It exists so the sheet stops growing
+ * without limit, and so the counts above stay exact rather than merely
+ * bounded. Safe on a daily trigger; safe never to run.
+ */
+const OTP_ROW_RETENTION_MS = 24 * 60 * 60 * 1000;
+const OTP_PURGE_TRIGGER_ROWS = 2000;
+
+function purgeStaleOtpRows(sheetName, headerSet) {
+  try {
+    const sheet = getOrCreateSheet(sheetName, headerSet);
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return 0;
+
+    const lastCol = Math.max(sheet.getLastColumn(), 1);
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h).trim());
+    const createdIdx = headers.indexOf('createdAt');
+    if (createdIdx === -1) return 0;
+
+    const cutoff = Date.now() - OTP_ROW_RETENTION_MS;
+    const created = sheet.getRange(2, createdIdx + 1, lastRow - 1, 1).getValues();
+
+    // Walk down while rows are stale; the first fresh row ends the block.
+    // A row with an unreadable date stops the walk rather than being
+    // deleted on a guess.
+    let staleCount = 0;
+    for (let i = 0; i < created.length; i++) {
+      const when = new Date(created[i][0]);
+      if (isNaN(when.getTime()) || when.getTime() >= cutoff) break;
+      staleCount++;
+    }
+    if (staleCount <= 0) return 0;
+
+    sheet.deleteRows(2, staleCount);
+    return staleCount;
+  } catch (err) {
+    Logger.log("purgeStaleOtpRows(" + sheetName + ") failed: " + err);
+    return 0;
+  }
+}
+
+/** Housekeeping entry point for a daily Apps Script trigger. */
+function purgeStaleOtpSheets() {
+  return {
+    success: true,
+    otpRowsRemoved: purgeStaleOtpRows('OTP', ["id", "email", "otp", "expiresAt", "verified", "createdAt"]),
+    attemptRowsRemoved: purgeStaleOtpRows('OTPAttempts', ["email", "outcome", "createdAt"])
+  };
+}
+
+/** Failed verification attempts against this address within the last hour. */
+function countRecentFailedOtpAttempts(normEmail) {
+  try {
+    const sheet = getOrCreateSheet('OTPAttempts', ["email", "outcome", "createdAt"]);
+    const { headers, rows } = readRecentRows(sheet, OTP_RECENT_ROWS_SCAN);
+    if (!rows.length) return 0;
+    const emailIdx = headers.indexOf('email');
+    const outcomeIdx = headers.indexOf('outcome');
+    const createdIdx = headers.indexOf('createdAt');
+    if (emailIdx === -1 || createdIdx === -1) return 0;
+    // The GUESS window, explicitly — never the (shorter) send window.
+    const cutoff = Date.now() - OTP_FAILED_WINDOW_MS;
+    let count = 0;
+    for (let i = 0; i < rows.length; i++) {
+      if (normalizeEmail(rows[i][emailIdx]) !== normEmail) continue;
+      if (String(rows[i][outcomeIdx] || '').toLowerCase() !== 'failed') continue;
+      const created = new Date(rows[i][createdIdx]);
+      if (!isNaN(created.getTime()) && created.getTime() >= cutoff) count++;
+    }
+    return count;
+  } catch (err) {
+    Logger.log("countRecentFailedOtpAttempts failed: " + err);
+    return 0;
+  }
+}
+
+function recordOtpAttempt(normEmail, outcome) {
+  try {
+    const sheet = getOrCreateSheet('OTPAttempts', ["email", "outcome", "createdAt"]);
+    sheet.appendRow([normEmail, outcome, new Date()]);
+  } catch (err) {
+    Logger.log("recordOtpAttempt failed: " + err);
+  }
+}
+
+function sendOTP(email, purpose) {
+  const normEmail = normalizeEmail(email);
+  if (!normEmail) {
+    return { success: false, code: "EMAIL_REQUIRED", message: "Email is required." };
+  }
+
+  // Throttle before doing anything else, so a flood costs one sheet read
+  // rather than an email send. Protects readers from being mailbombed
+  // with codes they didn't ask for as much as it protects the account.
+  const sendHistory = countRecentOtpSends(normEmail);
+  const maxSends = getOtpMaxSends();
+  if (sendHistory.count >= maxSends) {
+    const readyAt = sendHistory.oldestAt + getOtpSendWindowMs();
+    const waitSeconds = Math.max(1, Math.ceil((readyAt - Date.now()) / 1000));
+    logActivity(normEmail, "Login OTP Throttled", "Too many codes requested within the send window", "Failed", "Auth");
+    return {
+      success: false,
+      code: "OTP_RATE_LIMITED",
+      // The exact wait, not a flat window. See describeRetryWait.
+      message: `That's ${maxSends} codes already. You can ask for another ${describeRetryWait(waitSeconds)} — meanwhile, check your inbox and spam folder for the ones we sent.`,
+      retryAfterSeconds: waitSeconds,
+      retryAt: new Date(readyAt).toISOString()
+    };
+  }
+
+  // RULE 2 / RULE 4: A login OTP must never be sent to an email that has
+  // not registered yet. This is the backend enforcement point that makes
+  // it impossible to bypass the Login/Sign Up gate by calling this action
+  // directly. TEST_QA emails and the authorized admin email are exempt so
+  // QA tooling and the site owner's own login never get locked out.
+  // Data predicate, not the session gate: at this point in the login
+  // handshake there is no session yet, so this must ask "is the address
+  // being signed in the admin's own address" — otherwise the site owner
+  // could be locked out of their own login.
+  const isQaLogin = isTestQAModeEnabled() && isTestQAEmail(normEmail);
+  const isExemptAuthEmail = isQaLogin || isAdminEmail(normEmail);
+  // Partners (9 Oct 2026) register separately from readers: a bookstore,
+  // author, publisher or promoter verifies their email on /partners before
+  // they have an account. The session it gives can only apply as a partner
+  // (everything else still checks membership).
+  const isPartnerSignup = String(purpose || '') === 'partner';
+  if (!isExemptAuthEmail && !isPartnerSignup && !emailExistsInUsersSheet(normEmail)) {
+    logActivity(normEmail, "Login OTP Blocked", "No registered SwapSutra account for this email", "Failed", "Auth");
+    return {
+      success: false,
+      code: "EMAIL_NOT_REGISTERED",
+      message: "No SwapSutra account was found with these details. Please Sign Up first."
+    };
+  }
+
+  if (isQaLogin) {
+    const expiry = new Date(new Date().getTime() + 60 * 60000);
+    const sheet = getOtpSheet();
+    sheet.appendRow([TEST_QA_PREFIX + generateId('OTP'), normEmail, TEST_QA_FIXED_OTP, expiry, "No", new Date()]);
+    Logger.log(JSON.stringify({ event: "TEST_QA_OTP_CREATED", email: normEmail, otp: TEST_QA_FIXED_OTP }));
+    return {
+      success: true,
+      message: "TEST_QA OTP ready.",
+      testMode: true,
+      expiresAt: expiry.toISOString(),
+      expiresInSeconds: 3600
+    };
+  }
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const ttlMs = getOtpTtlMs();
+  const expiry = new Date(new Date().getTime() + ttlMs);
+
+  const sheet = getOtpSheet();
+  sheet.appendRow([generateId('OTP'), normEmail, otp, expiry, "No", new Date()]);
+
+  // Keep the log sheet from growing without limit, but only bother when
+  // it has actually got large — a purge on every login would trade the
+  // cost we just removed for a different one.
+  if (sheet.getLastRow() > OTP_PURGE_TRIGGER_ROWS) {
+    purgeStaleOtpRows('OTP', ["id", "email", "otp", "expiresAt", "verified", "createdAt"]);
+  }
+
+  try {
+    const content = `
+      <p>Hello Reader,</p>
+      <p>Your verification code for SwapSutra is: <strong style="font-size: 24px; color: #C5A059;">${otp}</strong></p>
+      <p>This code expires ${describeOtpTtl()} after it was sent, so please enter it soon. If it runs out, ask for a new one — it only takes a moment.</p>
+    `;
+    const htmlBody = getBrandedEmailTemplate("Verification Code", content);
+    sendSwapSutraEmail({ to: normEmail, subject: "Your SwapSutra Login Code", htmlBody: htmlBody });
+    // expiresAt drives the countdown on the code screen. Without it the
+    // reader has no way to know a sixty-second code is about to die.
+    return {
+      success: true,
+      message: "OTP sent",
+      expiresAt: expiry.toISOString(),
+      expiresInSeconds: Math.round(ttlMs / 1000),
+      // sendHistory was counted BEFORE this row was written, so the one
+      // just sent is included by the +1. Lets the screen say how many
+      // tries are left instead of letting a reader discover the ceiling
+      // by hitting it.
+      sendsRemaining: Math.max(0, maxSends - (sendHistory.count + 1)),
+      maxSends: maxSends
+    };
+  } catch (e) {
+    return { success: false, message: "Failed to send email." };
+  }
+}
+
+/**
+ * Builds the successful-login response.
+ *
+ * This is the ONLY place a session token is created. Everything the
+ * frontend later relies on to prove who it is comes from here, signed —
+ * previously this returned a bare {success:true} and the app stored an
+ * email and a role in localStorage, which is why typing
+ * `swapsutraUserRole = 'admin'` into devtools was enough to open the
+ * admin panel.
+ */
+/* ══════════════════════════════════════════════════════════════════════
+   SIGN IN WITH GOOGLE
+   ──────────────────────────────────────────────────────────────────────
+   Why it exists: the email code is a round trip through a mailbox, and a
+   code that lands in spam, arrives late, or expires in sixty seconds is
+   the most common reason someone never finishes signing up. Google is
+   already signed in on most phones, so this is one tap and no waiting.
+
+   The email code still works and is still the fallback — this is another
+   door into the same account, matched on the email address, never a
+   second account.
+
+   What is trusted: nothing the browser sends except the signed credential
+   itself, which is checked against Google before anything else happens —
+   the audience must be OUR client id, the issuer must be Google, the
+   token must not have expired, and the address must be one Google has
+   verified. Only then does the address become an identity here.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/** The OAuth client id this deployment accepts tokens for. */
+function googleClientId_() {
+  return String(PropertiesService.getScriptProperties().getProperty('GOOGLE_CLIENT_ID') || '').trim();
+}
+
+function googleSignIn(data) {
+  const credential = String((data && data.credential) || '').trim();
+  if (!credential) {
+    return { success: false, code: 'GOOGLE_NO_CREDENTIAL', message: 'Google sign-in did not complete. Please try again, or use the email code.' };
+  }
+
+  const clientId = googleClientId_();
+  if (!clientId) {
+    Logger.log('googleSignIn: GOOGLE_CLIENT_ID script property is not set.');
+    return {
+      success: false,
+      code: 'GOOGLE_NOT_CONFIGURED',
+      message: 'Google sign-in is not set up yet. Please sign in with the email code instead.'
+    };
+  }
+
+  let info;
+  try {
+    const res = UrlFetchApp.fetch(
+      'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(credential),
+      { muteHttpExceptions: true }
+    );
+    if (res.getResponseCode() !== 200) {
+      logActivity('', 'Google Sign-in Rejected', 'Google did not accept the credential', 'Failed', 'Auth');
+      return { success: false, code: 'GOOGLE_INVALID', message: 'We could not verify that Google account. Please try again, or use the email code.' };
+    }
+    info = JSON.parse(res.getContentText());
+  } catch (err) {
+    Logger.log('googleSignIn verification failed: ' + err.toString());
+    return { success: false, code: 'GOOGLE_UNAVAILABLE', message: 'We could not reach Google just now. Please try again, or use the email code.' };
+  }
+
+  // Each of these is a way a forged or borrowed token gets in if it is not
+  // checked, so each is checked.
+  const issuer = String(info.iss || '');
+  const audience = String(info.aud || '');
+  const expiresAt = Number(info.exp || 0) * 1000;
+  const emailVerified = info.email_verified === true || String(info.email_verified) === 'true';
+
+  if (audience !== clientId
+    || (issuer !== 'accounts.google.com' && issuer !== 'https://accounts.google.com')
+    || !expiresAt || expiresAt < Date.now()
+    || !emailVerified) {
+    logActivity(normalizeEmail(info.email), 'Google Sign-in Rejected', 'Credential failed a check (audience, issuer, expiry or unverified email)', 'Failed', 'Auth');
+    return { success: false, code: 'GOOGLE_INVALID', message: 'We could not verify that Google account. Please try again, or use the email code.' };
+  }
+
+  const normEmail = normalizeEmail(info.email);
+  if (!normEmail) {
+    return { success: false, code: 'GOOGLE_NO_EMAIL', message: 'That Google account has no email address we can use.' };
+  }
+
+  // Signing in never creates an account. A reader Google knows but
+  // SwapSutra does not is verified, not registered — the app then takes
+  // them through the same membership choice a new reader always sees.
+  const isRegistered = isAdminEmail(normEmail) || emailExistsInUsersSheet(normEmail);
+
+  // 22 Sep (owner's request): Google can no longer be used to SIGN UP.
+  // A registered reader may still sign in with it; anyone else is told
+  // they are not registered yet and given no session.
+  if (!isRegistered) {
+    logActivity(normEmail, 'Google Sign-in Blocked', 'Not registered — Google sign-up is turned off', 'Failed', 'Auth');
+    return {
+      success: false,
+      code: 'GOOGLE_NOT_REGISTERED',
+      message: "You're not registered on SwapSutra yet. Please sign up with your email first — Google sign-in works once you have an account."
+    };
+  }
+
+  logActivity(normEmail, 'Google Sign-in', 'Existing reader signed in with Google', 'Success', 'Auth');
+
+  return buildLoginSuccessResponse(normEmail, {
+    email: normEmail,
+    isRegistered: isRegistered,
+    name: String(info.name || info.given_name || '').slice(0, 80),
+    method: 'google'
+  });
+}
+
+function buildLoginSuccessResponse(normEmail, extras) {
+  const role = isAdminEmail(normEmail) ? "admin" : "member";
+  const response = {
+    success: true,
+    role: role,
+    sessionToken: createSessionToken(normEmail, role),
+    sessionExpiresAt: new Date(Date.now() + (role === "admin" ? SESSION_TTL_MS_ADMIN : SESSION_TTL_MS_MEMBER)).toISOString()
+  };
+  if (extras) {
+    for (const key in extras) {
+      if (Object.prototype.hasOwnProperty.call(extras, key)) response[key] = extras[key];
+    }
+  }
+  return response;
+}
+
+function verifyOTP(email, otp, purpose) {
+  const normEmail = normalizeEmail(email);
+  if (!normEmail) return { success: false, message: "Email is required." };
+
+  // Brute-force ceiling. A six-digit code with unlimited guesses is a
+  // one-afternoon account takeover; this caps an attacker at
+  // OTP_MAX_FAILED_ATTEMPTS tries per address per hour. Checked before
+  // the TEST_QA branch so the limit applies to every path.
+  if (countRecentFailedOtpAttempts(normEmail) >= OTP_MAX_FAILED_ATTEMPTS) {
+    logActivity(normEmail, "OTP Locked Out", "Too many incorrect codes within an hour", "Failed", "Auth");
+    return {
+      success: false,
+      code: "OTP_LOCKED_OUT",
+      message: "Too many incorrect codes. Please wait an hour and request a new code."
+    };
+  }
+
+  if (isTestQAModeEnabled() && isTestQAEmail(normEmail) && String(otp) === TEST_QA_FIXED_OTP) {
+    logActivity(normEmail, "TEST_QA OTP Verified", "TEST_QA user logged in with guarded fixed OTP", "Success", "Auth");
+    recordOtpAttempt(normEmail, "success");
+    const role = isTestQAAdminEmail(normEmail) ? "admin" : "member";
+    return {
+      success: true,
+      testMode: true,
+      role: role,
+      sessionToken: createSessionToken(normEmail, role),
+      sessionExpiresAt: new Date(Date.now() + (role === "admin" ? SESSION_TTL_MS_ADMIN : SESSION_TTL_MS_MEMBER)).toISOString()
+    };
+  }
+
+  // RULE 3 / RULE 4: defense in depth. sendOTP() already refuses to issue an
+  // OTP to an unregistered email, so this should never trip in normal use —
+  // but verifyOTP must independently confirm the account still exists
+  // before granting access, in case an OTP row was created by another path
+  // or the user was removed between send and verify. This never creates a
+  // user; it only refuses to authenticate one that isn't registered.
+  // Data predicate for the same reason as sendOTP above — no session
+  // exists until this call succeeds.
+  const isExemptAuthEmail = isAdminEmail(normEmail);
+  // A partner (bookstore, author, publisher, promoter, library) verifies on
+  // /partners before it has an account — the code was sent with purpose
+  // "partner" for the same reason (launch check, 11 Oct 2026).
+  const isPartnerSignup = String(purpose || '') === 'partner';
+  if (!isExemptAuthEmail && !isPartnerSignup && !emailExistsInUsersSheet(normEmail)) {
+    logActivity(normEmail, "OTP Verify Blocked", "No registered SwapSutra account for this email", "Failed", "Auth");
+    return {
+      success: false,
+      code: "EMAIL_NOT_REGISTERED",
+      message: "No SwapSutra account was found with these details. Please Sign Up first."
+    };
+  }
+
+  const sheet = getOtpSheet();
+  // Bounded tail read, for the same reason as the send path: a year of
+  // login history should not be pulled across the wire to check one code.
+  // Every code that could still be valid is at the end of the sheet.
+  const recent = readRecentRows(sheet, OTP_RECENT_ROWS_SCAN);
+  if (!recent.rows.length) {
+    recordOtpAttempt(normEmail, "failed");
+    return { success: false, code: "OTP_NOT_FOUND", message: "That code has run out. Ask for a new one and it will arrive in a moment." };
+  }
+
+  const headers = recent.headers;
+  const emailIdx = headers.indexOf('email');
+  const otpIdx = headers.indexOf('otp');
+  const expIdx = headers.indexOf('expiresAt');
+  const verIdx = headers.indexOf('verified');
+
+  // readRecentRows may have started partway down the sheet, so map an
+  // index in `rows` back to its real row number before writing to it.
+  const lastRow = sheet.getLastRow();
+  const firstDataRow = lastRow - recent.rows.length + 1;
+  const sheetRowFor = (i) => firstDataRow + i;
+
+  const now = new Date();
+  for (let i = recent.rows.length - 1; i >= 0; i--) {
+    const row = recent.rows[i];
+    if (normalizeEmail(row[emailIdx]) !== normEmail) continue;
+    if (String(row[otpIdx]) !== String(otp)) continue;
+
+    if (new Date(row[expIdx]) < now) {
+      recordOtpAttempt(normEmail, "failed");
+      // Told apart from a wrong code ON PURPOSE. With a sixty-second
+      // window, running out of time is the common failure and it needs a
+      // different next step — ask for another code, not look harder at
+      // this one. The client keys its "Send a new code" button off this.
+      return {
+        success: false,
+        code: "OTP_EXPIRED",
+        message: `That code expired — it is only good for ${describeOtpTtl()}. Ask for a new one and it will arrive in a moment.`
+      };
+    }
+    if (row[verIdx] === 'Yes') {
+      recordOtpAttempt(normEmail, "failed");
+      return {
+        success: false,
+        code: "OTP_ALREADY_USED",
+        message: "That code has already been used. Ask for a new one if you need to sign in again."
+      };
+    }
+
+    sheet.getRange(sheetRowFor(i), verIdx + 1).setValue('Yes');
+
+    // Retire every other outstanding code for this address, so a reader
+    // who asked for several does not leave live codes behind them.
+    for (let j = 0; j < recent.rows.length; j++) {
+      if (j === i) continue;
+      if (normalizeEmail(recent.rows[j][emailIdx]) !== normEmail) continue;
+      if (recent.rows[j][verIdx] === 'Yes') continue;
+      sheet.getRange(sheetRowFor(j), verIdx + 1).setValue('Yes');
+    }
+
+    recordOtpAttempt(normEmail, "success");
+    logActivity(normEmail, "OTP Verified", "User logged in successfully", "Success", "Auth");
+    return buildLoginSuccessResponse(normEmail);
+  }
+
+  recordOtpAttempt(normEmail, "failed");
+  logActivity(normEmail, "OTP Failed", "Invalid OTP attempt", "Failed", "Auth");
+  return { success: false, code: "OTP_INVALID", message: "That code doesn't match. Check the newest email — or ask for a fresh code." };
+}
+
+// REMOVED DUPLICATE logActivity function here
+
+// Launch check (11 Oct 2026): the live site, not an old preview address.
+const BASE_APP_URL = "https://swapsutra.in";
+
+function subscribeEventNotify(data) {
+  const headers = ["Timestamp", "FullName", "Email", "Mobile", "City", "SourcePage", "SubscriptionStatus", "Consent", "LastNotifiedAt", "LastNotificationEventID", "LastNotificationEventName", "NotificationCount", "UnsubscribeToken", "UnsubscribeStatus", "LastAttemptAt", "Notes"];
+  const sheet = getOrCreateSheet('EventNotifySubscribers', headers);
+  const values = sheet.getDataRange().getValues();
+  const headersRow = values[0];
+  
+  const emailIdx = headersRow.indexOf('Email');
+  const mobileIdx = headersRow.indexOf('Mobile');
+  const statusIdx = headersRow.indexOf('SubscriptionStatus');
+  const unsubStatusIdx = headersRow.indexOf('UnsubscribeStatus');
+  const attemptIdx = headersRow.indexOf('LastAttemptAt');
+  const tokenIdx = headersRow.indexOf('UnsubscribeToken');
+
+  const normalizedEmail = data.email.toLowerCase().trim();
+  const normalizedMobile = data.mobile.replace(/\D/g, '').slice(-10);
+
+  let existingRowIdx = -1;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][emailIdx].toString().toLowerCase() === normalizedEmail || 
+        values[i][mobileIdx].toString().slice(-10) === normalizedMobile) {
+      existingRowIdx = i;
+      break;
+    }
+  }
+
+  const now = new Date();
+  const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+
+  if (existingRowIdx !== -1) {
+    const currentStatus = values[existingRowIdx][statusIdx];
+    sheet.getRange(existingRowIdx + 1, attemptIdx + 1).setValue(now);
+    
+    if (currentStatus === 'Active') {
+      return { success: true, message: "You’re already subscribed for event updates.", alreadyActive: true };
+    } else {
+      sheet.getRange(existingRowIdx + 1, statusIdx + 1).setValue('Active');
+      sheet.getRange(existingRowIdx + 1, unsubStatusIdx + 1).setValue('Active');
+      const existingToken = values[existingRowIdx][tokenIdx];
+      sendNotifyConfirmationEmail({ ...data, fullName: values[existingRowIdx][headersRow.indexOf('FullName')] }, existingToken);
+      return { success: true, message: "You’re subscribed again for SwapSutra event updates." };
+    }
+  }
+
+  const newRow = headers.map(h => {
+    if (h === 'Timestamp') return now;
+    if (h === 'FullName') return data.fullName;
+    if (h === 'Email') return normalizedEmail;
+    if (h === 'Mobile') return normalizedMobile;
+    if (h === 'City') return data.city;
+    if (h === 'SourcePage') return data.sourcePage || 'Reader Circle';
+    if (h === 'SubscriptionStatus') return 'Active';
+    if (h === 'Consent') return 'Yes';
+    if (h === 'NotificationCount') return 0;
+    if (h === 'UnsubscribeToken') return token;
+    if (h === 'UnsubscribeStatus') return 'Active';
+    if (h === 'LastAttemptAt') return now;
+    return "";
+  });
+
+  sheet.appendRow(newRow);
+  sendNotifyConfirmationEmail(data, token);
+  sendAdminSubscriptionAlert(data);
+  return { success: true, message: `Thank you, ${data.fullName.split(' ')[0]}! We’ll notify you whenever the next SwapSutra Reader Circle opens.` };
+}
+
+function unsubscribeEventNotify(data) {
+  const token = data.token;
+  if (!token) return { success: false, message: "Token required" };
+  
+  const sheet = getOrCreateSheet('EventNotifySubscribers', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const tokenIdx = headers.indexOf('UnsubscribeToken');
+  const statusIdx = headers.indexOf('SubscriptionStatus');
+  const unsubStatusIdx = headers.indexOf('UnsubscribeStatus');
+  
+  const rowIndex = values.findIndex(row => row[tokenIdx] === token);
+  if (rowIndex === -1) return { success: false, message: "Invalid token" };
+  
+  sheet.getRange(rowIndex + 1, statusIdx + 1).setValue('Unsubscribed');
+  sheet.getRange(rowIndex + 1, unsubStatusIdx + 1).setValue('Unsubscribed');
+  
+  return { success: true, message: "You have been unsubscribed from SwapSutra event notifications." };
+}
+
+function sendNotifyConfirmationEmail(data, token) {
+  const firstName = data.fullName.split(' ')[0];
+  const unsubscribeLink = `${BASE_APP_URL}/unsubscribe?token=${token}`;
+  
+  const subject = "You’re on the SwapSutra Reader Circle list 📚";
+  const content = `
+    <p>Hi ${firstName},</p>
+    <p>Thank you for subscribing to SwapSutra Reader Circle updates.</p>
+    <p>We’ll notify you whenever a new reader event or meetup opens up in your city.</p>
+    <p style="font-size: 12px; color: #8C7861; margin-top: 40px;">If you ever wish to stop receiving these, you can <a href="${unsubscribeLink}">unsubscribe here</a>.</p>
+  `;
+  const htmlBody = getBrandedEmailTemplate("You're on the list", content, "https://swapsutra.in/events", "View Upcoming Events");
+  
+  sendSwapSutraEmail({ to: data.email, subject: subject, htmlBody: htmlBody });
+}
+
+function sendAdminSubscriptionAlert(data) {
+  const subject = `New Event Subscriber: ${data.fullName}`;
+  const body = `A new user has subscribed to event notifications:\n\nName: ${data.fullName}\nEmail: ${data.email}\nMobile: ${data.mobile}\nCity: ${data.city}`;
+  sendSwapSutraEmail('swapsutra@gmail.com', subject, body);
+}
+
+function notifySubscribersOfEvent(event) {
+  const msg = `Announcing event: ${event.title}`;
+  Logger.log(msg);
+  
+  const sheetsToNotify = ['EventNotifySubscribers', 'NewsletterSubscribers'];
+  const now = new Date();
+  
+  sheetsToNotify.forEach(sheetName => {
+    const sheet = getOrCreateSheet(sheetName, []);
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return;
+    
+    const headers = data[0];
+    const emailIdx = headers.indexOf('Email') !== -1 ? headers.indexOf('Email') : headers.indexOf('email');
+    const statusIdx = headers.indexOf('SubscriptionStatus') !== -1 ? headers.indexOf('SubscriptionStatus') : -1;
+    const unsubStatusIdx = headers.indexOf('UnsubscribeStatus') !== -1 ? headers.indexOf('UnsubscribeStatus') : -1;
+    const tokenIdx = headers.indexOf('UnsubscribeToken') !== -1 ? headers.indexOf('UnsubscribeToken') : headers.indexOf('id'); 
+    
+    const notifiedAtIdx = headers.indexOf('LastNotifiedAt');
+    const eventIdIdx = headers.indexOf('LastNotificationEventID');
+    const eventNameIdx = headers.indexOf('LastNotificationEventName');
+    const countIdx = headers.indexOf('NotificationCount');
+
+    data.slice(1).forEach((row, i) => {
+      const email = row[emailIdx];
+      const status = statusIdx !== -1 ? row[statusIdx] : 'Active';
+      const unsubStatus = unsubStatusIdx !== -1 ? row[unsubStatusIdx] : 'Active';
+      const token = row[tokenIdx];
+      
+      if (status === 'Active' && unsubStatus !== 'Unsubscribed') {
+        try {
+          const unsubscribeLink = `${BASE_APP_URL}/unsubscribe?token=${token}`;
+          const registerLink = `${BASE_APP_URL}/events`;
+          
+          const subject = `New Event: ${event.title} 📚`;
+          const content = `
+            <p>Hello Reader,</p>
+            <p>A new event is opening up at SwapSutra!</p>
+            <div style="background-color: #FAF7F2; border: 1px solid #EBE3D5; padding: 20px; border-radius: 12px; margin: 20px 0;">
+              <p><strong>Title:</strong> ${event.title}</p>
+              <p><strong>Date:</strong> ${event.date}</p>
+              <p><strong>Time:</strong> ${event.startTime}</p>
+              <p><strong>Platform:</strong> ${event.platform}</p>
+            </div>
+            <p>${event.description}</p>
+            <p style="font-size: 12px; color: #8C7861; margin-top: 40px;">Don't want these updates? <a href="${unsubscribeLink}">Unsubscribe here</a>.</p>
+          `;
+          const htmlBody = getBrandedEmailTemplate("New Reader Meetup", content, registerLink, "Register Now");
+          
+          sendSwapSutraEmail({ to: email, subject: subject, htmlBody: htmlBody });
+          
+          // Update row if notify sheet
+          if (sheetName === 'EventNotifySubscribers') {
+             if (notifiedAtIdx !== -1) sheet.getRange(i + 2, notifiedAtIdx + 1).setValue(now);
+             if (eventIdIdx !== -1) sheet.getRange(i + 2, eventIdIdx + 1).setValue(event.eventId);
+             if (eventNameIdx !== -1) sheet.getRange(i + 2, eventNameIdx + 1).setValue(event.title);
+             if (countIdx !== -1) {
+               const currentCount = Number(row[countIdx]) || 0;
+               sheet.getRange(i + 2, countIdx + 1).setValue(currentCount + 1);
+             }
+          }
+        } catch (e) {
+          Logger.log(`Error notifying ${email}: ${e.toString()}`);
+        }
+      }
+    });
+  });
+}
+
+function submitHostEnquiry(data) {
+  const headers = ["Timestamp", "FullName", "Email", "Mobile", "OrganizationName", "OrganizationType", "City", "PreferredEventType", "ExpectedAudienceSize", "PreferredDate", "Message", "SourcePage", "EnquiryStatus", "AdminNotificationStatus", "UserConfirmationStatus", "LastAttemptAt", "Notes"];
+  const sheet = getOrCreateSheet('HostEnquiries', headers);
+  const values = sheet.getDataRange().getValues();
+  const headersRow = values[0];
+  
+  const emailIdx = headersRow.indexOf('Email');
+  const mobileIdx = headersRow.indexOf('Mobile');
+  const statusIdx = headersRow.indexOf('EnquiryStatus');
+  const attemptIdx = headersRow.indexOf('LastAttemptAt');
+
+  const normalizedEmail = data.email.toLowerCase().trim();
+  const normalizedMobile = data.mobile.replace(/\D/g, '').slice(-10);
+
+  let existingRowIdx = -1;
+  for (let i = 1; i < values.length; i++) {
+    const rowStatus = values[i][statusIdx];
+    if ((values[i][emailIdx].toString().toLowerCase() === normalizedEmail || 
+         values[i][mobileIdx].toString().slice(-10) === normalizedMobile) && 
+        (rowStatus === 'New' || rowStatus === 'In Review')) {
+      existingRowIdx = i;
+      break;
+    }
+  }
+
+  const now = new Date();
+  if (existingRowIdx !== -1) {
+    sheet.getRange(existingRowIdx + 1, attemptIdx + 1).setValue(now);
+    return { success: false, message: "You’ve already submitted a hosting enquiry. Our team will contact you soon." };
+  }
+
+  const newRow = headers.map(h => {
+    if (h === 'Timestamp') return now;
+    if (h === 'FullName') return data.fullName;
+    if (h === 'Email') return normalizedEmail;
+    if (h === 'Mobile') return normalizedMobile;
+    if (h === 'OrganizationName') return data.organizationName;
+    if (h === 'OrganizationType') return data.organizationType;
+    if (h === 'City') return data.city;
+    if (h === 'PreferredEventType') return data.preferredEventType;
+    if (h === 'ExpectedAudienceSize') return data.expectedAudienceSize;
+    if (h === 'PreferredDate') return data.preferredDate;
+    if (h === 'Message') return data.message;
+    if (h === 'SourcePage') return data.sourcePage || 'Events';
+    if (h === 'EnquiryStatus') return 'New';
+    if (h === 'LastAttemptAt') return now;
+    return "";
+  });
+
+  sheet.appendRow(newRow);
+  const rowIndex = sheet.getLastRow();
+  
+  // User Confirmation Email
+  let userMailStatus = 'Pending';
+  try {
+    const firstName = data.fullName.split(' ')[0];
+    const subject = "We received your SwapSutra hosting enquiry 📚";
+    const content = `
+      <p>Hi ${firstName},</p>
+      <p>Thank you for your interest in hosting a SwapSutra event.</p>
+      <p>We have received your enquiry for:</p>
+      <p style="font-weight: bold; padding: 15px; border-left: 4px solid #C5A059; background: #FAF7F2;">${data.preferredEventType}</p>
+      <p>Our team will review your request and contact you soon.</p>
+    `;
+    const htmlBody = getBrandedEmailTemplate("Hosting Enquiry Received", content);
+    sendSwapSutraEmail({ to: normalizedEmail, subject: subject, htmlBody: htmlBody });
+    userMailStatus = 'Sent';
+  } catch (e) {
+    Logger.log("User email error: " + e.toString());
+    userMailStatus = 'Failed';
+  }
+  sheet.getRange(rowIndex, headers.indexOf('UserConfirmationStatus') + 1).setValue(userMailStatus);
+
+  // Admin Notification
+  let adminMailStatus = 'Pending';
+  try {
+    const subject = "New SwapSutra Host Enquiry";
+    const body = `New hosting enquiry received:\n\nName: ${data.fullName}\nEmail: ${data.email}\nMobile: ${data.mobile}\nOrganization: ${data.organizationName}\nType: ${data.organizationType}\nCity: ${data.city}\nPreferred Event: ${data.preferredEventType}\nAudience Size: ${data.expectedAudienceSize}\nDate: ${data.preferredDate}\nMessage: ${data.message}`;
+    sendSwapSutraEmail('swapsutra@gmail.com', subject, body);
+    adminMailStatus = 'Sent';
+  } catch (e) {
+    Logger.log("Admin email error: " + e.toString());
+    adminMailStatus = 'Failed';
+  }
+  sheet.getRange(rowIndex, headers.indexOf('AdminNotificationStatus') + 1).setValue(adminMailStatus);
+
+  return { success: true, message: "Host enquiry submitted successfully. Our team will contact you soon." };
+}
+
+function updateHostEnquiryStatus(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const sheet = getOrCreateSheet('HostEnquiries', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const emailIdx = headers.indexOf('Email');
+  const statusIdx = headers.indexOf('EnquiryStatus');
+  const notesIdx = headers.indexOf('Notes');
+  
+  const rowIndex = values.findIndex(row => row[emailIdx].toString().toLowerCase() === data.targetEmail.toLowerCase());
+  if (rowIndex === -1) return { success: false, message: "Enquiry not found" };
+  
+  if (data.status) {
+    sheet.getRange(rowIndex + 1, statusIdx + 1).setValue(data.status);
+    
+    // Send approval email if status is Approved or Active
+    let emailStatus = "";
+    if (data.status === 'Approved' || data.status === 'Active') {
+      const emailSentIdx = headers.indexOf('approvalEmailSent');
+      const alreadySent = emailSentIdx !== -1 && (values[rowIndex][emailSentIdx] === 'Yes' || values[rowIndex][emailSentIdx] === true);
+      
+      if (!alreadySent) {
+        const nameIdx = headers.indexOf('Name');
+        const userName = nameIdx !== -1 ? values[rowIndex][nameIdx] : 'Host';
+        const emailSuccess = sendApprovalEmail(data.targetEmail, userName, 'Host Enquiry');
+        if (emailSuccess && emailSentIdx !== -1) {
+          sheet.getRange(rowIndex + 1, emailSentIdx + 1).setValue('Yes');
+          emailStatus = " and email sent";
+        } else {
+          emailStatus = " but email failed";
+        }
+      } else {
+        emailStatus = " (email already sent)";
+      }
+    }
+    return { success: true, message: "Enquiry updated" + emailStatus };
+  }
+  if (data.notes) {
+    const currentNotes = values[rowIndex][notesIdx] || "";
+    const newNotes = currentNotes + (currentNotes ? "\n" : "") + "[" + new Date().toISOString() + "] " + data.notes;
+    sheet.getRange(rowIndex + 1, notesIdx + 1).setValue(newNotes);
+  }
+  
+  return { success: true, message: "Status updated successfully" };
+}
+
+function removeDuplicateUsers() {
+  // Implementation of duplicate cleanup
+  return { success: true, message: "Cleanup complete" };
+}
+
+/**
+ * BRANDED HTML EMAIL SYSTEM
+ */
+
+function getBrandedEmailTemplate(title, content, ctaLink, ctaText) {
+  const ctaSection = ctaLink ? `
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="${ctaLink}" style="display: inline-block; padding: 16px 32px; background-color: #C5A059; color: #ffffff !important; text-decoration: none; border-radius: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; font-size: 11px;">${ctaText || 'Visit SwapSutra'}</a>
+    </div>
+  ` : '';
+
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body { margin: 0; padding: 0; background-color: #FDFBF7; }
+        .wrapper { width: 100%; background-color: #FDFBF7; padding: 40px 0; }
+        .main { background-color: #FAF7F2; margin: 0 auto; width: 90%; max-width: 600px; font-family: 'Georgia', serif; color: #4A3728; border: 1px solid #EBE3D5; border-radius: 20px; overflow: hidden; }
+        .header { padding: 40px 40px 20px; text-align: center; }
+        .content { padding: 0 40px 40px; line-height: 1.7; font-size: 16px; }
+        .footer { padding: 40px; text-align: center; border-top: 1px solid #EBE3D5; font-size: 12px; color: #8C7861; }
+        h1 { font-style: italic; color: #4A3728; font-size: 32px; margin: 0 0 20px; font-weight: normal; }
+        p { margin: 0 0 20px; }
+        .benefit-item { margin-bottom: 15px; padding-left: 25px; position: relative; text-align: left; }
+      </style>
+    </head>
+    <body>
+      <div class="wrapper">
+        <div class="main">
+          <div class="header">
+            <div style="font-size: 20px; color: #C5A059; margin-bottom: 25px; letter-spacing: 3px; font-family: 'Times New Roman', serif;">SWAPSUTRA</div>
+            <h1>${title}</h1>
+          </div>
+          <div class="content">
+            ${content}
+            ${ctaSection}
+          </div>
+          <div class="footer">
+            <p style="margin-bottom: 5px;"><strong>SwapSutra</strong></p>
+            <p style="margin-bottom: 20px; font-style: italic;">Jahan har kitaab apna safar paati hai.</p>
+            <p>Warmly,<br><strong>Unnati Goyal</strong><br>Founder, SwapSutra</p>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function sendMembershipApprovalEmail(email, name) {
+  try {
+    const userName = name || "Reader";
+    const subject = "Your SwapSutra Reader Pass is Active";
+    const content = `
+      <p>Hi ${userName},</p>
+      <p>We are delighted to share that your <strong>Reader Pass</strong> has been activated. You are now part of a community where books find their next journey.</p>
+      <div style="margin: 30px 0;">
+        <div class="benefit-item">✦ List your books on your digital shelf</div>
+        <div class="benefit-item">✦ Discover hidden gems nearby</div>
+        <div class="benefit-item">✦ Request swaps with verified readers</div>
+        <div class="benefit-item">✦ Access secure community chats</div>
+        <div class="benefit-item">✦ Let your stories travel beyond the shelf</div>
+      </div>
+      <p>Happy swapping!</p>
+    `;
+    const htmlBody = getBrandedEmailTemplate("Welcome to the Circle", content, "https://swapsutra.in", "Enter SwapSutra");
+    
+    sendSwapSutraEmail({ to: email, subject: subject, htmlBody: htmlBody });
+    Logger.log("Email sent successfully: membership to " + email);
+    return true;
+  } catch (error) {
+    Logger.log("Membership email failed: " + error.toString());
+    return false;
+  }
+}
+
+function sendMembershipRejectionEmail(email, name, reason) {
+  try {
+    const userName = name || "Reader";
+    const subject = "Your SwapSutra membership request update";
+    const content = `
+      <p>Hi ${userName},</p>
+      <p>Thank you for applying to SwapSutra. We could not approve your Reader Pass request at this time.</p>
+      ${reason ? `<div style="background:#FAF7F2; padding: 15px; border-left: 4px solid #C5A059; margin: 20px 0;"><p style="margin:0;"><strong>Reason:</strong> ${reason}</p></div>` : ''}
+      <p>If you believe this was a mistake, please contact SwapSutra support with your registered email and payment reference.</p>
+    `;
+    const htmlBody = getBrandedEmailTemplate("Membership Request Update", content, "https://swapsutra.in/support", "Contact Support");
+    
+    sendSwapSutraEmail({ to: email, subject: subject, htmlBody: htmlBody });
+    Logger.log("Email sent successfully: membership rejection to " + email);
+    return true;
+  } catch (error) {
+    Logger.log("Membership rejection email failed: " + error.toString());
+    return false;
+  }
+}
+
+function sendBookApprovalEmail(email, name, bookTitle, bookId) {
+  try {
+    const userName = name || "Reader";
+    const subject = "Your book is now live on SwapSutra 📚";
+    const content = `
+      <p>Hi ${userName},</p>
+      <p>Your book listing has been approved and is now visible to readers during your active membership period.</p>
+      <p><strong>Book:</strong> ${bookTitle || 'Recent Listing'}</p>
+      ${bookId ? `<p><strong>Listing ID:</strong> ${bookId}</p>` : ''}
+      <p>You can view your library and update Reading Space statuses from your profile.</p>
+    `;
+    const htmlBody = getBrandedEmailTemplate("Your book is now live on SwapSutra 📚", content, "https://swapsutra.in/profile", "View My Shelf");
+    
+    sendSwapSutraEmail({ to: email, subject: subject, htmlBody: htmlBody });
+    Logger.log(JSON.stringify({ event: "sendBookApprovalEmail", email, bookTitle, bookId, success: true }));
+    return true;
+  } catch (error) {
+    Logger.log(JSON.stringify({ event: "sendBookApprovalEmail", email, bookTitle, bookId, success: false, error: error.toString() }));
+    return false;
+  }
+}
+
+function sendBookRejectionEmail(email, name, bookTitle, reason) {
+  try {
+    const userName = name || "Reader";
+    const subject = "Your book listing could not be approved";
+    const content = `
+      <p>Hi ${userName},</p>
+      <p>Sorry, your book listing <strong>"${bookTitle || 'Recent Listing'}"</strong> could not be approved because it does not follow SwapSutra’s book listing policy.</p>
+      <p>Please review the listing guidelines and submit again with correct details.</p>
+      ${reason ? `<div style="background:#f9f9f9; padding: 15px; border-left: 4px solid #cc0000; margin: 15px 0;"><p style="margin:0; font-style:italic;"><strong>Reason:</strong> ${reason}</p></div>` : ''}
+    `;
+    const htmlBody = getBrandedEmailTemplate("Your book listing could not be approved", content, "https://swapsutra.in/legal", "Review Listing Policy");
+    
+    sendSwapSutraEmail({ to: email, subject: subject, htmlBody: htmlBody });
+    Logger.log("Email sent successfully: book rejection to " + email);
+    return true;
+  } catch (error) {
+    Logger.log("Book rejection email failed: " + error.toString());
+    return false;
+  }
+}
+
+function sendTestimonialApprovalEmail(email, name) {
+  try {
+    const userName = name || "Reader";
+    const subject = "Your Collector’s Confession is Live";
+    const content = `
+      <p>Hi ${userName},</p>
+      <p>Your words have been featured on our community wall. Thank you for sharing your journey with SwapSutra.</p>
+      <p>You can see your confession live on our home page now.</p>
+    `;
+    const htmlBody = getBrandedEmailTemplate("Thank You for Sharing", content, "https://swapsutra.in/#testimonials", "View Testimonials");
+    
+    sendSwapSutraEmail({ to: email, subject: subject, htmlBody: htmlBody });
+    Logger.log("Email sent successfully: testimonial to " + email);
+    return true;
+  } catch (error) {
+    Logger.log("Testimonial email failed: " + error.toString());
+    return false;
+  }
+}
+
+function sendEventConfirmationEmail(email, name, eventName) {
+  try {
+    const userName = name || "Reader";
+    const subject = "Your SwapSutra Readers Meet Registration is Confirmed";
+    const content = `
+      <p>Hi ${userName},</p>
+      <p>Your seat at <strong>${eventName || 'our upcoming event'}</strong> is now reserved.</p>
+      <p>We’re excited to welcome you into the SwapSutra reading community. Get ready for an evening of stories and discovery.</p>
+      <p>See you there!</p>
+    `;
+    const htmlBody = getBrandedEmailTemplate("Registration Confirmed", content, "https://swapsutra.in/events", "View Event Details");
+    
+    sendSwapSutraEmail({ to: email, subject: subject, htmlBody: htmlBody });
+    Logger.log("Email sent successfully: event confirmation to " + email);
+    return true;
+  } catch (error) {
+    Logger.log("Event confirmation email failed: " + error.toString());
+    return false;
+  }
+}
+
+
+function approveSubscription(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const email = normalizeEmail(data.targetEmail || data.email);
+  if (!email) return { success: false, message: "Target email required" };
+
+  Logger.log("APPROVING SUBSCRIPTION (ADMIN STATUS): " + email);
+
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const subValues = subSheet.getDataRange().getValues();
+  const subHeaders = subValues[0];
+  const subEmailIdx = subHeaders.indexOf('email');
+  const subNameIdx = subHeaders.indexOf('name');
+  const subStatusIdx = subHeaders.indexOf('adminStatus');
+  const subApprovedAtIdx = subHeaders.indexOf('approvedAt');
+  const subEmailSentIdx = subHeaders.indexOf('approvalEmailSent');
+
+  const subRowIndex = subValues.findIndex(row => normalizeEmail(row[subEmailIdx]) === email);
+  if (subRowIndex === -1) return { success: false, message: "Subscription record not found" };
+
+  const now = new Date();
+  
+  // Rule: Just approve payment/registry. Actual activation happens when first book is approved.
+  subSheet.getRange(subRowIndex + 1, subStatusIdx + 1).setValue('Approved');
+  
+  // AUTO-FILL DATES ON APPROVAL
+  const approvedAtIdx = subHeaders.indexOf('approvedAt');
+  const startIdx = subHeaders.indexOf('subscriptionStartDate');
+  const expiryIdx = subHeaders.indexOf('subscriptionExpiry');
+  
+  if (approvedAtIdx !== -1 && !subValues[subRowIndex][approvedAtIdx]) {
+    subSheet.getRange(subRowIndex + 1, approvedAtIdx + 1).setValue(now);
+  }
+  if (startIdx !== -1 && !subValues[subRowIndex][startIdx]) {
+    subSheet.getRange(subRowIndex + 1, startIdx + 1).setValue(now);
+  }
+  if (expiryIdx !== -1 && !subValues[subRowIndex][expiryIdx]) {
+    const expDate = new Date();
+    expDate.setDate(now.getDate() + 30);
+    subSheet.getRange(subRowIndex + 1, expiryIdx + 1).setValue(expDate);
+  }
+
+  // Still update Users Sheet to show "Pending First Book" if necessary or just broad status
+  const userSheet = getOrCreateSheet('Users', []);
+  const userValues = userSheet.getDataRange().getValues();
+  const userHeaders = userValues[0];
+  const userEmailIdx = userHeaders.indexOf('email');
+  const userRowIndex = userValues.findIndex(row => normalizeEmail(row[userEmailIdx]) === email);
+  
+  if (userRowIndex !== -1) {
+    const isVerifiedIdx = userHeaders.indexOf('is_verified');
+    if (isVerifiedIdx !== -1) userSheet.getRange(userRowIndex + 1, isVerifiedIdx + 1).setValue(true);
+  }
+
+  ensureUserFromPayload({
+    name: subValues[subRowIndex][subNameIdx],
+    email,
+    phone: subValues[subRowIndex][subHeaders.indexOf('phone')],
+    membershipStatus: 'Active',
+    paymentStatus: 'Approved'
+  }, { fillMissingOnly: true, syncStatuses: true });
+
+  // Check for auto-activation if books were already approved (rare but possible if logic changes)
+  const activationResult = activateSubscriptionIfEligible(email, data.adminEmail);
+
+  // Handle Email
+  let emailResultMessage = activationResult.activated ? "Subscription activated! " : "Subscription payment approved. Awaiting first book listing/approval for activation. ";
+  
+  const alreadySent = subValues[subRowIndex][subEmailSentIdx] === 'TRUE' || subValues[subRowIndex][subEmailSentIdx] === true || subValues[subRowIndex][subEmailSentIdx] === 'Yes';
+  
+  if (!alreadySent) {
+    const userName = subValues[subRowIndex][subNameIdx];
+    const emailSuccess = sendMembershipApprovalEmail(email, userName);
+    if (emailSuccess) {
+      if (subEmailSentIdx !== -1) subSheet.getRange(subRowIndex + 1, subEmailSentIdx + 1).setValue('TRUE');
+      
+      // Auto-send trust email after approval
+      try {
+        sendTrustEmail(email);
+      } catch (e) {}
+    }
+  }
+
+  return { success: true, message: emailResultMessage + activationResult.message };
+}
+
+function activateSubscriptionIfEligible(email, adminEmail) {
+  const normEmail = normalizeEmail(email);
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const subData = subSheet.getDataRange().getValues();
+  const subHeaders = subData[0];
+  const subEmailIdx = subHeaders.indexOf('email');
+  const subStatusIdx = subHeaders.indexOf('adminStatus');
+  const subStartIdx = subHeaders.indexOf('subscriptionStartDate');
+  const subExpiryIdx = subHeaders.indexOf('subscriptionExpiry');
+  const firstBookApprovedIdx = subHeaders.indexOf('firstBookApprovedAt');
+  const activatedByIdx = subHeaders.indexOf('activatedBy');
+  
+  const subRowIdx = subData.findIndex(r => normalizeEmail(r[subEmailIdx]) === normEmail);
+  if (subRowIdx === -1) return { activated: false, message: "" };
+  // Free membership: there is no paid window to start, and the sheet no
+  // longer has start/expiry columns.
+  if (freeRegistrationMode_() || subStartIdx === -1 || subExpiryIdx === -1) return { activated: false, message: "" };
+  
+  const sub = {};
+  subHeaders.forEach((h, i) => sub[h] = subData[subRowIdx][i]);
+  
+  // Conditions for activation:
+  // 1. adminStatus == 'Approved'
+  // 2. has at least one approved book
+  
+  const bookSheet = getOrCreateSheet('Books', []);
+  const bookData = bookSheet.getDataRange().getValues();
+  const bHeaders = bookData[0];
+  const bOwnerIdx = bHeaders.indexOf('ownerEmail');
+  const bStatusIdx = bHeaders.indexOf('status');
+  const bApprovedAtIdx = bHeaders.indexOf('approvedAt');
+  
+  const approvedBooks = bookData.slice(1).filter(r => normalizeEmail(r[bOwnerIdx]) === normEmail && r[bStatusIdx] === 'Approved');
+  
+  if (sub.adminStatus === 'Approved' && approvedBooks.length > 0) {
+    // If already active, skip (unless expired and this is a renewal - but logic here is for first activation)
+    if (sub.subscriptionStartDate && sub.subscriptionStartDate !== "") {
+       return { activated: false, message: "Subscription already has a start date." };
+    }
+    
+    const now = new Date();
+    const firstApprovedAt = approvedBooks.sort((a, b) => new Date(a[bApprovedAtIdx]) - new Date(b[bApprovedAtIdx]))[0][bApprovedAtIdx];
+    
+    const startDate = now; // Activation happens NOW
+    const expiryDate = new Date();
+    expiryDate.setMonth(now.getMonth() + 1);
+    
+    subSheet.getRange(subRowIdx + 1, subStartIdx + 1).setValue(startDate);
+    subSheet.getRange(subRowIdx + 1, subExpiryIdx + 1).setValue(expiryDate);
+    if (firstBookApprovedIdx !== -1) subSheet.getRange(subRowIdx + 1, firstBookApprovedIdx + 1).setValue(firstApprovedAt);
+    if (subHeaders.indexOf('activatedBy') !== -1) subSheet.getRange(subRowIdx + 1, subHeaders.indexOf('activatedBy') + 1).setValue(adminEmail || 'system_auto');
+    
+    // Sync to Users Sheet for real-time visibility
+    const userSheet = getOrCreateSheet('Users', []);
+    const userValues = userSheet.getDataRange().getValues();
+    const userHeaders = userValues[0];
+    const uEmailIdx = userHeaders.indexOf('email');
+    const uRowIdx = userValues.findIndex(r => normalizeEmail(r[uEmailIdx]) === normEmail);
+    if (uRowIdx !== -1) {
+      const msIdx = userHeaders.indexOf('membership_status');
+      const ssIdx = userHeaders.indexOf('subscription_status');
+      const exIdx = userHeaders.indexOf('expires_at');
+      if (msIdx !== -1) userSheet.getRange(uRowIdx + 1, msIdx + 1).setValue('active');
+      if (ssIdx !== -1) userSheet.getRange(uRowIdx + 1, ssIdx + 1).setValue('active');
+      if (exIdx !== -1) userSheet.getRange(uRowIdx + 1, exIdx + 1).setValue(expiryDate);
+    }
+    ensureUserFromPayload({
+      ...sub,
+      email: normEmail,
+      membershipStatus: 'Active',
+      paymentStatus: 'Approved'
+    }, { fillMissingOnly: true, syncStatuses: true });
+    
+    return { activated: true, message: "Subscription ACTIVATED until " + expiryDate.toLocaleDateString() };
+  }
+  
+  return { activated: false, message: "" };
+}
+
+function approveBook(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const sheet = getOrCreateSheet('Books', getBookHeaders());
+  ensureSheetHeaders(sheet, getBookHeaders());
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(h => String(h).trim());
+  const idIdx = headers.indexOf('id');
+  const titleIdx = headers.indexOf('title');
+  const emailIdx = headers.indexOf('ownerEmail');
+  const statusIdx = headers.indexOf('status');
+  const approvedAtIdx = headers.indexOf('approvedAt');
+  const rejectedAtIdx = headers.indexOf('rejectedAt');
+  const reasonIdx = headers.indexOf('rejectionReason');
+
+  const rowIndex = values.findIndex(row => row[idIdx] === data.bookId);
+  if (rowIndex === -1) return { success: false, message: "Book not found" };
+
+  const ownerEmail = normalizeEmail(values[rowIndex][emailIdx]);
+  const bookTitle = values[rowIndex][titleIdx];
+  const newStatus = data.status || 'Approved'; // Can be 'Approved' or 'Rejected'
+
+  Logger.log("Processing book: " + data.bookId + " -> " + newStatus);
+  
+  if (newStatus === 'Approved') {
+    sheet.getRange(rowIndex + 1, statusIdx + 1).setValue('Approved');
+    const now = new Date();
+    if (approvedAtIdx !== -1 && !values[rowIndex][approvedAtIdx]) sheet.getRange(rowIndex + 1, approvedAtIdx + 1).setValue(now);
+    
+    // AUTO-FILL OTHER DATES
+    const listedAtIdx = headers.indexOf('listedAt');
+    const expiresAtIdx = headers.indexOf('expiresAt');
+    const visibleUntilIdx = headers.indexOf('visibleUntil');
+    
+    if (listedAtIdx !== -1 && !values[rowIndex][listedAtIdx]) sheet.getRange(rowIndex + 1, listedAtIdx + 1).setValue(now);
+    if (expiresAtIdx !== -1 && !values[rowIndex][expiresAtIdx]) {
+      const exp = new Date();
+      exp.setDate(now.getDate() + 30);
+      sheet.getRange(rowIndex + 1, expiresAtIdx + 1).setValue(exp);
+    }
+    if (visibleUntilIdx !== -1 && !values[rowIndex][visibleUntilIdx]) {
+      const vis = new Date();
+      vis.setDate(now.getDate() + 30);
+      sheet.getRange(rowIndex + 1, visibleUntilIdx + 1).setValue(vis);
+    }
+
+    // Check for subscription activation
+    const activation = activateSubscriptionIfEligible(ownerEmail, data.adminEmail);
+    
+    const emailResult = sendBookApprovalEmailOnce(sheet, headers, rowIndex, data.bookId, ownerEmail, bookTitle, "Reader");
+    
+    return { success: true, message: "Book approved. " + activation.message + " " + emailResult.message };
+  } else {
+    sheet.getRange(rowIndex + 1, statusIdx + 1).setValue('Rejected');
+    if (rejectedAtIdx !== -1) sheet.getRange(rowIndex + 1, rejectedAtIdx + 1).setValue(new Date());
+    if (reasonIdx !== -1) sheet.getRange(rowIndex + 1, reasonIdx + 1).setValue(data.reason || "Policy mismatch");
+    
+    sendBookRejectionEmail(ownerEmail, "Reader", bookTitle, data.reason);
+    return { success: true, message: "Book rejected and notification sent." };
+  }
+}
+
+function sendBookApprovalEmailOnceForBook(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const bookId = String(data.bookId || data.id || '').trim();
+  if (!bookId) return { success: false, message: "Book ID required" };
+
+  const sheet = getOrCreateSheet('Books', getBookHeaders());
+  ensureSheetHeaders(sheet, getBookHeaders());
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return { success: false, message: "Book not found" };
+
+  const headers = values[0].map(h => String(h).trim());
+  const idIdx = headers.indexOf('id');
+  const titleIdx = headers.indexOf('title');
+  const emailIdx = headers.indexOf('ownerEmail');
+  const rowIndex = values.findIndex((row, index) => index > 0 && String(row[idIdx] || '').trim() === bookId);
+  if (rowIndex === -1) return { success: false, message: "Book not found" };
+
+  const ownerEmail = normalizeEmail(values[rowIndex][emailIdx]);
+  const bookTitle = values[rowIndex][titleIdx];
+  return sendBookApprovalEmailOnce(sheet, headers, rowIndex, bookId, ownerEmail, bookTitle, "Reader");
+}
+
+// =====================================================================
+// EXPIRY REMINDERS
+// ---------------------------------------------------------------------
+// When a membership lapses, getBooks stops returning that owner's
+// listings — so their whole shelf disappears from the Library at once.
+// That is intended (it is what membership buys), but until now it
+// happened with no warning at all, which reads to the reader as "my
+// books vanished" rather than "my trial ended".
+//
+// The Subscriptions sheet has carried reminderSent/reminderSentAt
+// columns since the beginning; nothing ever wrote to them. This fills
+// that gap. Run it from a daily time-driven trigger in the Apps Script
+// editor (Triggers → Add Trigger → sendMembershipExpiryReminders → Day
+// timer), or call the sendExpiryReminders action.
+// =====================================================================
+
+const EXPIRY_REMINDER_DAYS_BEFORE = 7;
+
+function sendMembershipExpiryReminders() {
+  if (freeRegistrationMode_()) return { success: true, remindersSent: 0, message: "Memberships no longer expire." };
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const values = subSheet.getDataRange().getValues();
+  if (values.length <= 1) return { success: true, remindersSent: 0, message: "No subscriptions to check." };
+
+  const headers = values[0].map(h => String(h).trim());
+  const emailIdx = headers.indexOf('email');
+  const nameIdx = headers.indexOf('name');
+  const reminderSentIdx = headers.indexOf('reminderSent');
+  const reminderSentAtIdx = headers.indexOf('reminderSentAt');
+  if (emailIdx === -1) return { success: false, message: "Subscriptions sheet has no email column." };
+
+  const now = new Date();
+  const bookCounts = getApprovedBookCountsByOwner();
+  let sent = 0;
+  let skipped = 0;
+
+  for (let i = 1; i < values.length; i++) {
+    const sub = rowToObject(headers, values[i]);
+    const email = normalizeEmail(sub.email);
+    if (!email) continue;
+
+    const status = computeSubscriptionStatus(sub);
+    if (status !== 'FREE_TRIAL' && status !== 'TRIAL' && status !== 'PREMIUM') continue;
+
+    // Whichever window this member is actually on.
+    const endRaw = (status === 'PREMIUM') ? sub.subscriptionExpiry : (sub.trialEndDate || sub.subscriptionExpiry);
+    if (!endRaw) continue;
+    const endDate = new Date(endRaw);
+    if (isNaN(endDate.getTime())) continue;
+
+    const daysLeft = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysLeft < 0 || daysLeft > EXPIRY_REMINDER_DAYS_BEFORE) continue;
+
+    // Send once per membership window. reminderSentAt is compared against
+    // this window's end date so a renewed member becomes eligible again
+    // instead of being silently skipped forever.
+    if (reminderSentIdx !== -1 && reminderSentAtIdx !== -1) {
+      const alreadySent = boolFlag(values[i][reminderSentIdx]);
+      const sentAt = values[i][reminderSentAtIdx] ? new Date(values[i][reminderSentAtIdx]) : null;
+      const sentThisWindow = alreadySent && sentAt && !isNaN(sentAt.getTime())
+        && (endDate.getTime() - sentAt.getTime()) <= (EXPIRY_REMINDER_DAYS_BEFORE + 1) * 24 * 60 * 60 * 1000;
+      if (sentThisWindow) { skipped++; continue; }
+    }
+
+    const bookCount = bookCounts[email] || 0;
+    const ok = sendMembershipExpiryReminderEmail(email, sub.name, status, daysLeft, bookCount);
+    if (ok) {
+      sent++;
+      if (reminderSentIdx !== -1) subSheet.getRange(i + 1, reminderSentIdx + 1).setValue('Yes');
+      if (reminderSentAtIdx !== -1) subSheet.getRange(i + 1, reminderSentAtIdx + 1).setValue(now);
+      logActivity(email, "Expiry Reminder Sent", `${daysLeft} day(s) remaining`, "Success", "Membership");
+    }
+  }
+
+  Logger.log(JSON.stringify({ event: "expiryReminders", sent: sent, skipped: skipped }));
+  return { success: true, remindersSent: sent, alreadyReminded: skipped };
+}
+
+function sendMembershipExpiryReminderEmail(email, name, status, daysLeft, bookCount) {
+  try {
+    const readerName = String(name || '').trim().split(/\s+/)[0] || 'Reader';
+    const isTrial = status !== 'PREMIUM';
+    const whenText = daysLeft <= 0
+      ? "today"
+      : (daysLeft === 1 ? "tomorrow" : `in ${daysLeft} days`);
+
+    // The consequence stated plainly. This is the whole reason the email
+    // exists — a reader who knows their shelf comes down can renew; a
+    // reader who doesn't just finds their books gone.
+    const shelfLine = bookCount > 0
+      ? `<p>You currently have <strong>${bookCount}</strong> ${bookCount === 1 ? 'book' : 'books'} listed. When your ${isTrial ? 'trial' : 'membership'} ends, ${bookCount === 1 ? 'it comes' : 'they come'} out of the community Library and other readers will no longer be able to find ${bookCount === 1 ? 'it' : 'them'}. Nothing is deleted — everything returns the moment you renew.</p>`
+      : `<p>When your ${isTrial ? 'trial' : 'membership'} ends you'll keep your account, but you won't be able to list books, send swap requests, or message other readers until you renew.</p>`;
+
+    const content = `
+      <p>Hello ${escapeHtml(readerName)},</p>
+      <p>Your SwapSutra ${isTrial ? '1-Month Free Trial' : 'Chapters membership'} ends <strong>${whenText}</strong>.</p>
+      ${shelfLine}
+      <p>Continuing costs ₹49/month. You can renew any time from your profile.</p>
+      <p style="margin-top:24px;">Happy reading,<br/>The SwapSutra team</p>
+    `;
+    const htmlBody = getBrandedEmailTemplate(
+      isTrial ? "Your free trial is ending soon" : "Your membership is ending soon",
+      content
+    );
+    sendSwapSutraEmail({
+      to: email,
+      subject: isTrial ? "Your SwapSutra trial ends soon" : "Your SwapSutra membership ends soon",
+      htmlBody: htmlBody
+    });
+    return true;
+  } catch (e) {
+    Logger.log("sendMembershipExpiryReminderEmail failed for " + email + ": " + e);
+    return false;
+  }
+}
+
+function checkExpiredSubscriptions() {
+  if (freeRegistrationMode_()) return; // memberships no longer expire
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const subValues = subSheet.getDataRange().getValues();
+  if (subValues.length <= 1) return;
+  const subHeaders = subValues[0];
+  const subEmailIdx = subHeaders.indexOf('email');
+  const subExpiryIdx = subHeaders.indexOf('subscriptionExpiry');
+  const manualOverrideIdx = subHeaders.indexOf('manualDateOverride');
+  
+  const userSheet = getOrCreateSheet('Users', []);
+  const userValues = userSheet.getDataRange().getValues();
+  const userHeaders = userValues[0];
+  const uEmailIdx = userHeaders.indexOf('email');
+  const msIdx = userHeaders.indexOf('membership_status');
+  const ssIdx = userHeaders.indexOf('subscription_status');
+  
+  const bookSheet = getOrCreateSheet('Books', []);
+  const bData = bookSheet.getDataRange().getValues();
+  const bHeaders = bData[0];
+  const bOwnerIdx = bHeaders.indexOf('ownerEmail');
+  const bHiddenReasonIdx = bHeaders.indexOf('hiddenReason');
+
+  const now = new Date();
+  let expiredCount = 0;
+
+  for (let i = 1; i < subValues.length; i++) {
+    const email = normalizeEmail(subValues[i][subEmailIdx]);
+    const expiry = subValues[i][subExpiryIdx];
+    const manualOverride = subValues[i][manualOverrideIdx] === true || subValues[i][manualOverrideIdx] === 'TRUE' || subValues[i][manualOverrideIdx] === 'Yes';
+    
+    if (expiry && new Date(expiry) < now && !manualOverride) {
+      expiredCount++;
+      // 1. Update Users Sheet
+      const uRowIdx = userValues.findIndex(r => normalizeEmail(r[uEmailIdx]) === email);
+      if (uRowIdx !== -1) {
+        if (msIdx !== -1) userSheet.getRange(uRowIdx + 1, msIdx + 1).setValue('expired');
+        if (ssIdx !== -1) userSheet.getRange(uRowIdx + 1, ssIdx + 1).setValue('expired');
+      }
+      
+      // 2. We don't necessarily update Books sheet individual rows, as getBooks filters by subscription status active.
+    }
+  }
+  
+  Logger.log("Subscription expiry check complete. Expired found: " + expiredCount);
+  return { success: true, expiredCount };
+}
+
+function approveTestimonial(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const sheet = getOrCreateSheet('Testimonials', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idIdx = headers.indexOf('id');
+  const statusIdx = headers.indexOf('status');
+  const emailSentIdx = headers.indexOf('approvalEmailSent');
+  const emailIdx = headers.indexOf('email');
+  const nameIdx = headers.indexOf('name');
+
+  const rowIndex = values.findIndex(row => row[idIdx] === data.testimonialId);
+  if (rowIndex === -1) return { success: false, message: "Testimonial not found" };
+
+  const targetEmail = values[rowIndex][emailIdx];
+  const userName = values[rowIndex][nameIdx];
+
+  Logger.log("Approving testimonial: " + data.testimonialId + " for " + targetEmail);
+
+  // 1. Update Sheet First
+  sheet.getRange(rowIndex + 1, statusIdx + 1).setValue('Approved');
+
+  // 2. Handle Email Reliably
+  let emailResultMessage = "";
+  const alreadySent = values[rowIndex][emailSentIdx] === 'Yes' || values[rowIndex][emailSentIdx] === true || values[rowIndex][emailSentIdx] === 'TRUE';
+  
+  if (!alreadySent) {
+    const emailSuccess = sendTestimonialApprovalEmail(targetEmail, userName);
+    if (emailSuccess) {
+      sheet.getRange(rowIndex + 1, emailSentIdx + 1).setValue('Yes');
+      emailResultMessage = "Testimonial approved and notification email sent.";
+    } else {
+      emailResultMessage = "Testimonial approved but notification email failed.";
+      const errIdx = headers.indexOf('email_error');
+      if (errIdx !== -1) sheet.getRange(rowIndex + 1, errIdx + 1).setValue("Email failed");
+    }
+  } else {
+    emailResultMessage = "Testimonial approved (email already sent previously).";
+  }
+
+  return { success: true, message: emailResultMessage };
+}
+
+
+function uploadSwapProof(data) {
+  const chatId = data.chatId;
+  const swapId = data.swapId;
+  const uploaderEmail = normalizeEmail(data.uploaderEmail);
+  const phase = data.phase; // owner_pre_handover, requester_received, requester_pre_return, owner_received_return
+  
+  try {
+    const chat = getChatById(chatId);
+    if (!chat) return { success: false, message: "Chat not found" };
+    if (!canAccessChat(chat, uploaderEmail)) return { success: false, message: "Unauthorized" };
+    if (!isAdminEmail(uploaderEmail)) {
+      const accessError = requireApprovedMember(uploaderEmail, 'Uploading handover proof');
+      if (accessError) return accessError;
+    }
+
+    // Same master state machine gate as sendChatMessage: uploading
+    // handover/return condition evidence is content creation that should
+    // wait for security-fee approval exactly like posting a message does.
+    // Admin stays exempt so support can still attach evidence on a
+    // party's behalf. The unlock decision is made ONLY from chat.swapId
+    // (the server's own record of which swap this chat belongs to) —
+    // never from the client-supplied data.swapId, which would otherwise
+    // let a caller point the unlock check at an unrelated, already-approved
+    // swap while still writing/attaching evidence against this chat. And
+    // exactly like sendChatMessage, a missing chat.swapId on a real
+    // (non-BookRequest) chat fails CLOSED rather than skipping the gate.
+    const isPreSwapDiscussionChatForProof = chat.chatType === 'BookRequest' || String(chat.swapId || '').indexOf('SS_REQ_BOOK_') === 0;
+    if (!isAdminEmail(uploaderEmail) && !isPreSwapDiscussionChatForProof) {
+      if (!chat.swapId || !swapChatUnlocked(chat.swapId)) {
+        return {
+          success: false,
+          error: 'SECURITY_FEE_PENDING',
+          message: 'Uploads unlock once SwapSutra has approved every required security-fee payment on this exchange.'
+        };
+      }
+    }
+
+    // Status check
+    if (uploaderEmail !== 'swapsutra@gmail.com') {
+      if (chat.chatStatus === 'Archived') {
+        return { success: false, message: "This swap is archived. Uploads are disabled." };
+      }
+    }
+
+    let mediaUrl = "";
+    if (data.fileData && data.fileName) {
+      const folder = getOrCreateFolder("SwapProofs_" + chatId);
+      const blob = Utilities.newBlob(Utilities.base64Decode(data.fileData.split(',')[1]), data.mimeType || 'image/jpeg', data.fileName);
+      const file = folder.createFile(blob);
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      mediaUrl = file.getUrl();
+    } else if (data.mediaUrl) {
+      mediaUrl = data.mediaUrl;
+    }
+
+    const proofSheet = getOrCreateSheet('SwapProofs', []);
+    const id = generateId('PR_');
+    const now = new Date();
+    
+    const headers = proofSheet.getDataRange().getValues()[0];
+    const row = headers.map(h => {
+      if (h === 'id') return id;
+      if (h === 'chatId') return chatId;
+      if (h === 'swapId') return swapId;
+      if (h === 'uploaderEmail') return uploaderEmail;
+      if (h === 'mediaUrl') return mediaUrl;
+      if (h === 'mediaType') return data.mediaType || 'image';
+      if (h === 'phase') return phase;
+      if (h === 'timestamp') return now;
+      return "";
+    });
+    proofSheet.appendRow(row);
+
+    // Trigger system message
+    const phaseDisplay = {
+      'owner_pre_handover': 'Pre-handover condition proof',
+      'requester_received': 'Received condition proof',
+      'requester_pre_return': 'Pre-return condition proof',
+      'owner_received_return': 'Return received condition proof'
+    }[phase] || 'Condition proof';
+
+    sendChatMessage({
+      chatId: chatId,
+      senderEmail: 'swapsutra@gmail.com',
+      senderRole: 'Admin',
+      message: `📸 ${phaseDisplay} has been uploaded by ${uploaderEmail.split('@')[0]}.`
+    });
+
+    return { success: true, id: id, mediaUrl: mediaUrl };
+  } catch (e) {
+    return { success: false, message: e.toString() };
+  }
+}
+
+function getSwapProofs(chatId, email) {
+  if (!chatId) return [];
+  const userEmail = normalizeEmail(email);
+  const chat = getChatById(chatId);
+  if (!chat || !canAccessChat(chat, userEmail)) return [];
+  if (!isAdminEmail(userEmail)) {
+    const accessError = requireApprovedMember(userEmail, 'Handover proof');
+    if (accessError) return [];
+  }
+  const sheet = getOrCreateSheet('SwapProofs', []);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return [];
+  
+  const headers = values[0];
+  const chatIdx = headers.indexOf('chatId');
+  
+  const proofs = [];
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][chatIdx] === chatId) {
+      const obj = {};
+      headers.forEach((h, j) => obj[h] = values[i][j]);
+      proofs.push(obj);
+    }
+  }
+  return proofs;
+}
+
+/**
+ * DEPRECATED — DO NOT RESTORE THE OLD BEHAVIOUR.
+ *
+ * This used to set Chats.chatStatus directly to 'Handed Over' / 'Returned'
+ * / 'Completed' from a single party's say-so, with no security-fee check,
+ * no two-party confirmation, no dispute check and no SwapStageEvents row —
+ * a complete bypass of the master state machine (getSwapStage / stageAction
+ * / SwapStageEvents). It cannot be safely rewritten as a thin wrapper onto
+ * stageAction(): stageAction requires per-stage photo/evidence upload
+ * before a confirm is accepted and re-derives everything from
+ * SwapStageEvents, while this endpoint's callers never uploaded evidence
+ * through that flow and its 'type' values (handover/return/confirm_return)
+ * don't line up 1:1 with stageAction's stage names (HANDOVER/LOGISTICS/
+ * RECEIPT/RETURN/FINAL_CONDITION) — silently remapping one to the other
+ * would either skip a stage or invent evidence that was never uploaded.
+ * So this endpoint is disabled outright rather than guessed at.
+ *
+ * Every real caller has been moved onto the new flow: the frontend's old
+ * "Proofs" tab buttons that posted here now redirect readers to the
+ * "Stages" tab (SwapStateMachine.tsx / submitStageEvidence / confirmStage).
+ */
+function markHandedOver(data) {
+  return {
+    success: false,
+    error: 'DEPRECATED_ENDPOINT',
+    message: "This endpoint is deprecated — use the swap stage actions (Stages tab: uploadStageEvidence / confirmStage) instead."
+  };
+}
+
+/* =====================================================================
+   SERVER-SIDE PII / CONTACT-LEAK SCANNER
+   ---------------------------------------------------------------------
+   Runs inside sendChatMessage (and any other free-text-to-persisted-
+   message path — see addCircleMessage) BEFORE anything is written to a
+   sheet. Authoritative: there is no client-supplied flag that can skip
+   it, and it runs on the raw `message` string the server itself reads
+   off `data`, not on anything the frontend claims about that string.
+
+   Deliberately written with ZERO Apps Script globals (no Logger,
+   SpreadsheetApp, etc.) so this whole block is a plain, side-effect-free
+   set of functions a plain Node process can call directly — see the
+   `module.exports` guard at the bottom, used by test-pii-scanner.js.
+   That harness requires THIS file (with a few GAS globals stubbed so the
+   top-of-file spreadsheet lookup doesn't throw) rather than duplicating
+   the logic, so there is exactly one copy of the detection rules.
+
+   Each detectXxx(text) is independent and returns a plain
+   {matched, category, method?} object — never the matched substring,
+   so a caller can safely log/return the result without leaking the
+   very text it flagged. scanMessageForPII(text) normalizes once and
+   runs every detector, returning the first match plus `blocked`.
+   ===================================================================== */
+
+/** Unicode-normalize, collapse whitespace, trim. Cheap and idempotent. */
+function normalizeForScan(text) {
+  let t = String(text == null ? '' : text);
+  try { t = t.normalize('NFKC'); } catch (e) { /* NFKC unsupported: fall through on the raw string */ }
+  t = t.replace(/\s+/g, ' ').trim();
+  return t;
+}
+
+var PII_NUMBER_WORDS = {
+  zero: '0', one: '1', two: '2', three: '3', four: '4',
+  five: '5', six: '6', seven: '7', eight: '8', nine: '9'
+};
+
+/** 10-digit Indian mobile (6-9 lead), optionally prefixed 91/+91/0, or an
+ *  11/12-digit run carrying that prefix. A bare 9-digit run is accepted too
+ *  (best-effort: one digit lost to obfuscation is still "most of" a valid
+ *  run, per spec) but nothing shorter. */
+function looksLikePhoneDigits(digits) {
+  if (!digits) return false;
+  if (/^(91)?[6-9]\d{9}$/.test(digits)) return true;   // 10 or 12 digits
+  if (/^0[6-9]\d{9}$/.test(digits)) return true;        // 11 digits, leading 0
+  if (digits.length === 9 && /^[6-9]\d{8}$/.test(digits)) return true; // best-effort obfuscation
+  return false;
+}
+
+/** True when the digit run at `idx` in `str` reads as an ISBN-13 rather
+ *  than a phone number: literal 978/979 13-digit prefix, or the literal
+ *  word ISBN sitting just before it. */
+function isIsbnContext(str, idx, digitsOnly) {
+  if (digitsOnly.length === 13 && (digitsOnly.indexOf('978') === 0 || digitsOnly.indexOf('979') === 0)) return true;
+  const before = str.slice(Math.max(0, idx - 15), idx);
+  return /isbn/i.test(before);
+}
+
+/** Price ("₹500"), page count ("320 pages"), edition/year context words
+ *  around a digit run — none of these should ever be read as a phone
+ *  number even when the digit count coincidentally lines up. */
+function hasPriceOrMetaContext(str, idx, endIdx) {
+  const before = str.slice(Math.max(0, idx - 12), idx);
+  const after = str.slice(endIdx, endIdx + 20);
+  if (/[₹]\s*$/.test(before)) return true;
+  if (/\brs\.?\s*$/i.test(before)) return true;
+  if (/\bedition\b\s*$/i.test(before)) return true;
+  if (/\byear\b\s*$/i.test(before)) return true;
+  if (/^\s*pages?\b/i.test(after)) return true;
+  return false;
+}
+
+/**
+ * PHONE: Indian mobile numbers in plain, +91, spaced/hyphenated/bracketed,
+ * or best-effort spelled-out-digit form. Excludes ISBN-13 runs and
+ * price/page-count/edition/year-adjacent digit runs.
+ */
+function detectPhone(text) {
+  const str = text;
+
+  // Separator-tolerant digit clusters: allow +, (), -, ., and spaces
+  // between digits so "98 7654 3210", "98765-43210" and "(987) 654-3210"
+  // all resolve to one candidate run.
+  const clusterRe = /[+(]?\d[\d\s\-.()]{7,}\d\)?/g;
+  let m;
+  while ((m = clusterRe.exec(str)) !== null) {
+    const raw = m[0];
+    const idx = m.index;
+    const endIdx = idx + raw.length;
+    const digitsOnly = raw.replace(/[^\d]/g, '');
+
+    if (isIsbnContext(str, idx, digitsOnly)) continue;
+    if (hasPriceOrMetaContext(str, idx, endIdx)) continue;
+
+    if (looksLikePhoneDigits(digitsOnly)) {
+      return { matched: true, category: 'PHONE', method: 'digits' };
+    }
+    // A cluster longer than 10 digits (e.g. a run that swallowed extra
+    // context digits) may still contain a clean 10-digit mobile number.
+    if (digitsOnly.length > 10 && !(digitsOnly.length === 13 && (digitsOnly.indexOf('978') === 0 || digitsOnly.indexOf('979') === 0))) {
+      for (let s = 0; s + 10 <= digitsOnly.length; s++) {
+        if (/^[6-9]\d{9}$/.test(digitsOnly.slice(s, s + 10))) {
+          return { matched: true, category: 'PHONE', method: 'digits-substring' };
+        }
+      }
+    }
+  }
+
+  // Spelled-out digits: "nine eight seven six five four three two one zero".
+  // Best-effort — requires a run of consecutive number-words that itself
+  // resolves to a valid-length phone digit string.
+  const lower = str.toLowerCase();
+  const tokens = lower.split(/[^a-z]+/);
+  let run = '';
+  for (let i = 0; i <= tokens.length; i++) {
+    const digit = tokens[i] ? PII_NUMBER_WORDS[tokens[i]] : undefined;
+    if (digit !== undefined) {
+      run += digit;
+    } else {
+      if (looksLikePhoneDigits(run)) {
+        return { matched: true, category: 'PHONE', method: 'spelled-out' };
+      }
+      run = '';
+    }
+  }
+
+  return { matched: false, category: 'PHONE' };
+}
+
+/**
+ * EMAIL: standard address form, plus "name [at] gmail [dot] com" / "name
+ * AT gmail DOT com" style obfuscation.
+ */
+function detectEmail(text) {
+  const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+  if (EMAIL_RE.test(text)) return { matched: true, category: 'EMAIL', method: 'standard' };
+
+  const OBFUSCATED_RE = /[a-zA-Z0-9._%+-]+\s*(?:\[at\]|\(at\)|\bat\b)\s*[a-zA-Z0-9-]+\s*(?:\[dot\]|\(dot\)|\bdot\b)\s*[a-zA-Z]{2,}/i;
+  if (OBFUSCATED_RE.test(text)) return { matched: true, category: 'EMAIL', method: 'obfuscated' };
+
+  return { matched: false, category: 'EMAIL' };
+}
+
+/**
+ * ADDRESS: residential/building-level detail or explicit address-sharing
+ * intent — never a bare city or public-place mention. Requires one of:
+ *  - an explicit "I live at / my address is / come to my house" phrase
+ *  - a house/flat/apartment/building/plot number
+ *  - a street-suffix address ("12 MG Road", "... Green Park Colony")
+ *  - a 6-digit PIN code CO-OCCURRING with address-indicating language
+ *    (never a bare 6-digit number alone).
+ */
+function detectAddress(text) {
+  const lower = text.toLowerCase();
+
+  const ADDRESS_PHRASE_RE = /\b(i live at|my address is|my home address|come to my house|meet me at my (home|house|flat)|my flat is (at|in)|my house is (at|in)|here is my address|send it to my house|my residential address)\b/;
+  if (ADDRESS_PHRASE_RE.test(lower)) return { matched: true, category: 'ADDRESS', method: 'phrase' };
+
+  const HOUSE_NUMBER_RE = /\b(house|flat|apartment|apt\.?|building|bldg\.?|plot|block)\s*(no\.?|#)?\s*[-:]?\s*\d+/;
+  if (HOUSE_NUMBER_RE.test(lower)) return { matched: true, category: 'ADDRESS', method: 'house-number' };
+
+  const STREET_RE = /\b\d{1,4}[a-z]?\s*,?\s*[a-z0-9\s]{0,30}\b(street|st\.|road|rd\.|lane|marg|colony|sector|nagar|society|residency|apartments)\b/;
+  if (STREET_RE.test(lower)) return { matched: true, category: 'ADDRESS', method: 'street' };
+
+  const PIN_CONTEXT_RE = /\b(house|flat|apartment|street|road|colony|sector|building|society|residency|nagar|marg|lane|pin\s*code|pincode|address)\b/;
+  const PIN_RE = /\b\d{6}\b/;
+  if (PIN_RE.test(lower) && PIN_CONTEXT_RE.test(lower)) {
+    return { matched: true, category: 'ADDRESS', method: 'pin-with-context' };
+  }
+
+  return { matched: false, category: 'ADDRESS' };
+}
+
+/**
+ * PRECISE_LOCATION: map-share links (Google Maps / maps.app.goo.gl /
+ * goo.gl/maps / any http...maps... link), raw lat/long coordinate pairs,
+ * or "live location" / "here's my location" phrasing.
+ */
+function detectPreciseLocation(text) {
+  const lower = text.toLowerCase();
+
+  const MAPS_LINK_RE = /https?:\/\/[^\s]*(maps\.app\.goo\.gl|goo\.gl\/maps|google\.[a-z.]+\/maps|maps\.google\.[a-z.]+|[^\s]*maps[^\s]*)/i;
+  if (MAPS_LINK_RE.test(text)) return { matched: true, category: 'PRECISE_LOCATION', method: 'maps-link' };
+
+  const LATLONG_RE = /-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/;
+  if (LATLONG_RE.test(text)) return { matched: true, category: 'PRECISE_LOCATION', method: 'coordinates' };
+
+  const LOCATION_PHRASE_RE = /\b(live location|here'?s my (exact )?location|sharing my (live )?location|my exact location|my current location)\b/;
+  if (LOCATION_PHRASE_RE.test(lower)) return { matched: true, category: 'PRECISE_LOCATION', method: 'phrase' };
+
+  return { matched: false, category: 'PRECISE_LOCATION' };
+}
+
+/**
+ * EXTERNAL_CONTACT: WhatsApp/Telegram/Instagram/etc. number- or
+ * handle-sharing, direct off-platform links (t.me/, wa.me/), or an
+ * explicit "let's move this off SwapSutra" instruction paired with a
+ * contact method.
+ */
+function detectExternalContact(text) {
+  const lower = text.toLowerCase();
+
+  const OFF_PLATFORM_LINK_RE = /\b(t\.me\/|wa\.me\/|instagram\.com\/|telegram\.me\/)\S+/i;
+  if (OFF_PLATFORM_LINK_RE.test(text)) return { matched: true, category: 'EXTERNAL_CONTACT', method: 'link' };
+
+  const PLATFORM_RE = /\b(whatsapp|telegram|instagram|insta|snapchat|signal|wechat|messenger)\b/;
+  const HANDLE_RE = /@[a-zA-Z0-9_.]{2,30}\b/;
+  const CONTACT_VERB_RE = /\b(dm me|message me|contact me|call me|text me|reach me|add me|whatsapp me|ping me)\b/;
+  const DIGIT_CLUSTER_RE = /\d[\d\s\-.()]{7,}\d/;
+
+  const hasPlatform = PLATFORM_RE.test(lower);
+  const hasHandle = HANDLE_RE.test(text);
+  const hasContactVerb = CONTACT_VERB_RE.test(lower);
+  const hasDigits = DIGIT_CLUSTER_RE.test(text);
+
+  if (hasPlatform && (hasHandle || hasContactVerb || hasDigits)) {
+    return { matched: true, category: 'EXTERNAL_CONTACT', method: 'platform+contact' };
+  }
+
+  const MOVE_OFF_RE = /\b(move|take|continue)\s+this\s+(off|outside)\s+(swapsutra|this\s+app|the\s+app|platform)\b/;
+  if (MOVE_OFF_RE.test(lower) && (hasPlatform || hasHandle || hasContactVerb)) {
+    return { matched: true, category: 'EXTERNAL_CONTACT', method: 'move-off-platform' };
+  }
+
+  return { matched: false, category: 'EXTERNAL_CONTACT' };
+}
+
+/** Safe, non-leaking, category-specific user-facing warning. Never echoes
+ *  the flagged text — only names the category. */
+function piiWarningForCategory(category) {
+  const WARNINGS = {
+    PHONE: "Your message wasn't sent because it appears to contain a phone number. For your safety, please keep phone numbers and personal contact details inside SwapSutra's protected flow.",
+    EMAIL: "Your message wasn't sent because it appears to contain an email address. For your safety, please keep personal contact details inside SwapSutra's protected flow.",
+    ADDRESS: "Your message wasn't sent because it appears to contain a personal or home address. For your safety, please keep home addresses inside SwapSutra's protected flow.",
+    PRECISE_LOCATION: "Your message wasn't sent because it appears to contain a precise location or map link. For your safety, please keep exact locations inside SwapSutra's protected flow.",
+    EXTERNAL_CONTACT: "Your message wasn't sent because it appears to contain personal contact information. For your safety, please keep phone numbers, home addresses and personal contact details inside SwapSutra's protected flow."
+  };
+  return WARNINGS[category] || WARNINGS.EXTERNAL_CONTACT;
+}
+
+/**
+ * Orchestrator: normalizes once, runs every detector, returns the first
+ * match. Order is EXTERNAL_CONTACT / PRECISE_LOCATION / ADDRESS / EMAIL /
+ * PHONE so a message that trips more than one (e.g. "WhatsApp me at
+ * 9876543210") is reported under its most specific/most useful category.
+ * Never includes the matched substring — only booleans + category names,
+ * safe to log or return to the client as-is.
+ */
+function scanMessageForPII(text) {
+  const normalized = normalizeForScan(text);
+  if (!normalized) return { blocked: false, matches: [] };
+
+  const detectors = [detectExternalContact, detectPreciseLocation, detectAddress, detectEmail, detectPhone];
+  const matches = [];
+  for (let i = 0; i < detectors.length; i++) {
+    const result = detectors[i](normalized);
+    if (result && result.matched) matches.push({ category: result.category, method: result.method || '' });
+  }
+
+  if (matches.length === 0) return { blocked: false, matches: [] };
+  return { blocked: true, category: matches[0].category, matches: matches };
+}
+
+/**
+ * Generalized alias for scanMessageForPII, kept identical on purpose:
+ * every free-text surface (transaction chat, Readers Circle messages,
+ * Readers Circle join notes, Readers Café messages, Readers Café story
+ * captions, swap disputes) calls into this ONE detection implementation.
+ * There is no per-surface copy of the detector logic — only the call
+ * site and the safe `contentType` label passed to logChatSafetyEvent
+ * differ from one integration to the next.
+ */
+function scanUserGeneratedContent(text) {
+  return scanMessageForPII(text);
+}
+
+// Node-testable without pulling in any Apps Script runtime: a plain Node
+// process can `require('./appsscript.js')` (after stubbing the handful of
+// GAS globals this file's top section touches, e.g. Logger/SpreadsheetApp)
+// and call these directly. Apps Script itself never defines `module`, so
+// this block is inert there.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    normalizeForScan,
+    looksLikePhoneDigits,
+    detectPhone,
+    detectEmail,
+    detectAddress,
+    detectPreciseLocation,
+    detectExternalContact,
+    piiWarningForCategory,
+    scanMessageForPII,
+    scanUserGeneratedContent,
+    validateUserEnteredMRP,
+    effectiveBookMRP,
+    pricingSourceOf,
+    parsePrintedMrp,
+    validateGeminiPriceEstimate,
+    normalizeConditionGrade,
+    depositRateForCondition,
+    depositFor
+  };
+}
+
+function sendChatMessage(data, internalOptions) {
+  const chatId = data.chatId;
+  const senderEmail = normalizeEmail(data.senderEmail);
+  const senderRole = data.senderRole || 'User';
+  const message = data.message;
+  const chat = getChatById(chatId);
+  if (!chat) return { success: false, message: "Chat not found" };
+  if (!canAccessChat(chat, senderEmail)) return { success: false, message: "Unauthorized" };
+  if (!isAdminEmail(senderEmail)) {
+    const accessError = requireApprovedMember(senderEmail, 'Reader messaging');
+    if (accessError) return accessError;
+  }
+
+  // Master state machine gate: a chat stays locked, server-side, until
+  // every required security-fee payer on this swap is individually
+  // ADMIN_APPROVED — not merely "paid". This is enforced here (not just
+  // hidden in the UI) and applies retroactively to every already-accepted
+  // swap, since swapChatUnlocked() lazily creates NOT_SUBMITTED records
+  // for a swap that has never had one, per the explicit no-grandfathering
+  // migration decision. Admin (the third chat participant) is exempt, so
+  // support can still see and post the safety notices below.
+  //
+  // A pre-swap BookRequest chat (chatType === 'BookRequest', see
+  // respondToBookRequest) is the one legitimate exception: it exists
+  // BEFORE any SwapRequest/security-fee record does, purely to negotiate
+  // whether a swap happens at all, so it is never subject to this gate.
+  // Every other chat IS swap-linked, so the gate must fail CLOSED rather
+  // than being skipped whenever chat.swapId happens to be missing/blank —
+  // a falsy swapId on a real swap chat must never be read as "no gate
+  // applies", only as "this exchange cannot be verified as unlocked".
+  // Oct 2026 (Exchange Room): the chat is part of the one exchange room and
+  // is open from acceptance, so both readers can talk while the condition
+  // video and the payment happen. Contact details are still blocked by the
+  // PII scan below; addresses are shared only on a courier route, after
+  // payment. A real swap chat still fails CLOSED without a swapId.
+  const isPreSwapDiscussionChat = chat.chatType === 'BookRequest' || String(chat.swapId || '').indexOf('SS_REQ_BOOK_') === 0;
+  if (!isAdminEmail(senderEmail) && !isPreSwapDiscussionChat) {
+    if (!chat.swapId || !roomChatOpen_(chat.swapId)) {
+      return {
+        success: false,
+        error: 'ROOM_CLOSED',
+        message: 'This exchange room is not open.'
+      };
+    }
+  }
+  
+  // Status check
+  if (senderEmail !== 'swapsutra@gmail.com') {
+    if (chat.chatStatus === 'Archived') {
+      return { success: false, message: "This swap is archived. Messaging is disabled." };
+    }
+  }
+
+  // Server-side PII / contact-leak gate — runs BEFORE anything is written,
+  // so a blocked message never touches the Messages sheet, never reaches
+  // getChatMessages, and never notifies the recipient. Not skippable from
+  // the client: there is no field a caller can pass to bypass it, it runs
+  // on the exact string the server itself will otherwise persist, and it
+  // applies to every sender except SwapSutra admin (the system safety
+  // notices posted as 'swapsutra@gmail.com' above are not user free text).
+  if (!isAdminEmail(senderEmail)) {
+    const piiScan = scanMessageForPII(message);
+    if (piiScan.blocked) {
+      logChatSafetyEvent({
+        chatId: chatId,
+        swapId: chat.swapId || '',
+        senderEmail: senderEmail,
+        category: piiScan.category,
+        contentType: 'TRANSACTION_CHAT'
+      });
+      return {
+        success: false,
+        blocked: true,
+        reason: 'PERSONAL_INFORMATION',
+        category: piiScan.category,
+        message: piiWarningForCategory(piiScan.category)
+      };
+    }
+  }
+
+  const msgSheet = getOrCreateSheet('Messages', []);
+  const msgId = generateId('SS_MSG_');
+  const now = new Date();
+
+  // Keep the original message shape and append the optional reply reference
+  // for existing sheets. Old messages remain valid with an empty value.
+  const msgHeaders = ensureSheetHeaders(msgSheet, [
+    'messageId', 'chatId', 'senderEmail', 'senderRole', 'message',
+    'createdAt', 'mediaUrl', 'mediaType', 'replyToMessageId'
+  ]);
+
+  // A reply may only point to a message in this same conversation. The
+  // frontend can resolve the quoted preview from the returned thread using
+  // this stable ID; no copied message text is trusted or stored.
+  const replyToMessageId = String(data.replyToMessageId || '').trim();
+  if (replyToMessageId) {
+    if (replyToMessageId.length > 120 || replyToMessageId === msgId) {
+      return { success: false, error: 'INVALID_REPLY_TARGET', message: 'Choose a message in this chat to reply to.' };
+    }
+    const threadRows = msgSheet.getDataRange().getValues();
+    const threadHeaders = (threadRows[0] || []).map(h => String(h || '').trim());
+    const messageIdIndex = threadHeaders.indexOf('messageId');
+    const chatIdIndex = threadHeaders.indexOf('chatId');
+    const targetExists = messageIdIndex !== -1 && chatIdIndex !== -1 && threadRows.slice(1).some(row =>
+      String(row[messageIdIndex]) === replyToMessageId && String(row[chatIdIndex]) === String(chatId)
+    );
+    if (!targetExists) {
+      return { success: false, error: 'INVALID_REPLY_TARGET', message: 'That message is no longer available in this chat.' };
+    }
+  }
+
+  const row = new Array(msgHeaders.length).fill("");
+  msgHeaders.forEach((h, i) => {
+    if (h === 'messageId') row[i] = msgId;
+    else if (h === 'chatId') row[i] = chatId;
+    else if (h === 'senderEmail') row[i] = senderEmail;
+    else if (h === 'senderRole') row[i] = senderRole;
+    else if (h === 'message') row[i] = message;
+    else if (h === 'createdAt') row[i] = now;
+    else if (h === 'mediaUrl') row[i] = data.mediaUrl || "";
+    else if (h === 'mediaType') row[i] = data.mediaType || "";
+    else if (h === 'replyToMessageId') row[i] = replyToMessageId;
+  });
+  msgSheet.appendRow(row);
+  chatThreadCacheClear_(chatId);
+
+  const emailQueued = (internalOptions && internalOptions.skipEmail) || queueChatEmailSafely_(() => queueTransactionChatEmail_(chat, msgId, senderEmail, message, data.mediaType, now));
+  return emailQueued ? { success: true, messageId: msgId } : { success: true, messageId: msgId, emailQueued: false };
+}
+
+const CHAT_SAFETY_EVENTS_SHEET = 'ChatSafetyEvents';
+// 'contentType' was added later (e.g. 'CIRCLE_MESSAGE' / 'CAFE_MESSAGE' /
+// 'CAFE_STORY' / 'CIRCLE_JOIN_NOTE' / 'TRANSACTION_CHAT' / 'DISPUTE') to
+// distinguish which surface a block happened on. Appended at the END of
+// the header list on purpose: ensureSheetHeaders() adds any missing
+// header as a new LAST column on an existing sheet, and logChatSafetyEvent
+// appends its row positionally — so the value list below must keep
+// 'contentType' last too, or old rows and new rows would misalign.
+const CHAT_SAFETY_EVENTS_HEADERS = ['id', 'messageBlocked', 'reason', 'category', 'timestamp', 'swapId', 'chatId', 'senderEmail', 'contentType'];
+
+function getChatSafetyEventsSheet() {
+  const sheet = getOrCreateSheet(CHAT_SAFETY_EVENTS_SHEET, CHAT_SAFETY_EVENTS_HEADERS);
+  ensureSheetHeaders(sheet, CHAT_SAFETY_EVENTS_HEADERS);
+  return sheet;
+}
+
+/**
+ * Append-only abuse-pattern log for a blocked chat message. Deliberately
+ * NEVER receives or writes the raw message text — only safe metadata
+ * (blocked flag, reason, category, timestamp, swapId/chatId, sender
+ * email). Follows the same getOrCreateSheet/ensureSheetHeaders convention
+ * as SwapStageEvents/dispute events. A failure here must never surface to
+ * the caller or block the (already-blocked) response from going out.
+ */
+function logChatSafetyEvent(entry) {
+  try {
+    const sheet = getChatSafetyEventsSheet();
+    const id = generateId('SS_SAFE_');
+    sheet.appendRow([
+      id,
+      true,
+      'PERSONAL_INFORMATION',
+      entry.category || '',
+      new Date(),
+      entry.swapId || '',
+      entry.chatId || '',
+      normalizeEmail(entry.senderEmail || ''),
+      entry.contentType || ''
+    ]);
+  } catch (err) {
+    // Only safe fields ever reach Logger here too — never the message text.
+    Logger.log('logChatSafetyEvent failed (category=' + (entry && entry.category) + '): ' + err.toString());
+  }
+}
+
+/**
+ * NEWSLETTER SYSTEM
+ */
+function createNewsletter(data) {
+  const sheet = getOrCreateSheet('MonthlyNewsletters', []);
+  const id = generateId('SS_NEWS_');
+  const now = new Date();
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+  
+  const row = new Array(headers.length).fill("");
+  headers.forEach((h, i) => {
+    if (h === 'newsletterId') row[i] = id;
+    else if (h === 'status') row[i] = 'Draft';
+    else if (h === 'createdBy') row[i] = data.adminEmail;
+    else if (h === 'createdAt') row[i] = now;
+    else if (h === 'updatedAt') row[i] = now;
+    else if (data[h] !== undefined) row[i] = data[h];
+  });
+  
+  sheet.appendRow(row);
+  return { success: true, newsletterId: id };
+}
+
+function updateNewsletter(data) {
+  const sheet = getOrCreateSheet('MonthlyNewsletters', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idIdx = headers.indexOf('newsletterId');
+  
+  const rowIndex = values.findIndex(row => row[idIdx] === data.newsletterId);
+  if (rowIndex === -1) return { success: false, message: "Newsletter not found" };
+
+  const now = new Date();
+  headers.forEach((h, i) => {
+    if (data[h] !== undefined && !['newsletterId', 'createdAt', 'createdBy'].includes(h)) {
+      sheet.getRange(rowIndex + 1, i + 1).setValue(data[h]);
+    }
+  });
+  sheet.getRange(rowIndex + 1, headers.indexOf('updatedAt') + 1).setValue(now);
+  
+  return { success: true };
+}
+
+function updateNewsletterStatus(id, status) {
+  const sheet = getOrCreateSheet('MonthlyNewsletters', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idIdx = headers.indexOf('newsletterId');
+  const statusIdx = headers.indexOf('status');
+  
+  const rowIndex = values.findIndex(row => row[idIdx] === id);
+  if (rowIndex === -1) return { success: false, message: "Newsletter not found" };
+
+  sheet.getRange(rowIndex + 1, statusIdx + 1).setValue(status);
+  sheet.getRange(rowIndex + 1, headers.indexOf('updatedAt') + 1).setValue(new Date());
+  
+  return { success: true };
+}
+
+function buildNewsletterHtml(data) {
+  const ctaSection = (data.ctaText && data.ctaUrl) ? `
+    <div style="text-align: center; margin: 40px 0;">
+      <a href="${data.ctaUrl}" style="display: inline-block; padding: 18px 36px; background-color: #C5A059; color: #ffffff !important; text-decoration: none; border-radius: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; font-size: 12px; box-shadow: 0 4px 12px rgba(197, 160, 89, 0.3);">${data.ctaText}</a>
+    </div>
+  ` : '';
+
+  const highlightSection = data.highlightQuestion ? `
+    <div style="background-color: #4A3728; border-radius: 16px; padding: 30px; margin: 30px 0; border: 1px solid #C5A059;">
+      <p style="color: #C5A059; font-size: 12px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; font-weight: bold;">Reflecting on...</p>
+      <p style="color: #FAF7F2; font-size: 18px; line-height: 1.6; margin: 0; font-style: italic;">"${data.highlightQuestion}"</p>
+    </div>
+  ` : '';
+
+  // Process body text to support trust cards and highlighting
+  const formattedBody = formatNewsletterBody(data.bodyContent);
+  const mascotSection = `
+    <div style="text-align:center; margin:32px 0 8px; padding:24px 16px; border:1px solid #EBE3D5; border-radius:16px; background:#fffdf9;">
+      <a href="https://swapsutra.in/mascot-hi.html" style="display:inline-block; color:#4A3B32; text-decoration:none;">
+        <img src="https://swapsutra.in/swapsutra-fox-mascot.webp" width="150" alt="Tap to say hi to the SwapSutra fox" style="display:block; width:150px; max-width:100%; height:auto; margin:0 auto 10px; border:0;">
+        <span style="color:#8E4A59; font:italic 16px Georgia,serif;">Tap our little fox to say hi</span>
+      </a>
+    </div>
+  `;
+
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body { margin: 0; padding: 0; background-color: #1A1512; }
+        .wrapper { width: 100%; background-color: #1A1512; padding: 40px 0; }
+        .main { background-color: #FAF7F2; margin: 0 auto; width: 95%; max-width: 600px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1A1512; border-radius: 28px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+        .header { padding: 60px 50px 40px; text-align: center; border-bottom: 1px solid #EBE3D5; background-color: #ffffff; }
+        .content { padding: 50px; line-height: 1.8; font-size: 16px; }
+        .footer { padding: 60px 40px; text-align: center; background-color: #1A1512; color: #FAF7F2; font-size: 12px; border-top: 1px solid rgba(197, 160, 89, 0.2); }
+        h1 { font-family: 'Georgia', serif; font-style: italic; color: #1A1512; font-size: 34px; margin: 0 0 10px; font-weight: normal; letter-spacing: -1px; line-height: 1.2; }
+        .edition { color: #C5A059; font-size: 10px; text-transform: uppercase; letter-spacing: 5px; margin-bottom: 25px; display: block; font-weight: bold; }
+        .signoff { margin-top: 50px; border-top: 1px solid #EBE3D5; padding-top: 40px; }
+        p { margin-bottom: 20px; }
+      </style>
+    </head>
+    <body>
+      <div class="wrapper">
+        <div class="main">
+          <div class="header">
+            <div style="font-size: 16px; color: #C5A059; margin-bottom: 30px; letter-spacing: 8px; font-weight: bold; text-transform: uppercase;">SWAPSUTRA</div>
+            <span class="edition">${data.editionLabel || 'The Monthly Letter'}</span>
+            <h1>${data.headerTitle || data.subject}</h1>
+            <p style="font-family: 'Georgia', serif; font-style: italic; color: #C5A059; font-size: 15px; margin-top: 10px; opacity: 0.8;">${data.preheader || ''}</p>
+          </div>
+          <div class="content">
+            <div style="font-family: 'Georgia', serif;">
+              ${formattedBody}
+            </div>
+            ${highlightSection}
+
+            ${ctaSection}
+            ${mascotSection}
+          </div>
+          <div class="footer">
+            <div style="margin-bottom: 40px;">
+              <p style="font-size: 14px; margin-bottom: 10px; color: #C5A059; font-family: 'Georgia', serif; font-style: italic;">With warmth,</p>
+              <p style="font-size: 20px; font-weight: bold; margin-bottom: 5px; letter-spacing: 1px;">Unnati Goyal</p>
+              <p style="font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px;">Founder, SwapSutra</p>
+            </div>
+            <p style="font-style: italic; opacity: 0.6; margin-bottom: 30px; font-family: 'Georgia', serif; font-size: 14px;">"Jahan har kitaab apna safar paati hai."</p>
+            <div style="margin-top: 50px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 30px;">
+              <p style="font-size: 9px; opacity: 0.3; letter-spacing: 1px;">© ${new Date().getFullYear()} SwapSutra. All literary rights reserved.</p>
+              <p style="font-size: 9px; opacity: 0.3; margin-top: 8px; letter-spacing: 1px;"><a href="https://swapsutra.in" style="color: #FAF7F2; text-decoration: none;">swapsutra.in</a></p>
+              ${NEWSLETTER_UNSUB_START}<p style="font-size: 11px; opacity: 0.6; margin-top: 14px;">You get this letter because you are a SwapSutra member. <a href="${NEWSLETTER_UNSUB_PLACEHOLDER}" style="color: #FAF7F2; text-decoration: underline;">Unsubscribe</a></p>${NEWSLETTER_UNSUB_END}
+            </div>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function formatNewsletterBody(text) {
+  if (!text) return "";
+  
+  const rules = [
+    { name: 'divider', regex: /^---$/, replace: '<hr style="border: 0; border-top: 1px solid #EBE3D5; margin: 40px 0;"/>' },
+    { name: 'highlight', regex: /^"(.*)"$/, replace: '<p style="font-style: italic; font-size: 20px; color: #4A3728; border-left: 3px solid #C5A059; padding-left: 25px; margin: 35px 0;">"$1"</p>' }
+  ];
+
+  let lines = text.split('\n');
+  let html = "";
+  let inCardGroup = false;
+
+  lines.forEach(line => {
+    let trimmed = line.trim();
+    if (!trimmed) {
+      if (inCardGroup) {
+        html += '</div>';
+        inCardGroup = false;
+      }
+      html += "<br/>";
+      return;
+    }
+
+    // Specific highlight rules
+    if (trimmed.includes("Your shelf. Your decision.") || trimmed.includes("your books won’t travel alone.")) {
+      html += `<p style="font-weight: bold; color: #C5A059; border-left: 3px solid #C5A059; padding-left: 20px; margin: 30px 0; font-family: 'Georgia', serif; font-style: italic;">${trimmed}</p>`;
+      return;
+    }
+
+    // Numbered Item -> Trust Card
+    let match = trimmed.match(/^(\d+)[\.\)]\s*(.*)/);
+    if (match) {
+      if (!inCardGroup) {
+         html += '<div style="margin: 40px 0;">';
+         inCardGroup = true;
+      }
+      html += `
+        <div style="background-color: #ffffff; border: 1px solid #EBE3D5; border-radius: 20px; padding: 30px; margin-bottom: 20px; box-shadow: 0 8px 24px rgba(74, 55, 40, 0.04);">
+           <div style="display: inline-block; width: 28px; height: 28px; background-color: #C5A059; color: #ffffff !important; border-radius: 50%; text-align: center; font-size: 12px; font-weight: bold; line-height: 28px; margin-bottom: 15px; font-family: Arial, sans-serif;">${match[1]}</div>
+           <p style="margin: 0; font-weight: bold; color: #1A1512; font-size: 18px; line-height: 1.4;">${match[2]}</p>
+        </div>
+      `;
+    } else {
+      if (inCardGroup) {
+        html += '</div>';
+        inCardGroup = false;
+      }
+      
+      let processed = trimmed;
+      // Basic markdown headers
+      if (trimmed.startsWith('### ')) processed = `<h3 style="color: #C5A059; font-size: 18px; text-transform: uppercase; letter-spacing: 2px; margin-top: 30px;">${trimmed.substring(4)}</h3>`;
+      else if (trimmed.startsWith('## ')) processed = `<h2 style="color: #1A1512; font-size: 24px; font-style: italic; font-family: Georgia, serif; margin-top: 35px;">${trimmed.substring(3)}</h2>`;
+      else processed = `<p style="margin-bottom: 18px; color: #1A1512; opacity: 0.9;">${trimmed}</p>`;
+      
+      html += processed;
+    }
+  });
+  
+  if (inCardGroup) html += '</div>';
+  
+  return html;
+}
+
+function findHeaderIndex(headers, candidates) {
+  const normalized = headers.map(h => normalizeHeader(h));
+  // Final check (11 Oct 2026): the candidates are normalised the same way.
+  // Callers pass 'requesterEmail' / 'createdAt', which never matched the
+  // lower-cased headers — so, for one, a reader whose request expired was
+  // never told.
+  const wanted = (candidates || []).map(c => normalizeHeader(c));
+  // In the caller's order of preference, not the sheet's column order.
+  for (let i = 0; i < wanted.length; i++) {
+    const idx = normalized.indexOf(wanted[i]);
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+function isTruthyValue(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return value === true || ['true', 'yes', 'y', '1', 'active', 'subscribed', 'confirmed', 'optedin', 'opted-in'].includes(normalized);
+}
+
+function isInactiveValue(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return value === false || ['false', 'no', 'n', '0', 'inactive', 'unsubscribed', 'cancelled', 'canceled', 'disabled'].includes(normalized);
+}
+
+function getApprovedMemberEmailSet() {
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const subData = subSheet.getDataRange().getValues();
+  if (subData.length <= 1) return new Set();
+
+  const headers = subData[0];
+  const emailIdx = findHeaderIndex(headers, ['email', 'useremail']);
+  const statusIdx = findHeaderIndex(headers, ['adminstatus', 'status', 'membershipstatus', 'subscriptionstatus', 'computedstatus']);
+  const approved = new Set();
+
+  subData.slice(1).forEach(row => {
+    const email = emailIdx !== -1 ? normalizeEmail(row[emailIdx]) : '';
+    const status = statusIdx !== -1 ? String(row[statusIdx] || '').trim().toLowerCase() : '';
+    if (email && ['approved', 'active', 'true', 'yes', 'verified'].includes(status)) approved.add(email);
+  });
+
+  return approved;
+}
+
+function isMemberOnlyNewsletter(newsletterData) {
+  const raw = [
+    newsletterData.memberOnly,
+    newsletterData.membersOnly,
+    newsletterData.audience,
+    newsletterData.audienceType,
+    newsletterData.recipientType,
+    newsletterData.sendTo
+  ].filter(v => v !== undefined && v !== null).join(' ').toLowerCase();
+
+  return raw.includes('member-only') || raw.includes('member only') || raw.includes('approved members') || raw.includes('paid members');
+}
+
+function getNewsletterRecipientResult(newsletterData) {
+  const sheet = getOrCreateSheet('NewsletterSubscribers', ["id", "name", "email", "timestamp", "LastEmailSentAt", "LastEmailSubject", "LastEmailStatus", "MonthlyEmailCount"]);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0] || [];
+  const emailIdx = findHeaderIndex(headers, ['email', 'useremail', 'subscriberemail']);
+  const statusIdx = findHeaderIndex(headers, ['status', 'subscriptionstatus', 'subscribestatus', 'newsletterstatus', 'active', 'consent', 'optin', 'optedin', 'newsletteroptin']);
+  const unsubIdx = findHeaderIndex(headers, ['unsubscribed', 'unsubscribestatus', 'unsubscribe', 'isunsubscribe']);
+  const memberOnly = isMemberOnlyNewsletter(newsletterData || {});
+  const approvedMembers = memberOnly ? getApprovedMemberEmailSet() : new Set();
+  const recipients = [];
+  const skippedRecipients = [];
+  const seen = new Set();
+  const known = new Set();
+
+  data.slice(1).forEach(row => {
+    const email = emailIdx !== -1 ? normalizeEmail(row[emailIdx]) : '';
+    if (email) known.add(email);
+    if (!email) {
+      skippedRecipients.push({ email: '', reason: 'Missing email' });
+      return;
+    }
+    if (seen.has(email)) {
+      skippedRecipients.push({ email, reason: 'Duplicate subscriber' });
+      return;
+    }
+
+    const statusValue = statusIdx !== -1 ? row[statusIdx] : '';
+    const unsubValue = unsubIdx !== -1 ? row[unsubIdx] : '';
+
+    if (unsubIdx !== -1 && isTruthyValue(unsubValue)) {
+      skippedRecipients.push({ email, reason: 'Unsubscribed' });
+      return;
+    }
+    if (statusIdx !== -1 && isInactiveValue(statusValue)) {
+      skippedRecipients.push({ email, reason: 'Inactive newsletter status' });
+      return;
+    }
+    if (statusIdx !== -1 && String(statusValue || '').trim() && !isTruthyValue(statusValue)) {
+      skippedRecipients.push({ email, reason: 'Newsletter status is not active/subscribed/opted-in' });
+      return;
+    }
+    if (memberOnly && !approvedMembers.has(email)) {
+      skippedRecipients.push({ email, reason: 'Member-only newsletter requires approved membership' });
+      return;
+    }
+
+    seen.add(email);
+    recipients.push(email);
+  });
+
+  // Every member is a subscriber unless they said no. Members who joined
+  // before auto-subscribe (so have no row yet) are included here; anyone
+  // with a row — including an Unsubscribed one — was decided above.
+  let membersAdded = 0;
+  newsletterMemberEmails_().forEach(email => {
+    if (known.has(email) || seen.has(email)) return;
+    if (memberOnly && !approvedMembers.has(email)) return;
+    seen.add(email);
+    recipients.push(email);
+    membersAdded++;
+  });
+
+  return {
+    recipients,
+    totalSubscribersFound: data.length - 1 + membersAdded,
+    eligibleRecipients: recipients.length,
+    skippedRecipients
+  };
+}
+
+function getActiveNewsletterSubscribers() {
+  return getNewsletterRecipientResult({}).recipients;
+}
+
+function sendNewsletterToRecipients(newsletterId, fixedRecipients) {
+  const newsSheet = getOrCreateSheet('MonthlyNewsletters', []);
+  const values = newsSheet.getDataRange().getValues();
+  const headers = values[0];
+  const idIdx = headers.indexOf('newsletterId');
+  
+  const rowIndex = values.findIndex(row => row[idIdx] === newsletterId);
+  if (rowIndex === -1) return { success: false, message: "Newsletter not found" };
+  
+  const newsletterData = {};
+  headers.forEach((h, i) => newsletterData[h] = values[rowIndex][i]);
+  
+  let recipients = [];
+  let recipientResult = {
+    totalSubscribersFound: 0,
+    eligibleRecipients: 0,
+    skippedRecipients: []
+  };
+  if (fixedRecipients) {
+    recipients = fixedRecipients;
+    recipientResult = {
+      totalSubscribersFound: fixedRecipients.length,
+      eligibleRecipients: fixedRecipients.length,
+      skippedRecipients: []
+    };
+  } else {
+    recipientResult = getNewsletterRecipientResult(newsletterData);
+    recipients = recipientResult.recipients;
+  }
+  
+  if (recipients.length === 0) {
+    return {
+      success: false,
+      message: "No active newsletter subscribers found.",
+      totalSubscribersFound: recipientResult.totalSubscribersFound,
+      eligibleRecipients: recipientResult.eligibleRecipients,
+      skippedRecipients: recipientResult.skippedRecipients
+    };
+  }
+  
+  const htmlBody = buildNewsletterHtml(newsletterData);
+  let successCount = 0;
+  let failureCount = 0;
+  let errorLog = [];
+  
+  recipients.forEach(email => {
+    try {
+      sendSwapSutraEmail({
+        to: email,
+        subject: newsletterData.subject,
+        htmlBody: personaliseNewsletterHtml_(htmlBody, email)
+      });
+      successCount++;
+    } catch (e) {
+      failureCount++;
+      errorLog.push(`${email}: ${e.toString()}`);
+    }
+  });
+  
+  if (!fixedRecipients) {
+    newsSheet.getRange(rowIndex + 1, headers.indexOf('status') + 1).setValue('Sent');
+    newsSheet.getRange(rowIndex + 1, headers.indexOf('sentAt') + 1).setValue(new Date());
+    newsSheet.getRange(rowIndex + 1, headers.indexOf('totalRecipients') + 1).setValue(recipients.length);
+    newsSheet.getRange(rowIndex + 1, headers.indexOf('successCount') + 1).setValue(successCount);
+    newsSheet.getRange(rowIndex + 1, headers.indexOf('failureCount') + 1).setValue(failureCount);
+    newsSheet.getRange(rowIndex + 1, headers.indexOf('errorLog') + 1).setValue(errorLog.join('\n'));
+  }
+  
+  return {
+    success: true,
+    successCount,
+    failureCount,
+    totalSubscribersFound: recipientResult.totalSubscribersFound,
+    eligibleRecipients: recipientResult.eligibleRecipients,
+    skippedRecipients: recipientResult.skippedRecipients
+  };
+}
+
+function sendScheduledNewsletters() {
+  const sheet = getOrCreateSheet('MonthlyNewsletters', []);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return;
+  
+  const headers = values[0];
+  const statusIdx = headers.indexOf('status');
+  const dateIdx = headers.indexOf('scheduledDate');
+  const timeIdx = headers.indexOf('scheduledTime');
+  const idIdx = headers.indexOf('newsletterId');
+  
+  // Current time in IST (Asia/Kolkata)
+  const now = new Date();
+  const istString = now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+  const istDate = new Date(istString);
+  
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (row[statusIdx] === 'Scheduled') {
+      const sDate = new Date(row[dateIdx]);
+      const sTimeStr = String(row[timeIdx]); // e.g. "18:00"
+      
+      const [hours, minutes] = sTimeStr.split(':').map(Number);
+      sDate.setHours(hours || 0, minutes || 0, 0, 0);
+      
+      const istScheduledDate = new Date(sDate.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+      
+      if (istDate >= istScheduledDate) {
+        Logger.log(`Sending scheduled newsletter: ${row[idIdx]}`);
+        sendNewsletterToRecipients(row[idIdx]);
+      }
+    }
+  }
+}
+
+function sendTrustEmail(email) {
+  const normEmail = normalizeEmail(email);
+  
+  // Rule 1: Relaxed check - newly registered or approved members get it
+  const subStatus = getUserSubscriptionStatus(normEmail);
+  if (!subStatus || subStatus === 'NoSubscription') {
+    Logger.log(`Skipping trust email for ${normEmail}: No subscription found.`);
+    return { success: false, message: "Subscription record missing." };
+  }
+
+  const subject = "Before your books ever leave your shelf… 📚";
+  
+  const htmlBody = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500&display=swap');
+        body { margin: 0; padding: 0; background-color: #1A1512; font-family: 'Inter', Helvetica, Arial, sans-serif; }
+        .wrapper { width: 100%; background-color: #1A1512; padding: 20px 0; }
+        .main { background-color: #FAF7F2; margin: 0 auto; width: 95%; max-width: 550px; color: #1A1512; border-radius: 28px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+        .header { padding: 45px 35px 25px; text-align: center; }
+        .content { padding: 0 35px 40px; line-height: 1.7; font-size: 15px; }
+        .footer { padding: 40px; text-align: center; background-color: #1A1512; color: #FAF7F2; font-size: 11px; }
+        h1 { font-family: 'Playfair Display', 'Georgia', serif; font-style: italic; color: #1A1512; font-size: 28px; margin: 0 0 8px; font-weight: normal; line-height: 1.2; }
+        .subtitle { color: #C5A059; font-size: 13px; margin-bottom: 25px; text-transform: uppercase; letter-spacing: 2px; font-weight: 500; }
+        .card { background-color: #ffffff; border: 1px solid #EBE3D5; border-radius: 20px; padding: 25px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(74, 55, 40, 0.04); }
+        .card-num { display: inline-block; width: 24px; height: 24px; background-color: #C5A059; color: #ffffff; border-radius: 50%; text-align: center; font-size: 11px; font-weight: bold; line-height: 24px; margin-bottom: 12px; }
+        .card-title { color: #1A1512; font-weight: bold; font-size: 16px; margin-bottom: 8px; font-family: 'Playfair Display', serif; }
+        .card-text { margin: 0; font-size: 13px; color: #4A3728; opacity: 0.9; }
+        .highlight { color: #C5A059; font-weight: bold; font-family: 'Playfair Display', serif; font-style: italic; font-size: 18px; margin: 30px 0; text-align: center; }
+        .btn { display: inline-block; padding: 16px 32px; background-color: #C5A059; color: #ffffff !important; text-decoration: none; border-radius: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; font-size: 11px; box-shadow: 0 4px 12px rgba(197, 160, 89, 0.3); }
+        p { margin-bottom: 18px; font-family: 'Inter', sans-serif; }
+      </style>
+    </head>
+    <body>
+      <div class="wrapper">
+        <div class="main">
+          <div class="header">
+            <div style="font-size: 15px; color: #C5A059; margin-bottom: 20px; letter-spacing: 6px; font-weight: bold; text-transform: uppercase;">SWAPSUTRA</div>
+            <h1>Before your books ever leave your shelf…</h1>
+            <div class="subtitle">A note on trust, safety, and the journey of every book.</div>
+          </div>
+          <div class="content">
+            <p>Dear reader,</p>
+            <p>If you’re anything like me, you don’t just own books. You remember where you bought them, who gifted them, which pages made you pause, and which lines you underlined. Books aren't just paper; they're pieces of our history.</p>
+            
+            <p>At SwapSutra, we understand that handing a book to a stranger feels like sharing a secret. That's why we've built this community on a foundation of absolute trust.</p>
+
+            <div class="card">
+              <div class="card-num">1</div>
+              <div class="card-title">Verified Readers</div>
+              <p class="card-text">Every reader signs in with a verified email, and the SwapSutra team is part of every exchange chat.</p>
+            </div>
+
+            <div class="card">
+                <div class="card-num">2</div>
+              <div class="card-title">Secure Book Escrow</div>
+              <p class="card-text">Your books stay in your hands until you’ve chatted with the reader and feel 100% comfortable. You control every step.</p>
+            </div>
+
+            <div class="card">
+                <div class="card-num">3</div>
+              <div class="card-title">The Condition Guarantee</div>
+              <p class="card-text">Condition videos are recorded before and after every exchange, and refundable deposits protect your books while they travel.</p>
+            </div>
+
+            <div class="highlight">Your shelf. Your decision. Your books won’t travel alone.</div>
+
+            <p>We're here to make sure your stories find new lives, safely. Thank you for trusting us with your library.</p>
+            
+            <div style="text-align: center; margin-top: 35px;">
+              <a href="https://swapsutra.in/profile" class="btn">Build Your Digital Shelf</a>
+            </div>
+          </div>
+          <div class="footer">
+            <div style="margin-bottom: 30px;">
+              <p style="font-size: 13px; margin-bottom: 5px; color: #C5A059; font-family: 'Playfair Display', serif; font-style: italic;">With warmth,</p>
+              <p style="font-size: 18px; font-weight: bold; margin-bottom: 5px; letter-spacing: 1px;">Unnati Goyal</p>
+              <p style="font-size: 10px; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px;">Founder, SwapSutra</p>
+            </div>
+            <p style="font-style: italic; opacity: 0.5; margin-bottom: 25px; font-family: 'Playfair Display', serif;">"Jahan har kitaab apna safar paati hai."</p>
+            <p style="font-size: 9px; opacity: 0.3; letter-spacing: 1px;">© 2026 SwapSutra. All literary rights reserved.</p>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  
+  try {
+    sendSwapSutraEmail({ to: normEmail, subject: subject, htmlBody: htmlBody });
+    
+    // Update tracking in NewsletterSubscribers, Users, and Subscriptions
+    const sheetsToUpdate = ['NewsletterSubscribers', 'Users', 'Subscriptions'];
+    sheetsToUpdate.forEach(shName => {
+      try {
+        const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(shName);
+        if (!sheet) return;
+        const data = sheet.getDataRange().getValues();
+        if (data.length <= 1) return;
+        const headers = data[0];
+        const eIdx = headers.indexOf('email');
+        const sIdx = headers.indexOf('trustEmailSent');
+        const satIdx = headers.indexOf('trustEmailSentAt');
+        
+        if (eIdx !== -1 && sIdx !== -1) {
+          const rowI = data.findIndex(r => normalizeEmail(r[eIdx]) === normEmail);
+          if (rowI !== -1) {
+            sheet.getRange(rowI + 1, sIdx + 1).setValue(true);
+            if (satIdx !== -1) sheet.getRange(rowI + 1, satIdx + 1).setValue(new Date());
+          }
+        }
+      } catch (innerE) {
+        Logger.log("Update sheet error in sendTrustEmail: " + innerE.toString());
+      }
+    });
+    
+    return { success: true };
+  } catch (e) {
+    Logger.log("Trust email error: " + e.toString());
+    return { success: false, message: e.toString() };
+  }
+}
+
+function sendTrustEmailToExistingRegisteredUsers(data) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Subscriptions');
+  if (!sheet) return { success: false, message: "Subscriptions sheet not found" };
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return { success: true, message: "No subscribers found" };
+  
+  const headers = values[0];
+  const emailIdx = headers.indexOf('email');
+  const statusIdx = headers.indexOf('adminStatus');
+  const sentIdx = headers.indexOf('trustEmailSent');
+  
+  let successCount = 0;
+  let failureCount = 0;
+  let skippedCount = 0;
+  
+  for (let i = 1; i < values.length; i++) {
+    const email = values[i][emailIdx];
+    const status = values[i][statusIdx];
+    const alreadySent = values[i][sentIdx] === true || values[i][sentIdx] === 'TRUE' || values[i][sentIdx] === 'Yes';
+    
+    // Only send to Approved members who haven't received it
+    if (email && status === 'Approved' && !alreadySent) {
+      const res = sendTrustEmail(email);
+      if (res.success) successCount++;
+      else failureCount++;
+    } else {
+      skippedCount++;
+    }
+  }
+  
+  return { success: true, successCount, failureCount, skippedCount, message: `Sent: ${successCount}, Failed: ${failureCount}, Skipped: ${skippedCount}` };
+}
+
+function updateAdminNotes(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const chatId = data.chatId;
+  const sheet = getOrCreateSheet('Chats', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idIdx = headers.indexOf('chatId');
+  const notesIdx = headers.indexOf('adminNotes');
+  
+  if (notesIdx === -1) return { success: false, message: "adminNotes column not found" };
+
+  const rowIndex = values.findIndex(row => row[idIdx] === chatId);
+  if (rowIndex === -1) return { success: false, message: "Chat not found" };
+  
+  sheet.getRange(rowIndex + 1, notesIdx + 1).setValue(data.notes || "");
+  return { success: true, message: "Admin notes updated" };
+}
+
+/**
+ * Admin bookkeeping fact ONLY: "the refund was paid out (e.g. via UPI,
+ * outside the app)." This does NOT decide completion and does NOT flip
+ * chatStatus by itself — Option B per the master state-machine rule.
+ * It used to call checkAndArchiveChat() unconditionally, which let a
+ * refund note plus a bare ownerFinalConfirmation flag (no security-fee
+ * check, no two-party stage confirm, no dispute check, no SwapStageEvents
+ * row) silently archive the chat and satisfy isSwapCompletedByChat() — a
+ * second, independent completion path alongside adminSetSecurityFeeOutcome
+ * / markSwapCompletedInChat. checkAndArchiveChat() now itself re-derives
+ * completion from getSwapStage() (the real state machine) before it will
+ * archive anything, so calling it here is safe: it archives only a chat
+ * that is ALREADY genuinely Completed via the outcome/dispute/two-party
+ * chain, never as a side effect of this refund note alone.
+ */
+function markRefundIssued(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const chatId = data.chatId;
+  const sheet = getOrCreateSheet('Chats', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idIdx = headers.indexOf('chatId');
+
+  const rowIndex = values.findIndex(row => row[idIdx] === chatId);
+  if (rowIndex === -1) return { success: false, message: "Chat not found" };
+
+  const now = new Date();
+  sheet.getRange(rowIndex + 1, headers.indexOf('refundIssued') + 1).setValue(true);
+  sheet.getRange(rowIndex + 1, headers.indexOf('refundIssuedAt') + 1).setValue(now);
+
+  sendChatMessage({
+    chatId: chatId,
+    senderEmail: 'swapsutra@gmail.com',
+    senderRole: 'Admin',
+    message: `💰 Admin has marked the REFUND as ISSUED.`
+  });
+
+  checkAndArchiveChat(chatId);
+  return { success: true, message: "Refund marked as issued" };
+}
+
+/**
+ * DISABLED — see markHandedOver's comment above for the identical
+ * rationale, which applies here unchanged. This endpoint used to flip
+ * Chats.ownerFinalConfirmation from a single party's (the owner's) say-so
+ * and then call checkAndArchiveChat(), completely bypassing the master
+ * state machine: no security-fee check, no requester-side confirmation
+ * (real FINAL_CONDITION is a two-party stage — both requester AND owner
+ * must confirm, see stagePartyStatus), no dispute check, and no
+ * SwapStageEvents row. It cannot be safely rewritten as a thin wrapper
+ * onto confirmStage()/stageAction(data, 'FINAL_CONDITION'): stageAction
+ * requires the owner to have uploaded their own FINAL_CONDITION evidence
+ * first (submitStageEvidence), which callers of this old endpoint never
+ * did, and it only ever confirms the OWNER's half of the two-party
+ * requirement — the requester's half is a separate, independent action
+ * this endpoint has no way to represent. So, per the same judgment call
+ * as markHandedOver, it is disabled outright rather than guessed at.
+ *
+ * The real path is the "Stages" tab: uploadStageEvidence + confirmStage
+ * for FINAL_CONDITION, from both parties, then adminSetSecurityFeeOutcome.
+ */
+function markOwnerFinalConfirmation(data) {
+  return {
+    success: false,
+    error: 'DEPRECATED_ENDPOINT',
+    message: "This endpoint is deprecated — final condition confirmation now happens in the Stages tab (uploadStageEvidence / confirmStage for FINAL_CONDITION), followed by SwapSutra recording the security-fee outcome."
+  };
+}
+
+/**
+ * Archives a chat, but ONLY if it is genuinely Completed per the master
+ * state machine (getSwapStage) — i.e. outcome decided via
+ * adminSetSecurityFeeOutcome and no open dispute. This is the single
+ * choke point every caller of archiveCompletedChat() must pass through
+ * (markRefundIssued is currently the only internal caller); it is what
+ * stops a refund note + a stale ownerFinalConfirmation flag from
+ * independently manufacturing a Completed/Archived chat the way this pair
+ * of functions used to.
+ */
+function checkAndArchiveChat(chatId) {
+  try {
+    const chat = getChatById(chatId);
+    if (!chat || !chat.swapId) return;
+    const evalResult = getSwapStage({ swapId: chat.swapId });
+    if (!evalResult.success || !evalResult.completed) return;
+    archiveCompletedChat(chatId, "Exchange completed — security-fee outcome recorded, no open dispute.");
+  } catch (err) {
+    Logger.log('checkAndArchiveChat failed: ' + err.toString());
+  }
+}
+
+/**
+ * Sets Chats.chatStatus to 'Archived'. Defense-in-depth: re-verifies
+ * genuine completion itself (via getSwapStage) rather than trusting the
+ * caller, so this can never become an alternate completion path no matter
+ * what calls it in the future — archiving a chat that is not actually
+ * Completed per the real state machine is refused here even if some
+ * future caller forgets to gate first.
+ */
+function archiveCompletedChat(chatId, reason) {
+  const chat = getChatById(chatId);
+  if (!chat || !chat.swapId) return;
+  const evalResult = getSwapStage({ swapId: chat.swapId });
+  if (!evalResult.success || !evalResult.completed) {
+    Logger.log('archiveCompletedChat refused: swap ' + chat.swapId + ' is not genuinely Completed.');
+    return;
+  }
+
+  const sheet = getOrCreateSheet('Chats', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idIdx = headers.indexOf('chatId');
+  const rowIndex = values.findIndex(row => row[idIdx] === chatId);
+  if (rowIndex === -1) return;
+
+  const now = new Date();
+  sheet.getRange(rowIndex + 1, headers.indexOf('chatStatus') + 1).setValue('Archived');
+  sheet.getRange(rowIndex + 1, headers.indexOf('archivedAt') + 1).setValue(now);
+  sheet.getRange(rowIndex + 1, headers.indexOf('archivedReason') + 1).setValue(reason);
+  sheet.getRange(rowIndex + 1, headers.indexOf('archivedBy') + 1).setValue('System');
+
+  sendChatMessage({
+    chatId: chatId,
+    senderEmail: 'swapsutra@gmail.com',
+    senderRole: 'Admin',
+    message: `🏁 This swap has been archived. ${reason}. The chat is now closed for members.`
+  });
+
+  // Log audit
+  logActivity("System", "Chat Archived", `Chat ${chatId} archived: ${reason}`, "Success", "System");
+}
+
+function reopenArchivedChatForAdmin(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const chatId = data.chatId;
+  const sheet = getOrCreateSheet('Chats', []);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idIdx = headers.indexOf('chatId');
+  
+  const rowIndex = values.findIndex(row => row[idIdx] === chatId);
+  if (rowIndex === -1) return { success: false, message: "Chat not found" };
+  
+  sheet.getRange(rowIndex + 1, headers.indexOf('chatStatus') + 1).setValue('Active');
+  
+  sendChatMessage({
+    chatId: chatId,
+    senderEmail: 'swapsutra@gmail.com',
+    senderRole: 'Admin',
+    message: `🔓 This chat has been reopened by Admin.`
+  });
+  
+  logActivity(data.adminEmail, "Chat Reopened", `Chat ${chatId} reopened by admin`, "Success", "Admin");
+  return { success: true, message: "Chat reopened" };
+}
+
+function backupSpreadsheet() {
+  try {
+    const activeSS = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = activeSS || SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'));
+    if (!ss) return { success: false, message: "No active spreadsheet found" };
+    
+    const folderName = "SwapSutra_Backups";
+    const folders = DriveApp.getFoldersByName(folderName);
+    const folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+    
+    const fileName = "SwapSutra_Backup_" + Utilities.formatDate(new Date(), "GMT+5:30", "yyyy-MM-dd_HH-mm");
+    const copy = DriveApp.getFileById(ss.getId()).makeCopy(fileName, folder);
+    
+    logActivity("Admin", "Manual Backup", `Created backup: ${fileName}`, "Success", "Admin");
+    return { success: true, message: "Backup created successfully: " + fileName, url: copy.getUrl() };
+  } catch (e) {
+    return { success: false, message: "Backup failed: " + e.toString() };
+  }
+}
+
+function updateSubscriptionDates(data) {
+  if (!isAuthorizedAdminEmail(data.adminEmail)) return { success: false, message: "Unauthorized" };
+  const targetEmail = normalizeEmail(data.targetEmail);
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const subValues = subSheet.getDataRange().getValues();
+  const subHeaders = subValues[0];
+  const subEmailIdx = subHeaders.indexOf('email');
+  const subStartIdx = subHeaders.indexOf('subscriptionStartDate');
+  const subExpiryIdx = subHeaders.indexOf('subscriptionExpiry');
+  const subStatusIdx = subHeaders.indexOf('adminStatus');
+  const manualOverrideIdx = subHeaders.indexOf('manualDateOverride');
+
+  const rowIndex = subValues.findIndex(row => normalizeEmail(row[subEmailIdx]) === targetEmail);
+  if (rowIndex === -1) return { success: false, message: "Subscription not found" };
+
+  if (subStartIdx !== -1 && data.startDate) subSheet.getRange(rowIndex + 1, subStartIdx + 1).setValue(new Date(data.startDate));
+  if (subExpiryIdx !== -1 && data.endDate) subSheet.getRange(rowIndex + 1, subExpiryIdx + 1).setValue(new Date(data.endDate));
+  if (subStatusIdx !== -1 && data.status) subSheet.getRange(rowIndex + 1, subStatusIdx + 1).setValue(data.status);
+  if (manualOverrideIdx !== -1) subSheet.getRange(rowIndex + 1, manualOverrideIdx + 1).setValue(true);
+
+  // Sync to Users Sheet
+  const userSheet = getOrCreateSheet('Users', []);
+  const userValues = userSheet.getDataRange().getValues();
+  const uEmailIdx = userValues[0].indexOf('email');
+  const uRowIdx = userValues.findIndex(r => normalizeEmail(r[uEmailIdx]) === targetEmail);
+  if (uRowIdx !== -1) {
+    const exIdx = userValues[0].indexOf('expires_at');
+    const msIdx = userValues[0].indexOf('membership_status');
+    const ssIdx = userValues[0].indexOf('subscription_status');
+    if (exIdx !== -1 && data.endDate) userSheet.getRange(uRowIdx + 1, exIdx + 1).setValue(new Date(data.endDate));
+    if (msIdx !== -1 && data.status) userSheet.getRange(uRowIdx + 1, msIdx + 1).setValue(String(data.status).toLowerCase());
+    if (ssIdx !== -1 && data.status) userSheet.getRange(uRowIdx + 1, ssIdx + 1).setValue(String(data.status).toLowerCase());
+  }
+
+  return { success: true, message: "Subscription updated successfully" };
+}
+
+/**
+ * TRIGGER: onEdit
+ * Handles manual edits in Google Sheets for Subscriptions and Books.
+ */
+function onEdit(e) {
+  if (!e) return;
+  const range = e.range;
+  const sheet = range.getSheet();
+  const sheetName = sheet.getName();
+  const row = range.getRow();
+  const col = range.getColumn();
+  
+  if (row <= 1) return; // Skip headers
+
+  try {
+    if (sheetName === 'Subscriptions') {
+      handleSubscriptionEdit(sheet, row, col, e.value, e.oldValue);
+    } else if (sheetName === 'Books') {
+      handleBookEdit(sheet, row, col, e.value, e.oldValue);
+    }
+  } catch (err) {
+    Logger.log("onEdit Error: " + err.toString());
+  }
+}
+
+function handleSubscriptionEdit(sheet, row, col, newValue, oldValue) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const adminStatusIdx = headers.indexOf('adminStatus') + 1;
+  const emailIdx = headers.indexOf('email') + 1;
+  const nameIdx = headers.indexOf('name') + 1;
+  
+  if (col === adminStatusIdx) {
+    const status = String(newValue).trim();
+    if (status === 'Approved' || status === 'Active') {
+      const approvedAtIdx = headers.indexOf('approvedAt') + 1;
+      const startIdx = headers.indexOf('subscriptionStartDate') + 1;
+      const expiryIdx = headers.indexOf('subscriptionExpiry') + 1;
+      const emailSentIdx = headers.indexOf('approvalEmailSent') + 1;
+      const trustSentIdx = headers.indexOf('trustEmailSent') + 1;
+      
+      const now = new Date();
+      
+      // Auto-fill dates if empty
+      if (approvedAtIdx > 0 && !sheet.getRange(row, approvedAtIdx).getValue()) {
+        sheet.getRange(row, approvedAtIdx).setValue(now);
+      }
+      if (startIdx > 0 && !sheet.getRange(row, startIdx).getValue()) {
+        sheet.getRange(row, startIdx).setValue(now);
+      }
+      if (expiryIdx > 0 && !sheet.getRange(row, expiryIdx).getValue()) {
+        const expDate = new Date();
+        expDate.setDate(now.getDate() + 30);
+        sheet.getRange(row, expiryIdx).setValue(expDate);
+      }
+      
+      const email = sheet.getRange(row, emailIdx).getValue();
+      const name = sheet.getRange(row, nameIdx).getValue();
+      
+      // Send Approval Email if not sent
+      if (emailSentIdx > 0) {
+        const alreadySent = ['Yes', 'TRUE', true].includes(sheet.getRange(row, emailSentIdx).getValue());
+        if (!alreadySent) {
+          const success = sendMembershipApprovalEmail(email, name);
+          if (success) {
+            sheet.getRange(row, emailSentIdx).setValue('Yes');
+            sheet.getRange(row, headers.indexOf('approvalEmailSentAt') + 1 || emailSentIdx + 1).setValue(new Date());
+          } else {
+            const errIdx = headers.indexOf('email_error') + 1;
+            if (errIdx > 0) sheet.getRange(row, errIdx).setValue("Approval mail failed");
+          }
+        }
+      }
+      
+      // Send Trust Email if not sent
+      if (trustSentIdx > 0) {
+        const alreadySentTrust = ['Yes', 'TRUE', true].includes(sheet.getRange(row, trustSentIdx).getValue());
+        if (!alreadySentTrust) {
+          sendTrustEmail(email); // sendTrustEmail already updates sheets
+        }
+      }
+    }
+  }
+}
+
+function handleBookEdit(sheet, row, col, newValue, oldValue) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const statusIdx = headers.indexOf('status') + 1;
+  
+  if (col === statusIdx) {
+    const status = String(newValue).trim().toLowerCase();
+    if (status === 'approved' || status === 'live') {
+      const approvedAtIdx = headers.indexOf('approvedAt') + 1;
+      const listedAtIdx = headers.indexOf('listedAt') + 1;
+      const expiresAtIdx = headers.indexOf('expiresAt') + 1;
+      const visibleUntilIdx = headers.indexOf('visibleUntil') + 1;
+      
+      const now = new Date();
+      if (approvedAtIdx > 0 && !sheet.getRange(row, approvedAtIdx).getValue()) {
+        sheet.getRange(row, approvedAtIdx).setValue(now);
+      }
+      if (listedAtIdx > 0 && !sheet.getRange(row, listedAtIdx).getValue()) {
+        sheet.getRange(row, listedAtIdx).setValue(now);
+      }
+      if (expiresAtIdx > 0 && !sheet.getRange(row, expiresAtIdx).getValue()) {
+        const exp = new Date();
+        exp.setDate(now.getDate() + 30);
+        sheet.getRange(row, expiresAtIdx).setValue(exp);
+      }
+      if (visibleUntilIdx > 0 && !sheet.getRange(row, visibleUntilIdx).getValue()) {
+        const visible = new Date();
+        visible.setDate(now.getDate() + 30);
+        sheet.getRange(row, visibleUntilIdx).setValue(visible);
+      }
+    }
+    // Approving a listing by editing the sheet directly bypasses the
+    // router entirely, so the cache has to be dropped here too.
+    invalidateLibraryCache();
+  }
+}
+
+/**
+ * READING ROOM & COMMUNITY FEED BACKEND SERVICES
+ */
+
+function getReadingRoomFeed(data) {
+  try {
+    // The viewer is whoever the session says — never the request body, now
+    // that this feed is public. A signed-out visitor gets no addresses.
+    const userEmail = normalizeEmail(getAuthenticatedEmail() || '');
+    const isVisitor = !userEmail;
+    const postSheet = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts);
+    const reactionSheet = getOrCreateSheet('ReadingRoomReactions', DB_SCHEMA.ReadingRoomReactions);
+    const commentSheet = getOrCreateSheet('ReadingRoomComments', DB_SCHEMA.ReadingRoomComments);
+    const savedSheet = getOrCreateSheet('SavedRecommendations', DB_SCHEMA.SavedRecommendations);
+    const bookSheet = getOrCreateSheet('Books', getBookHeaders());
+
+    const postValues = postSheet.getDataRange().getValues();
+    if (postValues.length <= 1) return { success: true, posts: [] };
+
+    const postHeaders = postValues[0].map(h => String(h).trim());
+    const reactionValues = reactionSheet.getDataRange().getValues();
+    const commentValues = commentSheet.getDataRange().getValues();
+    const savedValues = savedSheet.getDataRange().getValues();
+    const bookValues = bookSheet.getDataRange().getValues();
+
+    const rxHeaders = reactionValues.length > 0 ? reactionValues[0].map(h => String(h).trim()) : [];
+    const cmHeaders = commentValues.length > 0 ? commentValues[0].map(h => String(h).trim()) : [];
+    const svHeaders = savedValues.length > 0 ? savedValues[0].map(h => String(h).trim()) : [];
+    const bkHeaders = bookValues.length > 0 ? bookValues[0].map(h => String(h).trim()) : [];
+
+    // Map active swap books for availability checking
+    const availableSwapBooksMap = {};
+    if (bookValues.length > 1) {
+      const bTitleIdx = bkHeaders.indexOf('title');
+      const bStatusIdx = bkHeaders.indexOf('status');
+      const bOwnerIdx = bkHeaders.indexOf('ownerEmail') !== -1 ? bkHeaders.indexOf('ownerEmail') : bkHeaders.indexOf('userEmail');
+      bookValues.slice(1).forEach(r => {
+        const title = normalizeCurrentReadText(r[bTitleIdx] || '');
+        const status = String(r[bStatusIdx] || '').toLowerCase();
+        const owner = normalizeEmail(r[bOwnerIdx]);
+        if (title && (status === 'approved' || status === 'available' || status === 'live')) {
+          if (!availableSwapBooksMap[title]) availableSwapBooksMap[title] = [];
+          availableSwapBooksMap[title].push(owner);
+        }
+      });
+    }
+
+    // Map user saved recommendations
+    const userSavedSet = new Set();
+    if (userEmail && savedValues.length > 1) {
+      const svUserIdx = svHeaders.indexOf('userEmail');
+      const svPostIdx = svHeaders.indexOf('postId');
+      savedValues.slice(1).forEach(r => {
+        if (normalizeEmail(r[svUserIdx]) === userEmail) {
+          userSavedSet.add(String(r[svPostIdx]));
+        }
+      });
+    }
+
+    const readerIdMemo = {};
+    const posts = postValues.slice(1).reverse().map(row => {
+      const p = rowToObject(postHeaders, row);
+      const postId = String(p.id);
+
+      // Collect reactions
+      const reactions = [];
+      let userReaction = null;
+      if (reactionValues.length > 1) {
+        const rPostIdx = rxHeaders.indexOf('postId');
+        const rUserIdx = rxHeaders.indexOf('userEmail');
+        const rTypeIdx = rxHeaders.indexOf('reactionType');
+
+        reactionValues.slice(1).forEach(rx => {
+          if (String(rx[rPostIdx]) === postId) {
+            const rxType = rx[rTypeIdx] || 'like';
+            reactions.push({ userEmail: isVisitor ? '' : rx[rUserIdx], type: rxType });
+            if (userEmail && normalizeEmail(rx[rUserIdx]) === userEmail) {
+              userReaction = rxType;
+            }
+          }
+        });
+      }
+
+      // Collect comments
+      const comments = [];
+      if (commentValues.length > 1) {
+        const cPostIdx = cmHeaders.indexOf('postId');
+        commentValues.slice(1).forEach(cm => {
+          if (String(cm[cPostIdx]) === postId) {
+            const cObj = rowToObject(cmHeaders, cm);
+            if (isVisitor) { cObj.userEmail = ''; cObj.email = ''; }
+            comments.push(cObj);
+          }
+        });
+      }
+
+      const bookTitleNorm = normalizeCurrentReadText(p.bookTitle || '');
+      const isAvailableForSwap = !!(bookTitleNorm && availableSwapBooksMap[bookTitleNorm] && availableSwapBooksMap[bookTitleNorm].length > 0);
+
+      return {
+        id: p.id,
+        authorEmail: isVisitor ? '' : p.authorEmail,
+        authorReaderId: p.authorEmail ? (readerIdMemo[p.authorEmail] = readerIdMemo[p.authorEmail] || readerPublicId(p.authorEmail)) : '',
+        authorName: p.authorName || (isVisitor ? 'Reader' : p.authorEmail?.split('@')[0]) || 'Reader',
+        postType: p.postType || 'thought', // 'thought', 'recommendation', 'review', 'quote', 'poem', 'voice'
+        content: p.content,
+        bookTitle: p.bookTitle,
+        bookAuthor: p.bookAuthor,
+        bookCoverUrl: p.bookCoverUrl,
+        bookGenre: p.bookGenre,
+        bookMood: p.bookMood,
+        rating: p.rating ? Number(p.rating) : null,
+        recommendFor: p.recommendFor,
+        mediaType: p.mediaType,
+        mediaUrl: p.mediaUrl,
+        audioUrl: p.audioUrl,
+        audioDuration: p.audioDuration ? Number(p.audioDuration) : null,
+        isSpoiler: String(p.isSpoiler).toLowerCase() === 'true' || String(p.isSpoiler).toLowerCase() === 'yes',
+        reactionsCount: reactions.length,
+        userReaction,
+        commentsCount: comments.length,
+        comments,
+        isSaved: userSavedSet.has(postId),
+        isAvailableForSwap,
+        swapOwnersCount: isAvailableForSwap ? availableSwapBooksMap[bookTitleNorm].length : 0,
+        // Recognition posts: names and public profile ids only — the
+        // addresses stay in the sheet.
+        badgeLabel: String(p.badgeLabel || ''),
+        recognizedNames: String(p.recognizedNames || '').split('|').map(function (n) { return n.trim(); }).filter(Boolean),
+        recognizedReaderIds: String(p.recognizedEmails || '').split(',').map(function (e) { return readerPublicId(e); }).filter(Boolean),
+        createdAt: p.createdAt
+      };
+    }).filter(readingRoomPostHasContent_);
+
+    return { success: true, posts };
+  } catch (err) {
+    return { success: false, message: "Error loading Reading Room feed: " + err.toString() };
+  }
+}
+
+/**
+ * A post worth showing (10 Oct 2026, owner's request): blank rows in the
+ * sheet came through as empty "Reader · Thought" cards with nothing in
+ * them. A post needs an id and something to read, see or hear.
+ */
+function readingRoomPostHasContent_(p) {
+  if (!p || !String(p.id || '').trim()) return false;
+  const has = (v) => String(v === undefined || v === null ? '' : v).trim() !== '';
+  return has(p.content) || has(p.bookTitle) || has(p.mediaUrl) || has(p.audioUrl)
+    || (Array.isArray(p.recognizedNames) && p.recognizedNames.length > 0);
+}
+
+const READING_ROOM_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+const READING_ROOM_POST_TYPES = ['thought', 'recommendation', 'review', 'quote', 'poem', 'voice', 'recognition'];
+const RECOGNITION_MAX_NAMES = 60;
+
+/**
+ * Admin: one Reading Room post announcing a community badge — "🏅 Doctor
+ * of the Month: Asha", or one post naming everyone who became a "Patient"
+ * at a meetup (one post, not thirty). Called by the Badges screen after
+ * the awards themselves have gone through.
+ */
+function announceBadgeRecognition(data) {
+  if (!isAuthenticatedAdmin()) {
+    return { success: false, error: 'ADMIN_ONLY', message: 'Only the SwapSutra team can post badge announcements.' };
+  }
+  const label = String((data && data.label) || '').trim().slice(0, 60);
+  if (!label) return { success: false, message: 'Which badge?' };
+  const emails = [];
+  (Array.isArray(data.emails) ? data.emails : []).forEach(function (e) {
+    const n = normalizeEmail(e);
+    if (n && emails.indexOf(n) === -1 && emails.length < RECOGNITION_MAX_NAMES && emailExistsInUsersSheet(n)) emails.push(n);
+  });
+  if (!emails.length) return { success: false, message: 'No readers to announce.' };
+  const names = emails.map(function (e) { return publicReaderName('', e); });
+
+  const note = String(data.note || '').trim().slice(0, 500);
+  const who = names.length === 1 ? names[0] : (names.length + ' readers');
+  const content = note || (names.length === 1
+    ? '🏅 Congratulations ' + names[0] + ' — our new ' + label + '!'
+    : '🏅 Congratulations to our ' + label + ' badge holders!');
+
+  const sheet = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts);
+  const headers = ensureSheetHeaders(sheet, DB_SCHEMA.ReadingRoomPosts);
+  const id = generateId('RR_POST_');
+  const now = new Date();
+  const values = {
+    id: id, authorEmail: normalizeEmail(getAuthenticatedEmail() || 'swapsutra@gmail.com'), authorName: 'SwapSutra',
+    postType: 'recognition', content: content, isSpoiler: 'No', likesCount: 0, commentsCount: 0,
+    createdAt: now, updatedAt: now,
+    recognizedEmails: emails.join(','), recognizedNames: names.join('|'), badgeLabel: label
+  };
+  sheet.appendRow(headers.map(function (h) { return values[h] === undefined ? '' : values[h]; }));
+  logActivity(getAuthenticatedEmail() || 'admin', 'Badge Announced', label + ' → ' + who, 'Success', 'Community');
+  return { success: true, id: id, message: 'Announced in the Reading Room.' };
+}
+
+function createReadingRoomPost(data) {
+  try {
+    const authorEmail = normalizeEmail(data.authorEmail || data.email);
+    if (!authorEmail) return { success: false, message: "User email required" };
+
+    const postSheet = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts);
+    const id = generateId('RR_POST_');
+    const now = new Date();
+    const headers = ensureSheetHeaders(postSheet, DB_SCHEMA.ReadingRoomPosts);
+
+    const authorName = firstNameOnly(data.authorName || data.userName || data.name || authorEmail.split('@')[0]);
+    const postType = READING_ROOM_POST_TYPES.indexOf(String(data.postType || '')) !== -1 ? String(data.postType) : 'thought';
+
+    // Shout-outs: a reader recognises another reader. The browser sends the
+    // other reader's public id (never an address); it is resolved here.
+    let recognizedEmail = '';
+    let recognizedName = '';
+    if (postType === 'recognition') {
+      recognizedEmail = emailForReaderPublicId(data.recognizedReaderId);
+      if (!recognizedEmail) return { success: false, message: "Pick the reader you want to recognise." };
+      if (recognizedEmail === authorEmail) return { success: false, message: "A shout-out is for someone else — pick another reader." };
+      if (!String(data.content || '').trim()) return { success: false, message: "Say what they did that deserves the shout-out." };
+      recognizedName = publicReaderName('', recognizedEmail);
+    }
+    const content = String(data.content || '').trim();
+    const bookTitle = String(data.bookTitle || '').trim();
+    const bookAuthor = String(data.bookAuthor || '').trim();
+    // Final check (11 Oct 2026): the Reading Room is public, so the same
+    // contact-details gate as the chats and the Café.
+    if (content && !isAdminEmail(authorEmail)) {
+      const pii = scanMessageForPII(content);
+      if (pii.blocked) return { success: false, blocked: true, reason: 'PERSONAL_INFORMATION', message: piiWarningForCategory(pii.category) };
+    }
+
+    // Photo posts. The browser sends the picture as a data URL (already
+    // shrunk to ~1600px JPEG); it is stored in Drive and only the Drive link
+    // goes in the sheet. A mediaUrl typed in by the client is ignored, so a
+    // post can never point readers' browsers at an arbitrary outside URL.
+    let mediaUrl = '';
+    let mediaType = '';
+    if (data.fileData) {
+      const head = String(data.fileData).slice(0, 40).toLowerCase();
+      if (!/^data:image\/(jpeg|jpg|png|webp);base64,/.test(head)) {
+        return { success: false, message: "Photos must be JPG, PNG or WebP." };
+      }
+      const approxBytes = Math.floor(String(data.fileData).split(',')[1].length * 3 / 4);
+      if (approxBytes > READING_ROOM_MAX_IMAGE_BYTES) {
+        return { success: false, message: "That photo is too large. Please pick a smaller one." };
+      }
+      mediaUrl = saveFileToDrive(String(data.fileData), String(data.fileName || 'reading-room.jpg'));
+      if (!mediaUrl) return { success: false, message: "Could not save the photo. Please try again." };
+      mediaType = 'image';
+    }
+
+    if (!content && !data.audioUrl && !mediaUrl) {
+      return { success: false, message: "Write something or add a photo to post." };
+    }
+
+    const row = new Array(headers.length).fill('');
+    headers.forEach((h, i) => {
+      if (h === 'id') row[i] = id;
+      else if (h === 'authorEmail') row[i] = authorEmail;
+      else if (h === 'authorName') row[i] = authorName;
+      else if (h === 'postType') row[i] = postType;
+      else if (h === 'content') row[i] = content;
+      else if (h === 'bookTitle') row[i] = bookTitle;
+      else if (h === 'bookAuthor') row[i] = bookAuthor;
+      else if (h === 'bookCoverUrl') row[i] = data.bookCoverUrl || '';
+      else if (h === 'bookGenre') row[i] = data.bookGenre || '';
+      else if (h === 'bookMood') row[i] = data.bookMood || '';
+      else if (h === 'rating') row[i] = data.rating || '';
+      else if (h === 'recommendFor') row[i] = data.recommendFor || '';
+      else if (h === 'mediaType') row[i] = mediaType;
+      else if (h === 'mediaUrl') row[i] = mediaUrl;
+      else if (h === 'audioUrl') row[i] = data.audioUrl || '';
+      else if (h === 'audioDuration') row[i] = data.audioDuration || '';
+      else if (h === 'isSpoiler') row[i] = data.isSpoiler ? 'Yes' : 'No';
+      else if (h === 'likesCount') row[i] = 0;
+      else if (h === 'commentsCount') row[i] = 0;
+      else if (h === 'createdAt') row[i] = now;
+      else if (h === 'updatedAt') row[i] = now;
+      else if (h === 'recognizedEmails') row[i] = recognizedEmail;
+      else if (h === 'recognizedNames') row[i] = recognizedName;
+      else if (h === 'badgeLabel') row[i] = '';
+    });
+
+    postSheet.appendRow(row);
+
+    if (recognizedEmail) {
+      try {
+        notifyReaders_([{
+          userEmail: recognizedEmail,
+          type: 'reading_room_recognition',
+          title: authorName + ' gave you a shout-out 🎉',
+          message: content.length > 120 ? content.slice(0, 117) + '…' : content,
+          link: '/reading-room',
+          relatedId: id,
+          dedupeKey: 'shoutout:' + id
+        }]);
+      } catch (e) { Logger.log('shout-out notification failed: ' + e); }
+    }
+
+    // Log in Reading Journey
+    logReaderActivity(
+      authorEmail,
+      "reading_room_posted",
+      id,
+      bookTitle || "Reading Room",
+      `Shared a Reflection${bookTitle ? ` on "${bookTitle}"` : ""}`,
+      `Published a thoughtful reflection in the community Reading Room.`,
+      { postId: id, bookTitle: bookTitle, postType: postType }
+    );
+
+    return { success: true, id, message: "Shared to Reading Room feed!" };
+  } catch (err) {
+    return { success: false, message: "Failed to create post: " + err.toString() };
+  }
+}
+
+function togglePostReaction(data) {
+  try {
+    const userEmail = normalizeEmail(data.userEmail || data.email);
+    const postId = data.postId;
+    const reactionType = data.reactionType || 'like'; // 'like', 'love', 'thoughtful'
+    if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
+    // Launch check (11 Oct 2026): only on a post that exists.
+    {
+      const pv = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts).getDataRange().getValues();
+      const pid = (pv[0] || []).map(h => String(h).trim()).indexOf('id');
+      if (!pv.slice(1).some(r => String(r[pid]) === String(postId))) return { success: false, message: "That post is no longer there." };
+    }
+
+    const rxSheet = getOrCreateSheet('ReadingRoomReactions', DB_SCHEMA.ReadingRoomReactions);
+    const rxValues = rxSheet.getDataRange().getValues();
+    const headers = rxValues[0].map(h => String(h).trim());
+
+    const pIdx = headers.indexOf('postId');
+    const uIdx = headers.indexOf('userEmail');
+    const tIdx = headers.indexOf('reactionType');
+
+    const existingRowIdx = rxValues.findIndex((r, i) => i > 0 && String(r[pIdx]) === String(postId) && normalizeEmail(r[uIdx]) === userEmail);
+
+    if (existingRowIdx !== -1) {
+      const existingType = rxValues[existingRowIdx][tIdx];
+      if (existingType === reactionType) {
+        // Toggle off
+        rxSheet.deleteRow(existingRowIdx + 1);
+        return { success: true, reaction: null, message: "Reaction removed" };
+      } else {
+        // Change reaction
+        rxSheet.getRange(existingRowIdx + 1, tIdx + 1).setValue(reactionType);
+        return { success: true, reaction: reactionType, message: "Reaction updated" };
+      }
+    } else {
+      // Add reaction
+      const id = generateId('RR_RX_');
+      rxSheet.appendRow([id, postId, userEmail, reactionType, new Date()]);
+
+      // Notify post author
+      try {
+        const postSheet = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts);
+        const pValues = postSheet.getDataRange().getValues();
+        const pHeaders = pValues[0].map(h => String(h).trim());
+        const postRow = pValues.find(r => String(r[pHeaders.indexOf('id')]) === String(postId));
+        if (postRow) {
+          const authorEmail = normalizeEmail(postRow[pHeaders.indexOf('authorEmail')]);
+          if (authorEmail && authorEmail !== userEmail) {
+            createNotification(
+              authorEmail,
+              'post_reaction',
+              'New reaction in Reading Room',
+              `${publicReaderName('', userEmail) || 'A reader'} reacted to your post.`,
+              postId,
+              { link: `/reading-room#post-${postId}` }
+            );
+          }
+        }
+      } catch (e) {}
+
+      return { success: true, reaction: reactionType, message: "Reaction added" };
+    }
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+function addPostComment(data) {
+  try {
+    const userEmail = normalizeEmail(data.userEmail || data.email);
+    const postId = data.postId;
+    const comment = String(data.comment || '').trim();
+    const audioUrl = data.audioUrl || '';
+    if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
+    if (!comment && !audioUrl) return { success: false, message: "Comment or voice message required" };
+    if (comment && !isAdminEmail(userEmail)) {
+      const pii = scanMessageForPII(comment);
+      if (pii.blocked) return { success: false, blocked: true, reason: 'PERSONAL_INFORMATION', message: piiWarningForCategory(pii.category) };
+    }
+    // Launch check (11 Oct 2026): only on a post that exists.
+    {
+      const pv = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts).getDataRange().getValues();
+      const pid = (pv[0] || []).map(h => String(h).trim()).indexOf('id');
+      if (!pv.slice(1).some(r => String(r[pid]) === String(postId))) return { success: false, message: "That post is no longer there." };
+    }
+
+    const cmSheet = getOrCreateSheet('ReadingRoomComments', DB_SCHEMA.ReadingRoomComments);
+    const id = generateId('RR_CMT_');
+    const now = new Date();
+    const userName = firstNameOnly(data.userName || data.name || userEmail.split('@')[0]);
+
+    const headers = ensureSheetHeaders(cmSheet, DB_SCHEMA.ReadingRoomComments);
+    const row = new Array(headers.length).fill('');
+    headers.forEach((h, i) => {
+      if (h === 'id') row[i] = id;
+      else if (h === 'postId') row[i] = postId;
+      else if (h === 'userEmail') row[i] = userEmail;
+      else if (h === 'userName') row[i] = userName;
+      else if (h === 'comment') row[i] = comment;
+      else if (h === 'audioUrl') row[i] = audioUrl;
+      else if (h === 'audioDuration') row[i] = data.audioDuration || '';
+      else if (h === 'createdAt') row[i] = now;
+    });
+
+    cmSheet.appendRow(row);
+
+    // Notify post author
+    try {
+      const postSheet = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts);
+      const pValues = postSheet.getDataRange().getValues();
+      const pHeaders = pValues[0].map(h => String(h).trim());
+      const postRow = pValues.find(r => String(r[pHeaders.indexOf('id')]) === String(postId));
+      if (postRow) {
+        const authorEmail = normalizeEmail(postRow[pHeaders.indexOf('authorEmail')]);
+        if (authorEmail && authorEmail !== userEmail) {
+          createNotification(
+            authorEmail,
+            'post_comment',
+            'New comment in Reading Room',
+            `${userName} commented on your post: "${comment.substring(0, 40)}..."`,
+            postId,
+            { link: `/reading-room#post-${postId}` }
+          );
+        }
+      }
+    } catch (e) {}
+
+    return { success: true, commentId: id };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+function saveBookRecommendation(data) {
+  try {
+    const userEmail = normalizeEmail(data.userEmail || data.email);
+    const postId = data.postId;
+    if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
+
+    const svSheet = getOrCreateSheet('SavedRecommendations', DB_SCHEMA.SavedRecommendations);
+    const svValues = svSheet.getDataRange().getValues();
+    const headers = svValues[0].map(h => String(h).trim());
+
+    const pIdx = headers.indexOf('postId');
+    const uIdx = headers.indexOf('userEmail');
+
+    const existingIdx = svValues.findIndex((r, i) => i > 0 && String(r[pIdx]) === String(postId) && normalizeEmail(r[uIdx]) === userEmail);
+
+    if (existingIdx !== -1) {
+      svSheet.deleteRow(existingIdx + 1);
+      return { success: true, saved: false, message: "Removed from saved recommendations" };
+    } else {
+      const id = generateId('SV_REC_');
+      svSheet.appendRow([id, userEmail, postId, data.bookTitle || '', data.bookAuthor || '', new Date()]);
+
+      // Log in Reading Journey
+      logReaderActivity(
+        userEmail,
+        "recommendation_saved",
+        postId,
+        data.bookTitle || "Recommendation",
+        `Saved Recommendation for "${data.bookTitle || "Book"}"`,
+        `Bookmarked recommendation${data.bookAuthor ? ` by ${data.bookAuthor}` : ""} from the Reading Room to your Reading Space.`,
+        { postId: postId, bookTitle: data.bookTitle, bookAuthor: data.bookAuthor }
+      );
+
+      return { success: true, saved: true, message: "Saved to your Reading Space" };
+    }
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * MESSAGE DELETION SERVICE ACROSS PLATFORM
+ */
+
+function deleteChatMessage(data) {
+  try {
+    const userEmail = normalizeEmail(data.userEmail || data.senderEmail || data.email);
+    const chatId = data.chatId;
+    const messageId = data.messageId;
+    if (!userEmail || !chatId || !messageId) {
+      return { success: false, message: "Chat ID, Message ID, and user credentials required" };
+    }
+
+    const msgSheet = getOrCreateSheet('Messages', []);
+    const values = msgSheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: false, message: "Message not found" };
+
+    const headers = values[0].map(h => String(h).trim());
+    const mIdIdx = headers.indexOf('messageId');
+    const cIdIdx = headers.indexOf('chatId');
+    const sEmailIdx = headers.indexOf('senderEmail');
+    const msgIdx = headers.indexOf('message');
+    const mediaUrlIdx = headers.indexOf('mediaUrl');
+
+    const rowIdx = values.findIndex(r => String(r[mIdIdx]) === String(messageId) && String(r[cIdIdx]) === String(chatId));
+    if (rowIdx === -1) return { success: false, message: "Message not found" };
+
+    const senderEmail = normalizeEmail(values[rowIdx][sEmailIdx]);
+    if (senderEmail !== userEmail && !isAdminEmail(userEmail)) {
+      return { success: false, message: "You can only delete your own messages." };
+    }
+
+    // Overwrite content to [Message deleted]
+    if (msgIdx !== -1) msgSheet.getRange(rowIdx + 1, msgIdx + 1).setValue("[Message deleted]");
+    if (mediaUrlIdx !== -1) msgSheet.getRange(rowIdx + 1, mediaUrlIdx + 1).setValue("");
+    chatThreadCacheClear_(chatId);
+
+    return { success: true, messageId, message: "Message deleted" };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+function deleteCircleMessage(data) {
+  try {
+    const userEmail = normalizeEmail(data.userEmail || data.userId || data.email);
+    const circleId = data.circleId || data.circle_id;
+    const messageId = data.messageId || data.message_id;
+    if (!userEmail || !circleId || !messageId) {
+      return { success: false, message: "Circle ID, Message ID, and user required" };
+    }
+
+    const msgSheet = getOrCreateSheet('CurrentReadMessages', []);
+    const values = msgSheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: false, message: "Message not found" };
+
+    const headers = values[0].map(h => String(h).trim());
+    const mIdIdx = headers.indexOf('message_id');
+    const cIdIdx = headers.indexOf('circle_id');
+    const uIdIdx = headers.indexOf('user_id');
+    const msgIdx = headers.indexOf('message');
+
+    const rowIdx = values.findIndex(r => String(r[mIdIdx]) === String(messageId) && String(r[cIdIdx]) === String(circleId));
+    if (rowIdx === -1) return { success: false, message: "Message not found" };
+
+    const senderEmail = normalizeEmail(values[rowIdx][uIdIdx]);
+    if (senderEmail !== userEmail && !isAdminEmail(userEmail)) {
+      return { success: false, message: "You can only delete your own messages." };
+    }
+
+    if (msgIdx !== -1) msgSheet.getRange(rowIdx + 1, msgIdx + 1).setValue("[Message deleted]");
+
+    return { success: true, messageId, message: "Message deleted" };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+function deleteReadingRoomPost(data) {
+  try {
+    const userEmail = normalizeEmail(data.userEmail || data.email);
+    const postId = data.postId;
+    if (!userEmail || !postId) return { success: false, message: "User and Post ID required" };
+
+    const postSheet = getOrCreateSheet('ReadingRoomPosts', DB_SCHEMA.ReadingRoomPosts);
+    const values = postSheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: false, message: "Post not found" };
+
+    const headers = values[0].map(h => String(h).trim());
+    const idIdx = headers.indexOf('id');
+    const authorIdx = headers.indexOf('authorEmail');
+
+    const rowIdx = values.findIndex(r => String(r[idIdx]) === String(postId));
+    if (rowIdx === -1) return { success: false, message: "Post not found" };
+
+    const authorEmail = normalizeEmail(values[rowIdx][authorIdx]);
+    if (authorEmail !== userEmail && !isAdminEmail(userEmail)) {
+      return { success: false, message: "You can only delete your own posts." };
+    }
+
+    postSheet.deleteRow(rowIdx + 1);
+    return { success: true, postId, message: "Post deleted" };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+function deletePostComment(data) {
+  try {
+    const userEmail = normalizeEmail(data.userEmail || data.email);
+    const commentId = data.commentId;
+    if (!userEmail || !commentId) return { success: false, message: "User and Comment ID required" };
+
+    const cmSheet = getOrCreateSheet('ReadingRoomComments', DB_SCHEMA.ReadingRoomComments);
+    const values = cmSheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: false, message: "Comment not found" };
+
+    const headers = values[0].map(h => String(h).trim());
+    const idIdx = headers.indexOf('id');
+    const userIdx = headers.indexOf('userEmail');
+
+    const rowIdx = values.findIndex(r => String(r[idIdx]) === String(commentId));
+    if (rowIdx === -1) return { success: false, message: "Comment not found" };
+
+    const authorEmail = normalizeEmail(values[rowIdx][userIdx]);
+    if (authorEmail !== userEmail && !isAdminEmail(userEmail)) {
+      return { success: false, message: "You can only delete your own comments." };
+    }
+
+    cmSheet.deleteRow(rowIdx + 1);
+    return { success: true, commentId, message: "Comment deleted" };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * SWAP LIFECYCLE STRENGTHENING (Cancel & Dispute)
+ */
+
+function cancelSwapRequest(data) {
+  try {
+    const userEmail = normalizeEmail(data.userEmail || data.email);
+    const swapId = data.swapId || data.id;
+    const reason = String(data.reason || "Cancelled by reader").trim();
+    if (!userEmail || !swapId) return { success: false, message: "Swap ID and user credentials required" };
+
+    const swapSheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+    const values = swapSheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: false, message: "Swap request not found" };
+
+    const headers = values[0].map(h => String(h).trim());
+    const idIdx = headers.indexOf('id');
+    const stIdx = headers.indexOf('status');
+
+    const rowIdx = values.findIndex(r => String(r[idIdx]) === String(swapId));
+    if (rowIdx === -1) return { success: false, message: "Swap request not found" };
+
+    const parties = resolveSwapRequestParties(headers, values[rowIdx]);
+    const senderEmail = normalizeEmail(parties.requesterEmail);
+    const receiverEmail = normalizeEmail(parties.ownerEmail);
+
+    if (userEmail !== senderEmail && userEmail !== receiverEmail && !isAdminEmail(userEmail)) {
+      return { success: false, message: "Unauthorized to cancel this swap." };
+    }
+
+    // Update Swap Status to Cancelled
+    if (stIdx !== -1) swapSheet.getRange(rowIdx + 1, stIdx + 1).setValue('Cancelled');
+
+    // Notify counterpart
+    const counterpart = userEmail === senderEmail ? receiverEmail : senderEmail;
+    if (counterpart) {
+      createNotification(
+        counterpart,
+        'swap_cancelled',
+        'Swap Request Cancelled',
+        `The swap request was cancelled by ${userEmail.split('@')[0]}. Reason: ${reason}`,
+        swapId,
+        { link: '/my-requests' }
+      );
+    }
+
+    return { success: true, message: "Swap request cancelled." };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// Issue categories a reporter may pick, matching the categories the
+// Exchange & Delivery Policy already describes in prose (see
+// legal/exchange-and-delivery-policy.md §8). An allowlist so the admin
+// console and any future automation can reason about disputes by type
+// instead of parsing free text.
+const DISPUTE_CATEGORIES = {
+  NOT_RECEIVED: 'Book not received',
+  NOT_RETURNED: 'Book not returned',
+  DAMAGED: 'Book returned damaged',
+  CONDITION_MISMATCH: 'Condition did not match the listing',
+  WRONG_BOOK: 'Wrong book received',
+  OTHER: 'Other issue'
+};
+
+// Extends the original 7-column SwapDisputes sheet with evidence and
+// resolution columns, appended — never inserted or reordered — via
+// ensureSheetHeaders, the same convention every other sheet in this file
+// uses. A dispute row created before this change simply has these columns
+// blank; nothing here re-reads or rewrites the original 7 fields.
+const SWAP_DISPUTE_HEADERS = DB_SCHEMA.SwapDisputes.concat([
+  'category', 'evidenceUrls', 'resolutionStatus', 'resolutionNote',
+  'depositOutcome', 'depositOutcomeAmount', 'resolvedBy', 'resolvedAt'
+]);
+
+function getDisputesSheet() {
+  const sheet = getOrCreateSheet('SwapDisputes', DB_SCHEMA.SwapDisputes);
+  ensureSheetHeaders(sheet, SWAP_DISPUTE_HEADERS);
+  return sheet;
+}
+
+const DISPUTE_EVENTS_SHEET = 'DisputeEvents';
+const DISPUTE_EVENTS_HEADERS = [
+  'id', 'disputeId', 'swapId', 'actorEmail', 'eventType',
+  'previousStatus', 'newStatus', 'note', 'createdAt'
+];
+
+function getDisputeEventsSheet() {
+  const sheet = getOrCreateSheet(DISPUTE_EVENTS_SHEET, DISPUTE_EVENTS_HEADERS);
+  ensureSheetHeaders(sheet, DISPUTE_EVENTS_HEADERS);
+  return sheet;
+}
+
+/**
+ * Append-only audit entry for a dispute's lifecycle — modelled directly
+ * on appendJourneyEvent (actor + timestamp, never edited afterwards), so
+ * the same "who/what/when/previous/new" reasoning applies to a dispute's
+ * history as already applies to a book's journey.
+ */
+function appendDisputeEvent(entry) {
+  try {
+    const sheet = getDisputeEventsSheet();
+    const headers = DISPUTE_EVENTS_HEADERS;
+    const id = generateId('SS_DISPEVT_');
+    const row = headers.map(h => {
+      if (h === 'id') return id;
+      if (h === 'disputeId') return entry.disputeId || '';
+      if (h === 'swapId') return entry.swapId || '';
+      if (h === 'actorEmail') return normalizeEmail(entry.actorEmail || '');
+      if (h === 'eventType') return entry.eventType || '';
+      if (h === 'previousStatus') return entry.previousStatus || '';
+      if (h === 'newStatus') return entry.newStatus || '';
+      if (h === 'note') return String(entry.note || '').slice(0, 500);
+      if (h === 'createdAt') return new Date();
+      return '';
+    });
+    sheet.appendRow(row);
+    return id;
+  } catch (err) {
+    Logger.log('appendDisputeEvent failed: ' + err.toString());
+    return null;
+  }
+}
+
+/**
+ * A reader reports a problem on a swap they are actually party to.
+ *
+ * Backward compatible: the original fields (userEmail/email, swapId,
+ * reason, details) still work exactly as before, and the original
+ * response shape (success, disputeId, message) is unchanged. New,
+ * optional fields — category and evidence — are additive. The one
+ * behaviour change is a real authorization check that did not exist
+ * before: the caller must be one of the swap's two parties (or admin).
+ * There is no existing frontend caller of this action today, so nothing
+ * that worked in production before can regress.
+ */
+function disputeSwapRequest(data) {
+  try {
+    // Identity comes from the verified session only — no fallback to a
+    // client-supplied userEmail/email. This action is already self-scoped
+    // (SELF_SCOPED_IDENTITY_FIELDS overwrites data.userEmail with the
+    // session email before dispatch), so this is not a behaviour change
+    // for a real caller; it only removes an unused, spoofable path.
+    const userEmail = normalizeEmail(getAuthenticatedEmail());
+    const swapId = String(data.swapId || data.id || '').trim();
+    // Capped the same way resolutionNote (1000) and the rating comment
+    // (500) already are elsewhere in this same feature — free text with no
+    // ceiling is how a client ends up writing an oversized Sheets cell.
+    const reason = String(data.reason || 'Issue reported').trim().slice(0, 300);
+    const details = String(data.details || '').trim().slice(0, 1000);
+    if (!userEmail || !swapId) return { success: false, message: 'Swap ID and user email required' };
+
+    // A user must not be able to dispute a swap they have nothing to do
+    // with. loadSwapForCirculation / callerIsPartyTo are the same helpers
+    // the courier journey ledger already uses for exactly this check.
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, userEmail)) {
+      return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours to report.' };
+    }
+
+    // getSwapDisputes() returns `details` to EITHER party on the swap
+    // (callerIsPartyTo above is not "the reporter" specifically — it's
+    // "either party"), so this free-text field is counterparty-visible
+    // exactly like a chat message and gets the same PII gate, before the
+    // dispute row is ever written.
+    if (details) {
+      const piiScan = scanMessageForPII(details);
+      if (piiScan.blocked) {
+        logChatSafetyEvent({
+          chatId: '',
+          swapId: swapId,
+          senderEmail: userEmail,
+          category: piiScan.category,
+          contentType: 'DISPUTE'
+        });
+        return {
+          success: false,
+          blocked: true,
+          reason: 'PERSONAL_INFORMATION',
+          category: piiScan.category,
+          message: piiWarningForCategory(piiScan.category)
+        };
+      }
+    }
+
+    const categoryKey = String(data.category || 'OTHER').trim().toUpperCase();
+    const category = DISPUTE_CATEGORIES[categoryKey] ? categoryKey : 'OTHER';
+
+    // Evidence: either already-uploaded URLs, or up to 5 files uploaded
+    // here via the same saveFileToDrive() helper uploadSwapProof already
+    // uses — no second media-storage system.
+    const evidenceUrls = [];
+    if (Array.isArray(data.evidenceUrls)) {
+      data.evidenceUrls.forEach(u => { if (u && typeof u === 'string') evidenceUrls.push(u); });
+    }
+    if (Array.isArray(data.evidenceFiles)) {
+      data.evidenceFiles.slice(0, 5).forEach(f => {
+        if (!f || !f.fileData) return;
+        const url = saveFileToDrive(f.fileData, f.fileName || 'evidence');
+        if (url) evidenceUrls.push(url);
+      });
+    } else if (data.fileData) {
+      const url = saveFileToDrive(data.fileData, data.fileName || 'evidence');
+      if (url) evidenceUrls.push(url);
+    }
+
+    const dSheet = getDisputesSheet();
+    // Read the sheet's ACTUAL live header row rather than trusting
+    // SWAP_DISPUTE_HEADERS' declared order — getDisputesSheet() only
+    // guarantees every required column exists somewhere (ensureSheetHeaders
+    // appends, never reorders), not that the live sheet's column order
+    // matches this constant. getSwapDisputes/getOpenDisputes already read
+    // headers this way; the append below now does too, so a value is
+    // written under the column it is named for, never under whatever
+    // column the constant happens to think that name is at.
+    const dValues = dSheet.getDataRange().getValues();
+    const headers = dValues.length ? dValues[0].map(h => String(h).trim()) : SWAP_DISPUTE_HEADERS;
+    const id = generateId('SS_DISP_');
+    const now = new Date();
+    const row = headers.map(h => {
+      if (h === 'id') return id;
+      if (h === 'swapId') return swapId;
+      if (h === 'reporterEmail') return userEmail;
+      if (h === 'reason') return reason;
+      if (h === 'details') return details;
+      if (h === 'status') return 'Open';
+      if (h === 'createdAt') return now;
+      if (h === 'category') return category;
+      if (h === 'evidenceUrls') return evidenceUrls.join('|');
+      if (h === 'resolutionStatus') return '';
+      if (h === 'resolutionNote') return '';
+      if (h === 'depositOutcome') return '';
+      if (h === 'depositOutcomeAmount') return '';
+      if (h === 'resolvedBy') return '';
+      if (h === 'resolvedAt') return '';
+      return '';
+    });
+    dSheet.appendRow(row);
+
+    appendDisputeEvent({
+      disputeId: id, swapId: swapId, actorEmail: userEmail, eventType: 'opened',
+      previousStatus: '', newStatus: 'Open', note: DISPUTE_CATEGORIES[category] + ': ' + reason
+    });
+
+    // Update Swap Status to Disputed
+    const swapSheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+    const values = swapSheet.getDataRange().getValues();
+    if (values.length > 1) {
+      const swapHeaders = values[0].map(h => String(h).trim());
+      const idIdx = swapHeaders.indexOf('id');
+      const stIdx = swapHeaders.indexOf('status');
+      const rowIdx = values.findIndex(r => String(r[idIdx]) === String(swapId));
+      if (rowIdx !== -1 && stIdx !== -1) {
+        swapSheet.getRange(rowIdx + 1, stIdx + 1).setValue('Disputed');
+      }
+    }
+
+    // Notify admin (existing pattern, unchanged)
+    createNotification(
+      'swapsutra@gmail.com',
+      'swap_dispute',
+      'Swap Dispute Raised',
+      `Reader ${userEmail} reported an issue on Swap #${swapId} (${DISPUTE_CATEGORIES[category]}): ${reason}`,
+      swapId,
+      { link: '/management' }
+    );
+
+    // Let the other party know a dispute now exists on their swap too —
+    // they should see it, not just the admin. Uses the same
+    // createNotification() every other trust event in this file uses.
+    const otherParty = userEmail === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail;
+    if (otherParty) {
+      createNotification(
+        otherParty,
+        'swap_dispute',
+        'A problem was reported on your exchange',
+        `${firstNameOnly(publicReaderName('', userEmail) || humanizeEmailLocalPart(userEmail))} reported an issue on this exchange: ${DISPUTE_CATEGORIES[category]}. SwapSutra will review it.`,
+        swapId,
+        { link: '/profile', dedupeKey: 'disp_' + id }
+      );
+    }
+
+    return {
+      success: true,
+      disputeId: id,
+      category: category,
+      status: 'Open',
+      evidenceCount: evidenceUrls.length,
+      message: 'Issue reported to SwapSutra Team. We will review it promptly.'
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * The dispute(s) on one swap, as either party (or admin) may see them —
+ * status only, not the admin's internal resolution workspace. Lets the
+ * "Report a Problem" UI show "you already reported this" instead of
+ * silently accepting a duplicate, and lets both readers see where a
+ * dispute stands without needing admin access.
+ */
+function getSwapDisputes(data) {
+  try {
+    // Session identity only — see disputeSwapRequest's identical note.
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    const swapId = String((data && data.swapId) || '').trim();
+    if (!swapId) return { success: false, message: 'Swap ID required.' };
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, caller)) {
+      return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    }
+
+    const sheet = getDisputesSheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values.length ? values[0].map(h => String(h).trim()) : SWAP_DISPUTE_HEADERS;
+    const swapIdx = headers.indexOf('swapId');
+    const disputes = [];
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][swapIdx]) !== swapId) continue;
+      const obj = rowToObject(headers, values[r]);
+      disputes.push({
+        id: obj.id,
+        category: obj.category || 'OTHER',
+        categoryLabel: DISPUTE_CATEGORIES[obj.category] || 'Issue reported',
+        reason: obj.reason,
+        details: obj.details,
+        status: obj.status,
+        resolutionStatus: obj.resolutionStatus || '',
+        resolutionNote: obj.resolutionNote || '',
+        depositOutcome: obj.depositOutcome || '',
+        evidenceCount: String(obj.evidenceUrls || '').split('|').filter(Boolean).length,
+        reportedByMe: normalizeEmail(obj.reporterEmail) === caller,
+        createdAt: obj.createdAt,
+        resolvedAt: obj.resolvedAt || ''
+      });
+    }
+    disputes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return { success: true, swapId: swapId, disputes: disputes };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * Admin-only: every dispute still open, with the swap/parties/evidence an
+ * admin needs to decide it. Read-only — resolveDispute() is the only
+ * function that changes a dispute's outcome.
+ */
+function getOpenDisputes(data) {
+  if (!isAuthorizedAdminEmail(data && data.adminEmail)) {
+    return { success: false, message: 'Unauthorized' };
+  }
+  try {
+    const sheet = getDisputesSheet();
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: true, disputes: [] };
+    const headers = values[0].map(h => String(h).trim());
+
+    const includeResolved = !!(data && data.includeResolved);
+    const swapSheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+    const swapValues = swapSheet.getDataRange().getValues();
+    const swapHeaders = swapValues.length ? swapValues[0].map(h => String(h).trim()) : [];
+    const swapIdIdx = swapHeaders.indexOf('id');
+    const swapById = {};
+    if (swapIdIdx !== -1) {
+      for (let r = 1; r < swapValues.length; r++) {
+        swapById[String(swapValues[r][swapIdIdx])] = rowToObject(swapHeaders, swapValues[r]);
+      }
+    }
+
+    const disputes = [];
+    for (let r = 1; r < values.length; r++) {
+      const obj = rowToObject(headers, values[r]);
+      const status = String(obj.status || 'Open').trim();
+      if (!includeResolved && status !== 'Open' && status !== 'Under Review') continue;
+      const swapInfo = swapById[String(obj.swapId)] || null;
+      const parties = swapInfo ? resolveSwapRequestParties(swapHeaders, swapValues[
+        swapValues.findIndex(r2 => String(r2[swapIdIdx]) === String(obj.swapId))
+      ]) : null;
+      disputes.push({
+        id: obj.id,
+        swapId: obj.swapId,
+        reporterEmail: obj.reporterEmail,
+        category: obj.category || 'OTHER',
+        categoryLabel: DISPUTE_CATEGORIES[obj.category] || 'Issue reported',
+        reason: obj.reason,
+        details: obj.details,
+        status: status,
+        resolutionStatus: obj.resolutionStatus || '',
+        resolutionNote: obj.resolutionNote || '',
+        depositOutcome: obj.depositOutcome || '',
+        depositOutcomeAmount: obj.depositOutcomeAmount || '',
+        resolvedBy: obj.resolvedBy || '',
+        resolvedAt: obj.resolvedAt || '',
+        evidenceUrls: String(obj.evidenceUrls || '').split('|').filter(Boolean),
+        createdAt: obj.createdAt,
+        swap: swapInfo ? {
+          requesterEmail: parties ? parties.requesterEmail : swapInfo.requesterEmail,
+          ownerEmail: parties ? parties.ownerEmail : swapInfo.ownerEmail,
+          requestedBookTitle: swapInfo.requestedBookTitle,
+          serviceType: swapInfo.serviceType,
+          status: swapInfo.status,
+          securityDeposit: swapInfo.securityDeposit,
+          ownerDeposit: swapInfo.ownerDeposit
+        } : null
+      });
+    }
+    disputes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return { success: true, disputes: disputes, categories: DISPUTE_CATEGORIES };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// Deposit outcomes an admin may record on resolution. Not a payment
+// action — SwapSutra does not hold the money (see the Refund & Security
+// Deposit Policy's own interim-arrangement notice) — this only records
+// what was decided, for markRefundIssued and the future structured
+// deduction system (P1) to read.
+const DISPUTE_DEPOSIT_OUTCOMES = { NONE: true, FULL_REFUND: true, PARTIAL_DEDUCTION: true, FULL_FORFEIT: true, NOT_APPLICABLE: true };
+const DISPUTE_RESOLUTION_STATUSES = { UNDER_REVIEW: 'Under Review', RESOLVED: 'Resolved', REJECTED: 'Rejected' };
+
+/**
+ * Admin decides a dispute. Records the decision, the reasoning, and — if
+ * relevant — a deposit outcome, then notifies both parties. This is
+ * intentionally a record of a decision, not a money-moving action: no
+ * payment API exists in this codebase (deposits are handled manually per
+ * the Refund & Security Deposit Policy), so this writes what was decided
+ * for a human to act on, the same way markRefundIssued already does.
+ */
+function resolveDispute(data) {
+  if (!isAuthorizedAdminEmail(data && data.adminEmail)) {
+    return { success: false, message: 'Unauthorized' };
+  }
+  try {
+    const disputeId = String((data && data.disputeId) || '').trim();
+    if (!disputeId) return { success: false, message: 'Dispute ID required.' };
+
+    const resolutionStatusKey = String((data && data.resolutionStatus) || 'RESOLVED').trim().toUpperCase();
+    const resolutionStatus = DISPUTE_RESOLUTION_STATUSES[resolutionStatusKey] || DISPUTE_RESOLUTION_STATUSES.RESOLVED;
+    const resolutionNote = String((data && data.resolutionNote) || '').trim().slice(0, 1000);
+    const depositOutcomeKey = String((data && data.depositOutcome) || 'NOT_APPLICABLE').trim().toUpperCase();
+    const depositOutcome = DISPUTE_DEPOSIT_OUTCOMES[depositOutcomeKey] ? depositOutcomeKey : 'NOT_APPLICABLE';
+
+    let depositOutcomeAmount = '';
+    if (depositOutcomeKey === 'PARTIAL_DEDUCTION') {
+      const amount = Number((data && data.depositOutcomeAmount));
+      // Reject rather than silently coerce — this is a financial-record
+      // field (see the function's own comment: it is a decision record,
+      // not a payment, but it is what a human acts on to move real money),
+      // so an invalid amount must not be written at all.
+      if (!isFinite(amount) || amount < 0) {
+        return { success: false, message: 'Enter a valid, non-negative deduction amount.' };
+      }
+      depositOutcomeAmount = amount;
+    }
+
+    const sheet = getDisputesSheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values.length ? values[0].map(h => String(h).trim()) : SWAP_DISPUTE_HEADERS;
+    const idIdx = headers.indexOf('id');
+    const rowIdx = values.findIndex((r, i) => i > 0 && String(r[idIdx]) === disputeId);
+    if (rowIdx === -1) return { success: false, message: 'Dispute not found.' };
+
+    const previous = rowToObject(headers, values[rowIdx]);
+    const previousStatus = previous.status || 'Open';
+    const swapId = previous.swapId;
+    const adminEmail = normalizeEmail(getAuthenticatedEmail() || data.adminEmail);
+    const now = new Date();
+
+    const setCell = (name, value) => {
+      const idx = headers.indexOf(name);
+      if (idx !== -1) sheet.getRange(rowIdx + 1, idx + 1).setValue(value);
+    };
+    setCell('status', resolutionStatus === 'Resolved' || resolutionStatus === 'Rejected' ? 'Closed' : 'Under Review');
+    setCell('resolutionStatus', resolutionStatus);
+    setCell('resolutionNote', resolutionNote);
+    setCell('depositOutcome', depositOutcome);
+    setCell('depositOutcomeAmount', depositOutcomeAmount);
+    setCell('resolvedBy', adminEmail);
+    setCell('resolvedAt', now);
+
+    appendDisputeEvent({
+      disputeId: disputeId, swapId: swapId, actorEmail: adminEmail, eventType: 'resolved',
+      previousStatus: previousStatus, newStatus: resolutionStatus, note: resolutionNote
+    });
+
+    // Notify both parties — reusing createNotification exactly as
+    // markHandedOver/markRefundIssued already do for their own events.
+    try {
+      const swap = loadSwapForCirculation(swapId);
+      if (swap) {
+        [swap.requesterEmail, swap.ownerEmail].forEach(email => {
+          if (!email) return;
+          createNotification(
+            email,
+            'dispute_resolved',
+            'Your reported issue has an update',
+            `SwapSutra has reviewed the reported issue on this exchange: ${resolutionStatus}.` + (resolutionNote ? ' ' + resolutionNote : ''),
+            swapId,
+            { link: '/profile', dedupeKey: 'disp_res_' + disputeId }
+          );
+        });
+      }
+    } catch (notifyErr) {
+      Logger.log('resolveDispute notification failed: ' + notifyErr.toString());
+    }
+
+    return { success: true, disputeId: disputeId, resolutionStatus: resolutionStatus, message: 'Dispute resolved.' };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// =====================================================================
+// TRANSACTION TIMELINE — one chronological view, aggregated from
+// existing datasets. This does not store anything of its own: every
+// event it returns already lives in SwapRequests, SwapProofs,
+// SwapJourney, ChatMessages, SwapDisputes or Chats. It only reads,
+// merges and sorts. Where a real timestamp for a milestone does not
+// exist in any of those (for example, exactly when a deposit was
+// "acknowledged"), that milestone is simply left out rather than
+// invented — see the code comments below at each such point.
+// =====================================================================
+
+/** Real, exact timestamps for handover/return/refund milestones, mined
+ * from the system messages markHandedOver/markRefundIssued/
+ * markOwnerFinalConfirmation already post to ChatMessages. Those
+ * functions are untouched — this only reads what they already wrote. */
+function chatMilestoneEvents(chatId) {
+  const found = { handover_confirmed: null, return_started: null, completed: null, refund_issued: null };
+  if (!chatId) return found;
+  try {
+    const sheet = getOrCreateSheet('ChatMessages', []);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return found;
+    const headers = values[0].map(h => String(h).trim());
+    const chatIdx = headers.indexOf('chatId');
+    const msgIdx = headers.indexOf('message');
+    const atIdx = headers.indexOf('createdAt');
+    if (chatIdx === -1 || msgIdx === -1 || atIdx === -1) return found;
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][chatIdx]) !== String(chatId)) continue;
+      const msg = String(values[r][msgIdx] || '');
+      const at = values[r][atIdx];
+      if (msg.indexOf('HANDED OVER') !== -1 && !found.handover_confirmed) found.handover_confirmed = at;
+      else if (msg.indexOf('marked the book as RETURNED') !== -1 && !found.return_started) found.return_started = at;
+      else if (msg.indexOf('CONFIRMED the return') !== -1 && !found.completed) found.completed = at;
+      else if (msg.indexOf('REFUND as ISSUED') !== -1 && !found.refund_issued) found.refund_issued = at;
+    }
+  } catch (err) {
+    Logger.log('chatMilestoneEvents failed: ' + err.toString());
+  }
+  return found;
+}
+
+function findChatBySwapId(swapId) {
+  try {
+    const sheet = getOrCreateSheet('Chats', []);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return null;
+    const headers = values[0].map(h => String(h).trim());
+    const swapIdx = headers.indexOf('swapId');
+    if (swapIdx === -1) return null;
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][swapIdx]) === String(swapId)) return rowToObject(headers, values[r]);
+    }
+  } catch (err) {
+    Logger.log('findChatBySwapId failed: ' + err.toString());
+  }
+  return null;
+}
+
+/**
+ * Whether a swap's chat has reached a terminal completed state.
+ * SwapRequests.status never transitions to a "completed" value in this
+ * codebase — it only ever becomes Accepted/Declined/Cancelled/Disputed
+ * (acceptSwapRequest / declineSwapRequest / cancelSwapRequest /
+ * disputeSwapRequest are the only writers of that column).
+ *
+ * The ONLY writer of chatStatus = 'Completed' is markSwapCompletedInChat(),
+ * called exclusively from getSwapStage() once the real state machine says
+ * `completed` (adminSetSecurityFeeOutcome's OUTCOME/COMPLETED events, no
+ * open dispute) and from adminSetSecurityFeeOutcome() itself.
+ * 'Archived' is included because archiveCompletedChat() now re-derives
+ * genuine completion from getSwapStage() itself before it will ever set
+ * chatStatus = 'Archived' (see checkAndArchiveChat / archiveCompletedChat) —
+ * so 'Archived' can never be reached for a swap that isn't already, by the
+ * same real requirements, Completed. markHandedOver and
+ * markOwnerFinalConfirmation — the old single-party endpoints that used to
+ * be able to reach 'Completed'/'Archived' on their own say-so — are both
+ * disabled outright; they can no longer write chatStatus at all.
+ */
+function isSwapCompletedByChat(swapId) {
+  const chat = findChatBySwapId(swapId);
+  const status = chat ? String(chat.chatStatus || '').trim() : '';
+  return status === 'Completed' || status === 'Archived';
+}
+
+/**
+ * swapId → true, for every chat that has reached a terminal completed
+ * state (see isSwapCompletedByChat). Built once from the Chats sheet, the
+ * same shape as the existing chatHandoverIndex(), so a per-reader
+ * completed-swap count does not re-scan Chats once per swap row.
+ */
+function completedSwapIdSet() {
+  const set = {};
+  try {
+    const sheet = getOrCreateSheet('Chats', []);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return set;
+    const headers = values[0].map(h => String(h).trim());
+    const swapIdx = headers.indexOf('swapId');
+    const statusIdx = headers.indexOf('chatStatus');
+    if (swapIdx === -1 || statusIdx === -1) return set;
+    for (let r = 1; r < values.length; r++) {
+      const swapId = String(values[r][swapIdx] || '').trim();
+      if (!swapId) continue;
+      const status = String(values[r][statusIdx] || '').trim();
+      if (status === 'Completed' || status === 'Archived') set[swapId] = true;
+    }
+  } catch (err) {
+    Logger.log('completedSwapIdSet failed: ' + err.toString());
+  }
+  return set;
+}
+
+const TIMELINE_PROOF_PHASE_EVENT = {
+  owner_pre_handover: 'proof_submitted',
+  requester_received: 'proof_submitted',
+  requester_pre_return: 'proof_submitted',
+  owner_received_return: 'proof_submitted'
+};
+
+const TIMELINE_PROOF_PHASE_LABEL = {
+  owner_pre_handover: 'Pre-handover condition proof submitted',
+  requester_received: 'Received condition proof submitted',
+  requester_pre_return: 'Pre-return condition proof submitted',
+  owner_received_return: 'Return condition proof submitted'
+};
+
+const TIMELINE_JOURNEY_LABEL = {
+  route_set: 'Delivery route agreed',
+  packed: 'Book packed and ready',
+  handed_over: 'Handed over in person',
+  dispatched: 'Posted / dispatched',
+  in_transit: 'In transit',
+  out_for_delivery: 'Out for delivery',
+  delivered: 'Delivered',
+  received: 'Delivery confirmed',
+  delayed: 'Running late',
+  issue_raised: 'Problem reported on the journey'
+};
+
+/**
+ * One ordered event list for a swap, assembled from every dataset that
+ * already tracks part of its lifecycle. Read-only; changes nothing.
+ * Caller must be a party to the swap or admin — same rule as the rest of
+ * the circulation ledger.
+ */
+function getSwapTimeline(data) {
+  try {
+    // Session identity only — see disputeSwapRequest's identical note.
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    const swapId = String((data && data.swapId) || '').trim();
+    if (!swapId) return { success: false, message: 'Swap ID required.' };
+
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, caller)) {
+      return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    }
+
+    const events = [];
+    const push = (type, label, at, extra) => {
+      if (!at) return; // never manufacture an event with no real timestamp
+      events.push(Object.assign({ type: type, label: label, at: at }, extra || {}));
+    };
+
+    // 1. Request created / accepted / declined / cancelled — from the
+    // swap row itself. createdAt is exact; for the current status we use
+    // updatedAt as the best available timestamp (the sheet has no
+    // separate "acceptedAt" column) rather than inventing one.
+    push('request_created', 'Request sent', swap.obj.createdAt, { by: swap.requesterEmail });
+    const swapStatus = String(swap.obj.status || '').trim().toLowerCase();
+    const statusEventMap = {
+      active: { type: 'request_accepted', label: 'Request accepted' },
+      'handed over': { type: 'request_accepted', label: 'Request accepted' },
+      returned: { type: 'request_accepted', label: 'Request accepted' },
+      completed: { type: 'request_accepted', label: 'Request accepted' },
+      archived: { type: 'request_accepted', label: 'Request accepted' },
+      declined: { type: 'request_declined', label: 'Request declined' },
+      cancelled: { type: 'request_cancelled', label: 'Request cancelled' },
+      disputed: { type: 'request_accepted', label: 'Request accepted' }
+    };
+    const mapped = statusEventMap[swapStatus];
+    if (mapped && swap.obj.updatedAt) {
+      push(mapped.type, mapped.label, swap.obj.updatedAt);
+    }
+
+    // 2. Condition proof — one event per uploaded phase, from SwapProofs.
+    try {
+      const proofSheet = getOrCreateSheet('SwapProofs', []);
+      const proofValues = proofSheet.getDataRange().getValues();
+      if (proofValues.length > 1) {
+        const pHeaders = proofValues[0].map(h => String(h).trim());
+        const pSwapIdx = pHeaders.indexOf('swapId');
+        for (let r = 1; r < proofValues.length; r++) {
+          if (pSwapIdx !== -1 && String(proofValues[r][pSwapIdx]) !== swapId) continue;
+          const obj = rowToObject(pHeaders, proofValues[r]);
+          push('proof_submitted', TIMELINE_PROOF_PHASE_LABEL[obj.phase] || 'Condition proof submitted', obj.timestamp, {
+            by: obj.uploaderEmail, phase: obj.phase, mediaUrl: obj.mediaUrl
+          });
+        }
+      }
+    } catch (err) {
+      Logger.log('getSwapTimeline proofs read failed: ' + err.toString());
+    }
+
+    // 3. Handover / return / completion milestones — real timestamps
+    // mined from the chat's own system messages (see chatMilestoneEvents).
+    const chat = findChatBySwapId(swapId);
+    if (chat) {
+      const milestones = chatMilestoneEvents(chat.chatId);
+      push('handover_confirmed', 'Handover confirmed', milestones.handover_confirmed);
+      push('return_started', 'Return marked by borrower', milestones.return_started);
+      push('completed', 'Exchange completed', milestones.completed);
+      push('refund_issued', 'Deposit refund marked issued', milestones.refund_issued);
+    }
+
+    // 4. Courier / in-person journey — from SwapJourney, already exposed
+    // via getSwapJourney; reused here rather than re-queried differently.
+    const journey = getSwapJourney({ swapId: swapId });
+    if (journey && journey.success && Array.isArray(journey.events)) {
+      journey.events.forEach(e => {
+        const type = e.leg === 'return' ? ('return_' + e.event) : e.event;
+        push(type, (e.leg === 'return' ? 'Return: ' : '') + (TIMELINE_JOURNEY_LABEL[e.event] || e.event), e.at, {
+          by: e.actorName, courierName: e.courierName, awb: e.awb, trackingUrl: e.trackingUrl, leg: e.leg
+        });
+      });
+    }
+
+    // 5. Disputes — from SwapDisputes.
+    const disputesResp = getSwapDisputes({ swapId: swapId, userEmail: caller });
+    if (disputesResp && disputesResp.success) {
+      (disputesResp.disputes || []).forEach(d => {
+        push('dispute_opened', 'Issue reported: ' + d.categoryLabel, d.createdAt, { disputeId: d.id });
+        if (d.resolvedAt) push('dispute_resolved', 'Issue resolved: ' + (d.resolutionStatus || d.status), d.resolvedAt, { disputeId: d.id });
+      });
+    }
+
+    events.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+    return {
+      success: true,
+      swapId: swapId,
+      serviceType: journey && journey.serviceType,
+      events: events,
+      deposit: journey && journey.deposit,
+      currentStatus: swap.obj.status || ''
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// =====================================================================
+// GROWTH MODULE — funnel analytics, referrals, swap SLA, trial sequence
+// ---------------------------------------------------------------------
+// Added as one self-contained block at the end of the file rather than
+// threaded through the existing 12,000 lines. Apps Script hoists every
+// top-level function, so placement is free, and keeping it together means
+// the whole growth surface can be read (or reverted) in one place.
+//
+// Nothing here changes an existing behaviour. Four hooks call into it —
+// createBook (referral qualification), doPost/doGet (new actions), and
+// two time-driven triggers installed by installGrowthTriggers().
+// =====================================================================
+
+const ANALYTICS_SHEET = 'AnalyticsEvents';
+const ANALYTICS_HEADERS = ['id', 'event', 'anonId', 'email', 'tab', 'referrerCode', 'meta', 'createdAt'];
+
+// The funnel, named once. An allowlist rather than free-form strings:
+// an analytics sheet that accepts anything becomes a sheet nobody can
+// query, and this endpoint is reachable without a session, so it is also
+// the thing that stops a stranger appending ten million rows of garbage
+// to the database.
+const FUNNEL_EVENTS = {
+  // acquisition → activation
+  landing_viewed: true,
+  pincode_submitted: true,
+  nearby_shelf_viewed: true,
+  signup_started: true,
+  otp_sent: true,
+  otp_verified: true,
+  registration_completed: true,
+  first_listing_prompted: true,
+  first_listing_created: true,
+  first_request_sent: true,
+  handover_confirmed: true,
+  // revenue
+  upgrade_viewed: true,
+  upgrade_started: true,
+  upgrade_paid: true,
+  // referral
+  referral_link_shared: true,
+  referral_link_opened: true,
+  referral_qualified: true
+};
+
+const ANALYTICS_META_MAX = 500;
+
+/**
+ * Records one funnel event. Deliberately cheap and deliberately silent:
+ * analytics must never be able to fail a user-facing action, so every
+ * path here returns success and swallows its own errors.
+ *
+ * Session-exempt on purpose — the most important events in the funnel
+ * (landing_viewed, pincode_submitted, signup_started) happen before
+ * anyone has an identity. Identity, when present, comes from the
+ * verified session, never from the request body, so a caller cannot
+ * attribute events to someone else.
+ */
+function logFunnelEvent(data) {
+  try {
+    const event = String((data && data.event) || '').trim();
+    if (!FUNNEL_EVENTS[event]) {
+      // Unknown event names are dropped rather than rejected: an older
+      // client build should never see errors for an event this backend
+      // has not learned about yet.
+      return { success: true, recorded: false };
+    }
+
+    // Throttle. This action is reachable without a session, so without a
+    // ceiling one script could append rows until the spreadsheet hits its
+    // ten-million-cell limit and takes the whole database down with it.
+    // CacheService is used rather than a sheet read because the check has
+    // to be cheaper than the write it is protecting.
+    const throttleKey = 'evt_' + String((data && data.anonId) || 'anon').slice(0, 40);
+    try {
+      const cache = CacheService.getScriptCache();
+      const seen = Number(cache.get(throttleKey) || 0);
+      if (seen >= 60) return { success: true, recorded: false, throttled: true };
+      cache.put(throttleKey, String(seen + 1), 600); // 60 events per 10 minutes
+    } catch (cacheErr) {
+      // A cache outage must not stop the funnel being measured.
+    }
+
+    const sheet = getOrCreateSheet(ANALYTICS_SHEET, ANALYTICS_HEADERS);
+    const headers = ensureSheetHeaders(sheet, ANALYTICS_HEADERS);
+
+    // The session is the only trusted source of identity here.
+    const email = getAuthenticatedEmail() || '';
+
+    let meta = '';
+    try {
+      meta = data && data.meta ? JSON.stringify(data.meta).slice(0, ANALYTICS_META_MAX) : '';
+    } catch (metaErr) {
+      meta = '';
+    }
+
+    const row = new Array(headers.length).fill('');
+    headers.forEach((h, i) => {
+      if (h === 'id') row[i] = generateId('SS_EVT_');
+      else if (h === 'event') row[i] = event;
+      // A first-party random id the client keeps in localStorage. It ties
+      // a visitor's pre-signup steps to their post-signup ones without
+      // any third party, cookie or fingerprint being involved.
+      else if (h === 'anonId') row[i] = String((data && data.anonId) || '').slice(0, 40);
+      else if (h === 'email') row[i] = email;
+      else if (h === 'tab') row[i] = String((data && data.tab) || '').slice(0, 40);
+      else if (h === 'referrerCode') row[i] = normalizeReferralCode(data && data.referrerCode);
+      else if (h === 'meta') row[i] = meta;
+      else if (h === 'createdAt') row[i] = new Date();
+    });
+    sheet.appendRow(row);
+    return { success: true, recorded: true };
+  } catch (err) {
+    Logger.log('logFunnelEvent failed: ' + err.toString());
+    return { success: true, recorded: false };
+  }
+}
+
+// --- VISITOR COUNTER ------------------------------------------------------
+//
+// The number shown in the site footer: how many different browsers have
+// opened SwapSutra. The browser remembers (in localStorage) that it has
+// already been counted and says so with `newVisitor`, so a reader is
+// counted once, not on every page load.
+//
+// The total lives in a Script Property rather than a sheet: one number,
+// read and written in milliseconds, and a script lock keeps two visitors
+// arriving at the same moment from overwriting each other's +1.
+//
+// Stores nothing about the visitor. Like logFunnelEvent it is reachable
+// without a session, so it has a global ceiling on how fast it can grow.
+const VISITOR_COUNT_KEY = 'VISITOR_COUNT';
+const VISITOR_BURST_LIMIT = 300; // new visitors per 10 minutes
+
+function recordVisit(data) {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const isNew = data && (data.newVisitor === true || data.newVisitor === 'true');
+    let count = readVisitorCount_(props);
+
+    if (isNew) {
+      let allowed = true;
+      try {
+        const cache = CacheService.getScriptCache();
+        const burst = Number(cache.get('visit_burst') || 0);
+        if (burst >= VISITOR_BURST_LIMIT) allowed = false;
+        else cache.put('visit_burst', String(burst + 1), 600);
+      } catch (cacheErr) {
+        // A cache outage must not stop visits being counted.
+      }
+
+      const lock = LockService.getScriptLock();
+      if (allowed && lock.tryLock(5000)) {
+        try {
+          count = readVisitorCount_(props) + 1;
+          props.setProperty(VISITOR_COUNT_KEY, String(count));
+          return { success: true, count: count, counted: true };
+        } finally {
+          lock.releaseLock();
+        }
+      }
+    }
+
+    return { success: true, count: count, counted: false };
+  } catch (err) {
+    Logger.log('recordVisit failed: ' + err.toString());
+    return { success: false, count: null };
+  }
+}
+
+/**
+ * The current total. The first time it is read there is no total yet, so it
+ * starts from the number of different visitors already recorded in the
+ * AnalyticsEvents sheet rather than from zero.
+ */
+function readVisitorCount_(props) {
+  const stored = props.getProperty(VISITOR_COUNT_KEY);
+  if (stored !== null && stored !== '') return Number(stored) || 0;
+
+  let seed = 0;
+  try {
+    const sheet = getOrCreateSheet(ANALYTICS_SHEET, ANALYTICS_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    const col = values.length ? values[0].indexOf('anonId') : -1;
+    if (col >= 0) {
+      const seen = {};
+      for (let r = 1; r < values.length; r++) {
+        const id = String(values[r][col] || '').trim();
+        if (id) seen[id] = true;
+      }
+      seed = Object.keys(seen).length;
+    }
+  } catch (seedErr) {
+    Logger.log('Visitor count seed failed: ' + seedErr.toString());
+  }
+  props.setProperty(VISITOR_COUNT_KEY, String(seed));
+  return seed;
+}
+
+// =====================================================================
+// LISTING FUNNEL COUNTER (24 Sep)
+// ---------------------------------------------------------------------
+// Two numbers, kept the same way as the visitor counter (Script
+// Properties, a script lock around each +1): how often the listing form is
+// opened, and how many listings are created. Together they say whether
+// letting a book go live with only its front cover turns more opened forms
+// into listings. Not an analytics system — just enough to compare the two
+// over the next couple of weeks. Admin reads them on Admin → Analytics
+// (getAdminDashboardMetrics → listingFunnel) and each +1 is logged.
+//
+// LISTING_FUNNEL_SINCE is set on the first count, so "books created" can
+// also be cross-checked against Books rows created since the same moment.
+// =====================================================================
+const LISTING_FUNNEL_KEYS = {
+  opens: 'LISTING_FORM_OPENS',
+  created: 'LISTING_CREATED',
+  createdFrontOnly: 'LISTING_CREATED_PARTIAL',
+  finished: 'LISTING_FINISHED',
+  since: 'LISTING_FUNNEL_SINCE'
+};
+const LISTING_OPEN_BURST_LIMIT = 300; // opens per 10 minutes, site-wide
+
+function bumpListingCounter_(key, logLabel) {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return null;
+    try {
+      if (!props.getProperty(LISTING_FUNNEL_KEYS.since)) {
+        props.setProperty(LISTING_FUNNEL_KEYS.since, new Date().toISOString());
+      }
+      const next = (Number(props.getProperty(key)) || 0) + 1;
+      props.setProperty(key, String(next));
+      Logger.log('[listing-funnel] ' + logLabel + ' → ' + next);
+      return next;
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    Logger.log('[listing-funnel] ' + logLabel + ' failed: ' + err);
+    return null;
+  }
+}
+
+/** Router action: the listing form was opened. Counts only; stores nothing about the reader. */
+function recordListingFormOpen(data) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const burst = Number(cache.get('listing_open_burst') || 0);
+    if (burst >= LISTING_OPEN_BURST_LIMIT) return { success: true, counted: false };
+    cache.put('listing_open_burst', String(burst + 1), 600);
+  } catch (cacheErr) { /* a cache outage must not stop counting */ }
+  const n = bumpListingCounter_(LISTING_FUNNEL_KEYS.opens, 'form opened');
+  return { success: true, counted: n !== null };
+}
+
+function recordListingCreated_(frontCoverOnly) {
+  bumpListingCounter_(LISTING_FUNNEL_KEYS.created, 'listing created');
+  if (frontCoverOnly) bumpListingCounter_(LISTING_FUNNEL_KEYS.createdFrontOnly, 'listing created (front cover only)');
+}
+
+function recordListingFinished_() {
+  bumpListingCounter_(LISTING_FUNNEL_KEYS.finished, 'listing finished (photos added)');
+}
+
+/** The funnel as the admin sees it. `booksRowsSince` is the cross-check from the sheet. */
+function listingFunnelSnapshot_(booksRowsSince) {
+  const props = PropertiesService.getScriptProperties();
+  const num = (k) => Number(props.getProperty(k)) || 0;
+  const opens = num(LISTING_FUNNEL_KEYS.opens);
+  const created = num(LISTING_FUNNEL_KEYS.created);
+  return {
+    since: props.getProperty(LISTING_FUNNEL_KEYS.since) || '',
+    formOpens: opens,
+    listingsCreated: created,
+    createdFrontCoverOnly: num(LISTING_FUNNEL_KEYS.createdFrontOnly),
+    listingsFinished: num(LISTING_FUNNEL_KEYS.finished),
+    booksRowsSince: booksRowsSince === undefined ? null : booksRowsSince,
+    openToListingPercent: opens > 0 ? Math.round((created / opens) * 1000) / 10 : null,
+    visitors: (function () { try { return readVisitorCount_(props); } catch (e) { return null; } })()
+  };
+}
+
+/**
+ * The numbers item 02 exists to produce: counts per event and the two
+ * conversion rates that matter, over a window. Admin only.
+ */
+function getFunnelMetrics(data) {
+  try {
+    const days = Math.min(Math.max(Number((data && data.days) || 30), 1), 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const sheet = getOrCreateSheet(ANALYTICS_SHEET, ANALYTICS_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: true, days: days, counts: {}, uniques: {}, rates: {} };
+
+    const headers = values[0].map(h => String(h).trim());
+    const evtIdx = headers.indexOf('event');
+    const whenIdx = headers.indexOf('createdAt');
+    const anonIdx = headers.indexOf('anonId');
+    const emailIdx = headers.indexOf('email');
+
+    const counts = {};
+    const uniqueSets = {};
+
+    for (let r = 1; r < values.length; r++) {
+      const when = new Date(values[r][whenIdx]);
+      if (isNaN(when.getTime()) || when < since) continue;
+      const evt = String(values[r][evtIdx] || '').trim();
+      if (!evt) continue;
+      counts[evt] = (counts[evt] || 0) + 1;
+      // Prefer the identified reader; fall back to the anonymous id so a
+      // logged-out visitor still counts exactly once.
+      const key = String(values[r][emailIdx] || values[r][anonIdx] || '').trim();
+      if (key) {
+        if (!uniqueSets[evt]) uniqueSets[evt] = {};
+        uniqueSets[evt][key] = true;
+      }
+    }
+
+    const uniques = {};
+    Object.keys(uniqueSets).forEach(k => { uniques[k] = Object.keys(uniqueSets[k]).length; });
+
+    const rate = (from, to) => {
+      const a = uniques[from] || 0;
+      const b = uniques[to] || 0;
+      return a > 0 ? Math.round((b / a) * 1000) / 10 : null;
+    };
+
+    return {
+      success: true,
+      days: days,
+      counts: counts,
+      uniques: uniques,
+      rates: {
+        // The four questions the roadmap said you cannot currently answer.
+        visitor_to_signup: rate('landing_viewed', 'signup_started'),
+        signup_to_verified: rate('signup_started', 'otp_verified'),
+        verified_to_first_listing: rate('registration_completed', 'first_listing_created'),
+        // The scanner-first prompt, measured: of the readers shown the
+        // camera on day one, how many actually finished a listing.
+        prompted_to_first_listing: rate('first_listing_prompted', 'first_listing_created'),
+        listing_to_first_request: rate('first_listing_created', 'first_request_sent'),
+        request_to_handover: rate('first_request_sent', 'handover_confirmed'),
+        upgrade_view_to_paid: rate('upgrade_viewed', 'upgrade_paid')
+      }
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// =====================================================================
+// REFERRALS (item 06)
+// ---------------------------------------------------------------------
+// A referral is only rewarded once the referred reader has actually put
+// a book on the shelf. Rewarding at signup would buy fake accounts;
+// rewarding at first listing buys supply, which is the thing the
+// marketplace is short of.
+// =====================================================================
+
+const REFERRAL_SHEET = 'Referrals';
+const REFERRAL_HEADERS = ['id', 'code', 'ownerEmail', 'referredEmail', 'status', 'rewardDays', 'createdAt', 'qualifiedAt', 'rewardedAt', 'note'];
+const REFERRAL_REWARD_DAYS = 30;
+// One reader cannot mint unlimited membership by inviting their own
+// addresses; past this, referrals still record and still show on the
+// leaderboard, they simply stop paying out.
+const REFERRAL_MAX_REWARDED_PER_OWNER = 12;
+
+function normalizeReferralCode(raw) {
+  return String(raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+}
+
+/**
+ * A stable code per reader, derived from the email rather than stored.
+ * Deriving means there is no code table to keep in sync, no migration
+ * for existing members, and every reader already has one the first time
+ * they open the screen.
+ */
+function referralCodeForEmail(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return '';
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, normalized + '|swapsutra-referral');
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1 — these get read aloud
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += alphabet[(digest[i] + 256) % alphabet.length];
+  }
+  // A human-readable prefix so the code looks like it belongs to a book
+  // community rather than to a promo engine.
+  return 'READ' + code;
+}
+
+function emailForReferralCode(code) {
+  const wanted = normalizeReferralCode(code);
+  if (!wanted) return '';
+  // Codes are derived, not stored, so resolution is a scan of the member
+  // list. Users is small relative to Books and this runs at most once per
+  // signup, which is the only place it is called from.
+  try {
+    const sheet = getOrCreateSheet('Users', DB_SCHEMA.Users);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return '';
+    const headers = values[0].map(h => String(h).trim());
+    const emailIdx = headers.indexOf('email');
+    if (emailIdx === -1) return '';
+    for (let r = 1; r < values.length; r++) {
+      const candidate = normalizeEmail(values[r][emailIdx]);
+      if (candidate && referralCodeForEmail(candidate) === wanted) return candidate;
+    }
+  } catch (err) {
+    Logger.log('emailForReferralCode failed: ' + err.toString());
+  }
+  return '';
+}
+
+/**
+ * Public: does this code belong to a real reader? Used on the signup
+ * screen so an invited visitor sees "Priya invited you — you both get 30
+ * extra days" instead of typing a code into a void. Returns only a first
+ * name; the inviter's address is never exposed.
+ */
+function validateReferralCode(data) {
+  const code = normalizeReferralCode(data && (data.code || data.referralCode));
+  if (!code) return { success: false, message: 'Enter an invite code.' };
+  const ownerEmail = emailForReferralCode(code);
+  if (!ownerEmail) return { success: false, message: "That invite code doesn't belong to a SwapSutra reader." };
+  return {
+    success: true,
+    code: code,
+    inviterName: firstNameOnly(publicReaderName('', ownerEmail) || humanizeEmailLocalPart(ownerEmail)),
+    rewardDays: (freeRegistrationMode_() ? 0 : REFERRAL_REWARD_DAYS)
+  };
+}
+
+/**
+ * The reader's own invite screen: their code, their link, and what it
+ * has actually produced.
+ */
+function getMyReferral(data) {
+  try {
+    const email = getAuthenticatedEmail() || normalizeEmail(data && data.email);
+    if (!email) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to see your invite link.' };
+
+    const code = referralCodeForEmail(email);
+    const rows = referralRowsForOwner(email);
+    const qualified = rows.filter(r => r.status === 'Rewarded' || r.status === 'Qualified');
+
+    return {
+      success: true,
+      code: code,
+      link: swapSutraSiteUrl() + '/?ref=' + code,
+      rewardDays: (freeRegistrationMode_() ? 0 : REFERRAL_REWARD_DAYS),
+      invited: rows.length,
+      joined: qualified.length,
+      daysEarned: rows.reduce((sum, r) => sum + (Number(r.rewardDays) || 0), 0),
+      remainingRewardable: Math.max(0, REFERRAL_MAX_REWARDED_PER_OWNER - rows.filter(r => r.status === 'Rewarded').length),
+      readers: qualified.slice(0, 20).map(r => ({
+        name: firstNameOnly(publicReaderName('', r.referredEmail) || humanizeEmailLocalPart(r.referredEmail)),
+        joinedAt: r.qualifiedAt || r.createdAt
+      }))
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+function referralRowsForOwner(ownerEmail) {
+  const normalized = normalizeEmail(ownerEmail);
+  const sheet = getOrCreateSheet(REFERRAL_SHEET, REFERRAL_HEADERS);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return [];
+  const headers = values[0].map(h => String(h).trim());
+  const out = [];
+  for (let r = 1; r < values.length; r++) {
+    const obj = rowToObject(headers, values[r]);
+    if (normalizeEmail(obj.ownerEmail) === normalized) out.push(obj);
+  }
+  return out;
+}
+
+/**
+ * Called at registration. Records the claim as Pending — no reward is
+ * granted here. Self-referral and re-referral of an existing member are
+ * both refused silently, because neither is worth an error message to a
+ * reader who is mid-signup.
+ */
+function recordReferralClaim(referredEmail, rawCode) {
+  try {
+    const code = normalizeReferralCode(rawCode);
+    const referred = normalizeEmail(referredEmail);
+    if (!code || !referred) return { success: false, reason: 'MISSING' };
+
+    const ownerEmail = emailForReferralCode(code);
+    if (!ownerEmail) return { success: false, reason: 'UNKNOWN_CODE' };
+    if (ownerEmail === referred) return { success: false, reason: 'SELF_REFERRAL' };
+
+    const sheet = getOrCreateSheet(REFERRAL_SHEET, REFERRAL_HEADERS);
+    const headers = ensureSheetHeaders(sheet, REFERRAL_HEADERS);
+    const values = sheet.getDataRange().getValues();
+
+    // One claim per referred reader, ever — an account cannot be invited
+    // twice, by anyone.
+    if (values.length > 1) {
+      const hdr = values[0].map(h => String(h).trim());
+      const refIdx = hdr.indexOf('referredEmail');
+      for (let r = 1; r < values.length; r++) {
+        if (normalizeEmail(values[r][refIdx]) === referred) return { success: false, reason: 'ALREADY_CLAIMED' };
+      }
+    }
+
+    const row = new Array(headers.length).fill('');
+    headers.forEach((h, i) => {
+      if (h === 'id') row[i] = generateId('SS_REF_');
+      else if (h === 'code') row[i] = code;
+      else if (h === 'ownerEmail') row[i] = ownerEmail;
+      else if (h === 'referredEmail') row[i] = referred;
+      else if (h === 'status') row[i] = 'Pending';
+      else if (h === 'rewardDays') row[i] = 0;
+      else if (h === 'createdAt') row[i] = new Date();
+    });
+    sheet.appendRow(row);
+    return { success: true, ownerEmail: ownerEmail };
+  } catch (err) {
+    Logger.log('recordReferralClaim failed: ' + err.toString());
+    return { success: false, reason: 'ERROR' };
+  }
+}
+
+/**
+ * Called after a reader lists their first book. That is the moment the
+ * referral becomes worth paying for, so that is the moment both sides
+ * are rewarded. Idempotent: a second listing does nothing.
+ */
+function maybeQualifyReferral(referredEmail) {
+  try {
+    const referred = normalizeEmail(referredEmail);
+    if (!referred) return;
+
+    const sheet = getOrCreateSheet(REFERRAL_SHEET, REFERRAL_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return;
+
+    const headers = values[0].map(h => String(h).trim());
+    const refIdx = headers.indexOf('referredEmail');
+    const statusIdx = headers.indexOf('status');
+    const ownerIdx = headers.indexOf('ownerEmail');
+    const daysIdx = headers.indexOf('rewardDays');
+    const qualIdx = headers.indexOf('qualifiedAt');
+    const rewardIdx = headers.indexOf('rewardedAt');
+    const noteIdx = headers.indexOf('note');
+
+    let rowIndex = -1;
+    for (let r = 1; r < values.length; r++) {
+      if (normalizeEmail(values[r][refIdx]) === referred) { rowIndex = r; break; }
+    }
+    if (rowIndex === -1) return;
+    if (String(values[rowIndex][statusIdx] || '').trim() !== 'Pending') return;
+
+    const ownerEmail = normalizeEmail(values[rowIndex][ownerIdx]);
+    const alreadyRewarded = values.slice(1).filter(r =>
+      normalizeEmail(r[ownerIdx]) === ownerEmail && String(r[statusIdx] || '').trim() === 'Rewarded'
+    ).length;
+
+    const sheetRow = rowIndex + 1;
+    if (qualIdx !== -1) sheet.getRange(sheetRow, qualIdx + 1).setValue(new Date());
+
+    if (alreadyRewarded >= REFERRAL_MAX_REWARDED_PER_OWNER) {
+      // Recorded and visible, but not paid — see the cap constant.
+      if (statusIdx !== -1) sheet.getRange(sheetRow, statusIdx + 1).setValue('Qualified');
+      if (noteIdx !== -1) sheet.getRange(sheetRow, noteIdx + 1).setValue('Reward cap reached for this inviter.');
+      return;
+    }
+
+    // Free membership never runs out, so there are no days to add.
+    const freeMode = freeRegistrationMode_();
+    const inviterOk = freeMode ? true : extendMembershipByDays(ownerEmail, REFERRAL_REWARD_DAYS);
+    const readerOk = freeMode ? true : extendMembershipByDays(referred, REFERRAL_REWARD_DAYS);
+
+    if (statusIdx !== -1) sheet.getRange(sheetRow, statusIdx + 1).setValue('Rewarded');
+    if (daysIdx !== -1) sheet.getRange(sheetRow, daysIdx + 1).setValue(freeMode ? 0 : REFERRAL_REWARD_DAYS);
+    if (rewardIdx !== -1) sheet.getRange(sheetRow, rewardIdx + 1).setValue(new Date());
+    if (noteIdx !== -1 && (!inviterOk || !readerOk)) {
+      sheet.getRange(sheetRow, noteIdx + 1).setValue('Partial: inviter=' + inviterOk + ' reader=' + readerOk);
+    }
+
+    const readerName = firstNameOnly(publicReaderName('', referred) || humanizeEmailLocalPart(referred));
+    createNotification(
+      ownerEmail,
+      'referral_rewarded',
+      'Your invite brought a reader',
+      readerName + ' joined SwapSutra and listed their first book' + (freeMode ? ' — their shelf is now open to you.' : ' — 30 days have been added to your membership.'),
+      '',
+      { link: '/profile', dedupeKey: 'referral_' + referred }
+    );
+    createNotification(
+      referred,
+      'referral_rewarded',
+      freeMode ? 'Your first book is on the shelf' : '30 extra days, on the house',
+      freeMode ? 'You joined through a reader’s invite and listed your first book — readers near you can now ask for it.' : 'You joined through a reader’s invite and listed your first book — 30 days have been added to your membership.',
+      '',
+      { link: '/profile', dedupeKey: 'referral_welcome_' + referred }
+    );
+
+    try {
+      sendSwapSutraEmail({
+        to: ownerEmail,
+        subject: readerName + ' joined SwapSutra through your invite',
+        htmlBody: getBrandedEmailTemplate(
+          'A reader you invited has arrived',
+          '<p>' + escapeHtml(readerName) + ' signed up through your invite link and has already put their first book on the shelf.</p>' +
+          (freeMode ? '' : '<p><strong>30 days</strong> have been added to your membership — and to theirs.</p>') +
+          '<p>Their shelf is now part of what you can browse. That is how this community grows: one reader at a time, each bringing the next.</p>',
+          swapSutraSiteUrl() + '/profile',
+          'See your invites'
+        )
+      });
+    } catch (mailErr) {
+      Logger.log('Referral reward email failed: ' + mailErr.toString());
+    }
+  } catch (err) {
+    Logger.log('maybeQualifyReferral failed: ' + err.toString());
+  }
+}
+
+/**
+ * Adds days to whichever window is actually governing this reader's
+ * access — the trial window for a trialist, the paid window for a
+ * member. Returns false rather than throwing when there is no row to
+ * extend, so a reward can be recorded as partial instead of lost.
+ */
+function extendMembershipByDays(email, days) {
+  try {
+    const normalized = normalizeEmail(email);
+    if (!normalized || !days) return false;
+
+    const sheet = getOrCreateSheet('Subscriptions', subscriptionHeadersRequired());
+    const headers = ensureSheetHeaders(sheet, subscriptionHeadersRequired());
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return false;
+
+    const hdr = values[0].map(h => String(h).trim());
+    const emailIdx = findHeaderIndex(hdr, ['email', 'userEmail']);
+    const trialEndIdx = hdr.indexOf('trialEndDate');
+    const expiryIdx = hdr.indexOf('subscriptionExpiry');
+    if (emailIdx === -1) return false;
+
+    let rowIndex = -1;
+    for (let r = 1; r < values.length; r++) {
+      if (normalizeEmail(values[r][emailIdx]) === normalized) { rowIndex = r; break; }
+    }
+    if (rowIndex === -1) return false;
+
+    const sub = rowToObject(hdr, values[rowIndex]);
+    const status = computeSubscriptionStatus(sub);
+    const ms = days * 24 * 60 * 60 * 1000;
+    const now = new Date();
+
+    // A paid member's paid window is extended; everyone else's trial
+    // window is. Extending from max(now, current expiry) means a reward
+    // granted after an expiry still gives the full 30 days rather than
+    // silently landing in the past.
+    const usePaidWindow = (status === 'PREMIUM' || status === 'EXPIRED') && expiryIdx !== -1 && sub.subscriptionExpiry;
+    const targetIdx = usePaidWindow ? expiryIdx : (trialEndIdx !== -1 ? trialEndIdx : expiryIdx);
+    if (targetIdx === -1) return false;
+
+    const currentRaw = values[rowIndex][targetIdx];
+    const current = currentRaw ? new Date(currentRaw) : null;
+    const base = (current && !isNaN(current.getTime()) && current > now) ? current : now;
+    sheet.getRange(rowIndex + 1, targetIdx + 1).setValue(new Date(base.getTime() + ms));
+
+    const updatedIdx = hdr.indexOf('updatedAt');
+    if (updatedIdx !== -1) sheet.getRange(rowIndex + 1, updatedIdx + 1).setValue(now);
+    return true;
+  } catch (err) {
+    Logger.log('extendMembershipByDays failed for ' + email + ': ' + err.toString());
+    return false;
+  }
+}
+
+function getReferralLeaderboard(data) {
+  try {
+    const sheet = getOrCreateSheet(REFERRAL_SHEET, REFERRAL_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: true, leaders: [] };
+    const headers = values[0].map(h => String(h).trim());
+    const ownerIdx = headers.indexOf('ownerEmail');
+    const statusIdx = headers.indexOf('status');
+
+    const tally = {};
+    for (let r = 1; r < values.length; r++) {
+      const status = String(values[r][statusIdx] || '').trim();
+      if (status !== 'Rewarded' && status !== 'Qualified') continue;
+      const owner = normalizeEmail(values[r][ownerIdx]);
+      if (!owner) continue;
+      tally[owner] = (tally[owner] || 0) + 1;
+    }
+
+    const leaders = Object.keys(tally)
+      .map(email => ({
+        name: firstNameOnly(publicReaderName('', email) || humanizeEmailLocalPart(email)),
+        readersBrought: tally[email]
+      }))
+      .sort((a, b) => b.readersBrought - a.readersBrought)
+      .slice(0, Math.min(Number((data && data.limit) || 10), 50));
+
+    return { success: true, leaders: leaders };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * Where the site actually lives. Read from Script Properties so the
+ * invite links in emails follow a domain change without a code deploy.
+ */
+function swapSutraSiteUrl() {
+  try {
+    const configured = getScriptSetting('SITE_URL');
+    if (configured) return String(configured).replace(/\/+$/, '');
+  } catch (e) { /* fall through to the default */ }
+  return 'https://swapsutra.in';
+}
+
+// =====================================================================
+// SWAP REQUEST SLA (item 07)
+// ---------------------------------------------------------------------
+// A request nobody answers is the most expensive thing in a marketplace:
+// the requester leaves, and the owner never learns that they cost the
+// community a swap. Nudge at 24h, release the book at 72h, and publish
+// the response rate so answering becomes visible.
+// =====================================================================
+
+const SLA_NUDGE_HOURS = 24;
+const SLA_EXPIRY_HOURS = 72;
+const SLA_HEADERS = ['slaNudgedAt', 'slaExpiredAt', 'ownerRespondedAt'];
+
+function runSwapRequestSla() {
+  const started = Date.now();
+  const summary = { nudged: 0, expired: 0, scanned: 0, errors: 0 };
+  try {
+    const sheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+    const headers = ensureSheetHeaders(sheet, SLA_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return summary;
+
+    const hdr = values[0].map(h => String(h).trim());
+    const idIdx = hdr.indexOf('id');
+    const statusIdx = hdr.indexOf('status');
+    const createdIdx = hdr.indexOf('createdAt');
+    const ownerIdx = hdr.indexOf('ownerEmail');
+    const requesterIdx = findHeaderIndex(hdr, ['requesterEmail', 'senderEmail']);
+    const titleIdx = hdr.indexOf('requestedBookTitle');
+    const bookIdIdx = hdr.indexOf('requestedBookId');
+    const nudgedIdx = hdr.indexOf('slaNudgedAt');
+    const expiredIdx = hdr.indexOf('slaExpiredAt');
+    const updatedIdx = hdr.indexOf('updatedAt');
+    const pincodeIdx = hdr.indexOf('pincode');
+
+    if (idIdx === -1 || statusIdx === -1 || createdIdx === -1) return summary;
+
+    const now = Date.now();
+
+    for (let r = 1; r < values.length; r++) {
+      // Apps Script kills an execution at six minutes. Stopping early and
+      // finishing on the next hourly run is always better than being
+      // killed mid-write.
+      if (Date.now() - started > 4 * 60 * 1000) break;
+
+      const status = String(values[r][statusIdx] || '').trim().toLowerCase();
+      if (status !== 'pending') continue;
+
+      const created = new Date(values[r][createdIdx]);
+      if (isNaN(created.getTime())) continue;
+      summary.scanned++;
+
+      const ageHours = (now - created.getTime()) / (60 * 60 * 1000);
+      const sheetRow = r + 1;
+      const ownerEmail = normalizeEmail(values[r][ownerIdx]);
+      // Old rows keep the requester under senderEmail; resolve per row.
+      const requesterEmail = normalizeEmail((requesterIdx === -1 ? '' : values[r][requesterIdx]) || resolveSwapRequestParties(hdr, values[r]).requesterEmail || '');
+      const bookTitle = titleIdx === -1 ? 'a book' : String(values[r][titleIdx] || 'a book');
+      const requestId = String(values[r][idIdx]);
+
+      try {
+        if (ageHours >= SLA_EXPIRY_HOURS) {
+          if (statusIdx !== -1) sheet.getRange(sheetRow, statusIdx + 1).setValue('Expired');
+          if (expiredIdx !== -1) sheet.getRange(sheetRow, expiredIdx + 1).setValue(new Date());
+          if (updatedIdx !== -1) sheet.getRange(sheetRow, updatedIdx + 1).setValue(new Date());
+
+          // Put the book back in circulation — an unanswered request
+          // should not hold a copy hostage.
+          if (bookIdIdx !== -1) {
+            try { updateBookAvailabilityState(String(values[r][bookIdIdx]), 'AVAILABLE'); } catch (e) { /* best effort */ }
+          }
+
+          if (requesterEmail) {
+            const alternatives = similarNearbyBooks(
+              bookIdIdx === -1 ? '' : String(values[r][bookIdIdx]),
+              pincodeIdx === -1 ? '' : String(values[r][pincodeIdx] || ''),
+              requesterEmail,
+              3
+            );
+            const altText = alternatives.length
+              ? ' Three copies near you are still available: ' + alternatives.map(b => b.title).join(', ') + '.'
+              : '';
+            createNotification(
+              requesterEmail,
+              'swap_request_expired',
+              'No answer on "' + bookTitle + '"',
+              'The owner didn’t respond within three days, so we’ve released your request.' + altText,
+              requestId,
+              { link: '/browse', dedupeKey: 'sla_expired_' + requestId }
+            );
+          }
+          summary.expired++;
+          continue;
+        }
+
+        if (ageHours >= SLA_NUDGE_HOURS && nudgedIdx !== -1 && !values[r][nudgedIdx] && ownerEmail) {
+          const requesterName = firstNameOnly(publicReaderName('', requesterEmail) || humanizeEmailLocalPart(requesterEmail));
+          createNotification(
+            ownerEmail,
+            'swap_request_nudge',
+            requesterName + ' is still waiting',
+            'A request for "' + bookTitle + '" has been open for a day. A yes or a no both help — it expires on its own in two more days.',
+            requestId,
+            { link: '/profile', dedupeKey: 'sla_nudge_' + requestId }
+          );
+          try {
+            sendSwapSutraEmail({
+              to: ownerEmail,
+              subject: requesterName + ' is waiting on "' + bookTitle + '"',
+              htmlBody: getBrandedEmailTemplate(
+                'A reader is waiting',
+                '<p>' + escapeHtml(requesterName) + ' asked for your copy of <em>' + escapeHtml(bookTitle) + '</em> a day ago.</p>' +
+                '<p>Either answer helps them — a yes starts a swap, and a no lets them look elsewhere while the book is still on their mind.</p>' +
+                '<p style="font-size:14px;color:#8C7861;">If nothing happens, the request releases itself in two days and your book returns to the Library.</p>',
+                swapSutraSiteUrl() + '/profile',
+                'Answer the request'
+              )
+            });
+          } catch (mailErr) {
+            Logger.log('SLA nudge email failed: ' + mailErr.toString());
+          }
+          sheet.getRange(sheetRow, nudgedIdx + 1).setValue(new Date());
+          summary.nudged++;
+        }
+      } catch (rowErr) {
+        summary.errors++;
+        Logger.log('SLA row ' + r + ' failed: ' + rowErr.toString());
+      }
+    }
+  } catch (err) {
+    Logger.log('runSwapRequestSla failed: ' + err.toString());
+    summary.errors++;
+  }
+  Logger.log('runSwapRequestSla: ' + JSON.stringify(summary));
+  return summary;
+}
+
+/**
+ * Three books a stranded requester could ask for instead — same pincode
+ * first, then anywhere, excluding their own shelf and the book that just
+ * went unanswered.
+ */
+function similarNearbyBooks(excludeBookId, pincode, requesterEmail, limit) {
+  try {
+    const sheet = getOrCreateSheet('Books', getBookHeaders());
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return [];
+    const headers = values[0].map(h => String(h).trim());
+    const idIdx = headers.indexOf('id');
+    const titleIdx = headers.indexOf('title');
+    const statusIdx = headers.indexOf('status');
+    const ownerIdx = headers.indexOf('ownerEmail');
+    const pinIdx = headers.indexOf('pincode');
+
+    const wanted = String(pincode || '').trim();
+    const me = normalizeEmail(requesterEmail);
+    const near = [];
+    const far = [];
+
+    for (let r = 1; r < values.length; r++) {
+      const status = String(values[r][statusIdx] || '').trim().toLowerCase();
+      if (status !== 'approved' && status !== 'live') continue;
+      if (String(values[r][idIdx]) === String(excludeBookId)) continue;
+      if (normalizeEmail(values[r][ownerIdx]) === me) continue;
+      const entry = { id: String(values[r][idIdx]), title: String(values[r][titleIdx] || 'A book') };
+      if (wanted && String(values[r][pinIdx] || '').trim() === wanted) near.push(entry);
+      else if (far.length < limit) far.push(entry);
+      if (near.length >= limit) break;
+    }
+    return near.concat(far).slice(0, limit);
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * The number that makes answering visible. Shown on a reader's public
+ * profile so a requester can tell, before asking, whether this owner
+ * replies.
+ */
+function getOwnerResponseStats(email) {
+  const empty = { requests: 0, answered: 0, responseRate: null, medianHours: null };
+  try {
+    const normalized = normalizeEmail(email);
+    if (!normalized) return empty;
+
+    const sheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return empty;
+
+    const hdr = values[0].map(h => String(h).trim());
+    const ownerIdx = hdr.indexOf('ownerEmail');
+    const statusIdx = hdr.indexOf('status');
+    const createdIdx = hdr.indexOf('createdAt');
+    const updatedIdx = hdr.indexOf('updatedAt');
+    if (ownerIdx === -1 || statusIdx === -1) return empty;
+
+    let requests = 0;
+    let answered = 0;
+    const hours = [];
+
+    for (let r = 1; r < values.length; r++) {
+      if (normalizeEmail(values[r][ownerIdx]) !== normalized) continue;
+      const status = String(values[r][statusIdx] || '').trim().toLowerCase();
+      // A request still inside its 72-hour window is not yet evidence
+      // either way, so it is excluded from the denominator entirely.
+      if (status === 'pending') {
+        const created = new Date(values[r][createdIdx]);
+        if (!isNaN(created.getTime()) && (Date.now() - created.getTime()) < SLA_EXPIRY_HOURS * 60 * 60 * 1000) continue;
+      }
+      requests++;
+      if (status === 'expired' || status === 'pending') continue;
+      answered++;
+      const created = new Date(values[r][createdIdx]);
+      const updated = updatedIdx === -1 ? null : new Date(values[r][updatedIdx]);
+      if (created && updated && !isNaN(created.getTime()) && !isNaN(updated.getTime()) && updated > created) {
+        hours.push((updated.getTime() - created.getTime()) / (60 * 60 * 1000));
+      }
+    }
+
+    if (requests === 0) return empty;
+    hours.sort((a, b) => a - b);
+    const median = hours.length ? hours[Math.floor(hours.length / 2)] : null;
+
+    return {
+      requests: requests,
+      answered: answered,
+      responseRate: Math.round((answered / requests) * 100),
+      medianHours: median === null ? null : Math.round(median * 10) / 10
+    };
+  } catch (err) {
+    return empty;
+  }
+}
+
+// =====================================================================
+// TRIAL → PAID SEQUENCE (item 04)
+// ---------------------------------------------------------------------
+// Four touches across the 30 free days, each keyed to what the reader
+// has actually done rather than to the calendar alone. Runs once a day.
+// Stage is recorded on the subscription row, so a re-run never sends the
+// same letter twice.
+// =====================================================================
+
+const TRIAL_SEQ_HEADERS = ['trialSequenceStage', 'trialSequenceSentAt'];
+
+function runTrialConversionSequence() {
+  const started = Date.now();
+  const summary = { sent: 0, scanned: 0, errors: 0 };
+  try {
+    const sheet = getOrCreateSheet('Subscriptions', subscriptionHeadersRequired());
+    ensureSheetHeaders(sheet, TRIAL_SEQ_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return summary;
+
+    const hdr = values[0].map(h => String(h).trim());
+    const emailIdx = findHeaderIndex(hdr, ['email', 'userEmail']);
+    const trialStartIdx = hdr.indexOf('trialStartDate');
+    const trialEndIdx = hdr.indexOf('trialEndDate');
+    const stageIdx = hdr.indexOf('trialSequenceStage');
+    const stageSentIdx = hdr.indexOf('trialSequenceSentAt');
+    const createdIdx = hdr.indexOf('createdAt');
+    // Free membership: no trial window is stored, so the letters count
+    // from the day the reader joined (createdAt).
+    const freeMode = freeRegistrationMode_();
+    if (emailIdx === -1 || stageIdx === -1) return summary;
+    if (!freeMode && trialEndIdx === -1) return summary;
+    if (freeMode && createdIdx === -1) return summary;
+
+    const now = new Date();
+
+    for (let r = 1; r < values.length; r++) {
+      if (Date.now() - started > 4 * 60 * 1000) break;
+
+      const email = normalizeEmail(values[r][emailIdx]);
+      if (!email || isTestQAEmail(email)) continue;
+
+      const sub = rowToObject(hdr, values[r]);
+      const status = computeSubscriptionStatus(sub);
+      // Only readers actually inside a free trial. A paid member does not
+      // need convincing, and an expired one is the expiry reminder's job.
+      if (status !== 'TRIAL' && status !== 'FREE_TRIAL' && status !== 'ACTIVE') continue;
+
+      let trialStart = null;
+      if (freeMode) {
+        trialStart = values[r][createdIdx] ? new Date(values[r][createdIdx]) : null;
+      } else {
+        const trialEnd = new Date(values[r][trialEndIdx]);
+        if (isNaN(trialEnd.getTime()) || trialEnd < now) continue;
+        trialStart = trialStartIdx === -1 ? null : new Date(values[r][trialStartIdx]);
+      }
+      if (!trialStart || isNaN(trialStart.getTime())) continue;
+
+      summary.scanned++;
+      const dayOfTrial = Math.floor((now.getTime() - trialStart.getTime()) / (24 * 60 * 60 * 1000));
+      if (freeMode && dayOfTrial > 30) continue; // only the first month after joining
+      const stageSent = Number(values[r][stageIdx] || 0);
+
+      let stage = 0;
+      if (dayOfTrial >= 29) stage = 4;
+      else if (dayOfTrial >= 25) stage = 3;
+      else if (dayOfTrial >= 10) stage = 2;
+      else if (dayOfTrial >= 3) stage = 1;
+
+      // Final check (11 Oct 2026): SwapSutra is free to join and nothing
+      // expires, so the "your free month ends / continue for ₹49" letters
+      // (stages 3 and 4) are never sent while registration is free.
+      if (freeRegistrationMode_() && stage > 2) stage = 2;
+      if (stage === 0 || stage <= stageSent) continue;
+
+      try {
+        if (sendTrialSequenceEmail(email, stage)) {
+          sheet.getRange(r + 1, stageIdx + 1).setValue(stage);
+          if (stageSentIdx !== -1) sheet.getRange(r + 1, stageSentIdx + 1).setValue(now);
+          summary.sent++;
+        }
+      } catch (rowErr) {
+        summary.errors++;
+        Logger.log('Trial sequence row ' + r + ' failed: ' + rowErr.toString());
+      }
+    }
+  } catch (err) {
+    summary.errors++;
+    Logger.log('runTrialConversionSequence failed: ' + err.toString());
+  }
+  Logger.log('runTrialConversionSequence: ' + JSON.stringify(summary));
+  return summary;
+}
+
+/**
+ * The reader's own numbers, which is what makes ₹49 an easy yes: books
+ * listed, swaps completed, readers met. Cheap enough to compute per
+ * letter because the sequence sends at most a few hundred a day.
+ */
+function trialReaderStats(email) {
+  const stats = { booksListed: 0, requestsSent: 0, swapsCompleted: 0, nearbyBooks: 0, pincode: '' };
+  try {
+    const normalized = normalizeEmail(email);
+    const bookSheet = getOrCreateSheet('Books', getBookHeaders());
+    const bookValues = bookSheet.getDataRange().getValues();
+    if (bookValues.length > 1) {
+      const bh = bookValues[0].map(h => String(h).trim());
+      const ownerIdx = bh.indexOf('ownerEmail');
+      const statusIdx = bh.indexOf('status');
+      const pinIdx = bh.indexOf('pincode');
+      for (let r = 1; r < bookValues.length; r++) {
+        if (normalizeEmail(bookValues[r][ownerIdx]) === normalized) {
+          stats.booksListed++;
+          if (!stats.pincode && pinIdx !== -1) stats.pincode = String(bookValues[r][pinIdx] || '').trim();
+        }
+      }
+      if (stats.pincode && pinIdx !== -1) {
+        for (let r = 1; r < bookValues.length; r++) {
+          const st = String(bookValues[r][statusIdx] || '').trim().toLowerCase();
+          if ((st === 'approved' || st === 'live')
+            && String(bookValues[r][pinIdx] || '').trim() === stats.pincode
+            && normalizeEmail(bookValues[r][ownerIdx]) !== normalized) stats.nearbyBooks++;
+        }
+      }
+    }
+
+    const swapSheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+    const swapValues = swapSheet.getDataRange().getValues();
+    if (swapValues.length > 1) {
+      const sh = swapValues[0].map(h => String(h).trim());
+      const reqIdx = findHeaderIndex(sh, ['requesterEmail', 'senderEmail']);
+      const ownIdx = sh.indexOf('ownerEmail');
+      const stIdx = sh.indexOf('status');
+      for (let r = 1; r < swapValues.length; r++) {
+        const isMine = (reqIdx !== -1 && normalizeEmail(swapValues[r][reqIdx]) === normalized)
+          || (ownIdx !== -1 && normalizeEmail(swapValues[r][ownIdx]) === normalized);
+        if (!isMine) continue;
+        if (reqIdx !== -1 && normalizeEmail(swapValues[r][reqIdx]) === normalized) stats.requestsSent++;
+        if (String(swapValues[r][stIdx] || '').trim().toLowerCase() === 'completed') stats.swapsCompleted++;
+      }
+    }
+  } catch (err) {
+    Logger.log('trialReaderStats failed: ' + err.toString());
+  }
+  return stats;
+}
+
+function sendTrialSequenceEmail(email, stage) {
+  const name = firstNameOnly(publicReaderName('', email) || humanizeEmailLocalPart(email)) || 'Reader';
+  const stats = trialReaderStats(email);
+  const site = swapSutraSiteUrl();
+
+  let subject = '';
+  let title = '';
+  let body = '';
+  let ctaLink = site;
+  let ctaText = 'Open SwapSutra';
+
+  if (stage === 1) {
+    // Day 3 — the activation letter. Only worth sending to someone who
+    // has not listed yet; a reader who already has is doing fine.
+    if (stats.booksListed > 0) return false;
+    subject = 'There are readers near you, ' + name;
+    title = 'Your shelf is still empty';
+    body = '<p>Hello ' + escapeHtml(name) + ',</p>'
+      + '<p>You joined SwapSutra a few days ago, and your shelf is still waiting for its first book.</p>'
+      + (stats.nearbyBooks > 0
+        ? '<p>There are already <strong>' + stats.nearbyBooks + ' books</strong> listed by readers near you. The moment you add one of your own, you can ask for any of them.</p>'
+        : '<p>Adding one book takes about a minute — scan the spine with your camera and the cover, title and author fill themselves in.</p>')
+      + '<p>One book is all it takes to be part of this.</p>';
+    ctaLink = site + '/list';
+    ctaText = 'Add your first book';
+  } else if (stage === 2) {
+    subject = name + ', here is what your first ten days built';
+    title = 'Ten days in';
+    body = '<p>Hello ' + escapeHtml(name) + ',</p>'
+      + '<p>A quick look at your shelf so far:</p>'
+      + '<div class="benefit-item"><strong>' + stats.booksListed + '</strong> book' + (stats.booksListed === 1 ? '' : 's') + ' offered to the community</div>'
+      + '<div class="benefit-item"><strong>' + stats.requestsSent + '</strong> request' + (stats.requestsSent === 1 ? '' : 's') + ' sent to other readers</div>'
+      + '<div class="benefit-item"><strong>' + stats.swapsCompleted + '</strong> swap' + (stats.swapsCompleted === 1 ? '' : 's') + ' completed</div>'
+      + (freeRegistrationMode_()
+        ? '<p>If there is a book you have been meaning to ask for, this is a good week for it.</p>'
+        : '<p>Twenty days of your free month remain. If there is a book you have been meaning to ask for, this is a good week for it.</p>');
+    ctaLink = site + '/browse';
+    ctaText = 'Browse the Library';
+  } else if (stage === 3) {
+    subject = 'Your free month ends in five days';
+    title = 'Five days left';
+    body = '<p>Hello ' + escapeHtml(name) + ',</p>'
+      + '<p>Your complimentary month on SwapSutra ends in five days. Here is what it has held so far:</p>'
+      + '<div class="benefit-item"><strong>' + stats.booksListed + '</strong> book' + (stats.booksListed === 1 ? '' : 's') + ' on your shelf</div>'
+      + '<div class="benefit-item"><strong>' + stats.swapsCompleted + '</strong> completed swap' + (stats.swapsCompleted === 1 ? '' : 's') + '</div>'
+      + (stats.nearbyBooks > 0 ? '<div class="benefit-item"><strong>' + stats.nearbyBooks + '</strong> books currently offered by readers near you</div>' : '')
+      + '<p>Continuing costs <strong>₹49 a month</strong> — less than the postage on a single book, and it keeps every one of those shelves open to you.</p>';
+    ctaLink = site + '/profile';
+    ctaText = 'Continue for ₹49';
+  } else {
+    subject = 'Your SwapSutra month ends tomorrow';
+    title = 'One more day';
+    body = '<p>Hello ' + escapeHtml(name) + ',</p>'
+      + '<p>Your free month ends tomorrow. After that, browsing stays open, but swapping, lending and your reading space pause until you continue.</p>'
+      + '<p>₹49 a month keeps all of it — and your shelf, your streak and your circles exactly as you left them.</p>'
+      + '<p style="font-size:14px;color:#8C7861;">If SwapSutra was not for you, no action is needed and nothing will be charged. We would still love to know why — simply reply to this note.</p>';
+    ctaLink = site + '/profile';
+    ctaText = 'Continue for ₹49';
+  }
+
+  try {
+    sendSwapSutraEmail({ to: email, subject: subject, htmlBody: getBrandedEmailTemplate(title, body, ctaLink, ctaText) });
+    return true;
+  } catch (err) {
+    Logger.log('Trial sequence email failed for ' + email + ': ' + err.toString());
+    return false;
+  }
+}
+
+// =====================================================================
+// TRIGGER INSTALLER
+// ---------------------------------------------------------------------
+// Run once from the Apps Script editor. Idempotent: it removes its own
+// previous triggers before creating them, and leaves every other trigger
+// in the project alone.
+// =====================================================================
+function installGrowthTriggers() {
+  const managed = {
+    runSwapRequestSla: true,
+    runTrialConversionSequence: true,
+    runWeeklyShelfDigest: true,
+    runCirculationSla: true,
+    runDailyEngagementPush: true
+  };
+  const existing = ScriptApp.getProjectTriggers();
+  existing.forEach(t => {
+    if (managed[t.getHandlerFunction()]) ScriptApp.deleteTrigger(t);
+  });
+
+  ScriptApp.newTrigger('runSwapRequestSla').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('runTrialConversionSequence').timeBased().everyDays(1).atHour(9).create();
+  // Sunday morning: the appointment the community did not have. Late
+  // enough that it is not competing with breakfast, early enough that
+  // the day is still open for a swap.
+  ScriptApp.newTrigger('runWeeklyShelfDigest')
+    .timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(10).create();
+  // Daily rather than hourly: a parcel does not need chasing every hour,
+  // and the thresholds are measured in days.
+  ScriptApp.newTrigger('runCirculationSla').timeBased().everyDays(1).atHour(11).create();
+  // Daily book updates: runs hourly, sends only in the slot hours (IST
+  // 9 / 13 / 18 / 21 by default), once per slot per day.
+  ScriptApp.newTrigger('runDailyEngagementPush').timeBased().everyHours(1).create();
+
+  return {
+    success: true,
+    installed: [
+      'runSwapRequestSla (hourly)',
+      'runTrialConversionSequence (daily, 09:00)',
+      'runWeeklyShelfDigest (Sundays, 10:00)',
+      'runCirculationSla (daily, 11:00)',
+      'runDailyEngagementPush (hourly; sends at 9, 13, 18, 21 IST)'
+    ]
+  };
+}
+
+// =====================================================================
+// TRANSACTIONAL EMAIL (item 11)
+// ---------------------------------------------------------------------
+// Every letter SwapSutra sends used to go through MailApp, which shares
+// one Google account's daily quota — roughly 100 sends on a consumer
+// account, 1,500 on Workspace. OTPs, membership approvals, swap
+// notifications, the trial sequence and the newsletter all competed for
+// it, which means the first campus drive that works is also the day
+// login stops working.
+//
+// This is the single choke point they now all pass through. It takes
+// exactly the argument shapes MailApp.sendEmail and GmailApp.sendEmail
+// already accepted, so the 28 call sites changed by one identifier and
+// nothing else.
+//
+// PROVIDER — configured, not hardcoded. Set the Script Property
+// EMAIL_PROVIDER_API_KEY (a Resend key) and sending moves off Google
+// entirely; leave it unset and everything behaves exactly as before.
+// That means this can be deployed before the account exists, and the
+// cutover is one property, not a release.
+//
+// FAILURE — deliberately preserved. Several existing call sites wrap
+// their send in try/catch and treat a throw as "did not send". So this
+// tries the provider, falls back to MailApp when the provider fails,
+// and only throws when BOTH have failed — the same signal those callers
+// already handle.
+// =====================================================================
+
+const EMAIL_PROVIDER_ENDPOINT = 'https://api.resend.com/emails';
+
+function getEmailProviderKey() {
+  try {
+    return String(getScriptSetting('EMAIL_PROVIDER_API_KEY') || '').trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * The From address the provider sends as. Must be a domain verified with
+ * the provider, or the provider rejects the send and we fall back to
+ * MailApp — which is the safe direction for that mistake to fail in.
+ */
+function getEmailFromAddress() {
+  try {
+    const configured = String(getScriptSetting('EMAIL_FROM_ADDRESS') || '').trim();
+    if (configured) return configured;
+  } catch (e) { /* fall through */ }
+  return 'SwapSutra <hello@swapsutra.in>';
+}
+
+/**
+ * Accepts either shape the codebase already used:
+ *   sendSwapSutraEmail({ to, subject, htmlBody })   // MailApp form
+ *   sendSwapSutraEmail(to, subject, body)           // GmailApp form
+ */
+function normalizeEmailArgs(optionsOrTo, maybeSubject, maybeBody) {
+  if (optionsOrTo && typeof optionsOrTo === 'object') {
+    return {
+      to: String(optionsOrTo.to || '').trim(),
+      subject: String(optionsOrTo.subject || ''),
+      htmlBody: optionsOrTo.htmlBody ? String(optionsOrTo.htmlBody) : '',
+      body: optionsOrTo.body ? String(optionsOrTo.body) : '',
+      name: optionsOrTo.name ? String(optionsOrTo.name) : '',
+      replyTo: optionsOrTo.replyTo ? String(optionsOrTo.replyTo) : '',
+      attachments: Array.isArray(optionsOrTo.attachments) ? optionsOrTo.attachments.filter(Boolean) : []
+    };
+  }
+  return {
+    to: String(optionsOrTo || '').trim(),
+    subject: String(maybeSubject || ''),
+    htmlBody: '',
+    body: String(maybeBody || ''),
+    name: '',
+    replyTo: '',
+    attachments: []
+  };
+}
+
+/**
+ * Strips tags for the plain-text alternative. Not a sanitiser — the HTML
+ * here is ours, built by getBrandedEmailTemplate — just a readable
+ * fallback for clients that refuse HTML, which every provider wants and
+ * MailApp generated implicitly.
+ */
+function plainTextFromHtml(html) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|h1|h2|h3)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n\s*\n+/g, '\n\n')
+    .trim();
+}
+
+function sendViaEmailProvider(msg, apiKey, idempotencyKey) {
+  const payload = {
+    from: getEmailFromAddress(),
+    to: [msg.to],
+    subject: msg.subject
+  };
+  if (msg.htmlBody) {
+    payload.html = msg.htmlBody;
+    payload.text = idempotencyKey && msg.body ? msg.body : plainTextFromHtml(msg.htmlBody);
+  } else {
+    payload.text = msg.body;
+  }
+  if (msg.replyTo) payload.reply_to = msg.replyTo;
+  if (msg.attachments && msg.attachments.length) {
+    payload.attachments = msg.attachments.map(b => ({ filename: b.getName(), content: Utilities.base64Encode(b.getBytes()) }));
+  }
+
+  const headers = { Authorization: 'Bearer ' + apiKey };
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+  const response = UrlFetchApp.fetch(EMAIL_PROVIDER_ENDPOINT, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: headers,
+    payload: JSON.stringify(payload),
+    // Read the status ourselves so a 4xx becomes a fallback rather than
+    // an exception that skips the fallback entirely.
+    muteHttpExceptions: true
+  });
+
+  const code = response.getResponseCode();
+  if (code >= 200 && code < 300) return true;
+  Logger.log('Email provider rejected send to ' + msg.to + ' (' + code + '): ' + response.getContentText().slice(0, 300));
+  return false;
+}
+
+function sendViaMailApp(msg) {
+  const extra = msg.attachments && msg.attachments.length ? { attachments: msg.attachments } : {};
+  if (msg.htmlBody) {
+    MailApp.sendEmail(Object.assign({ to: msg.to, subject: msg.subject, htmlBody: msg.htmlBody }, extra));
+  } else {
+    MailApp.sendEmail(Object.assign({ to: msg.to, subject: msg.subject, body: msg.body }, extra));
+  }
+  return true;
+}
+
+/**
+ * The one function every SwapSutra email goes through.
+ *
+ * Returns true when the letter was accepted by the provider or by
+ * MailApp. Throws only when both refused, because that is the signal
+ * the existing try/catch call sites are written against.
+ */
+function sendSwapSutraEmail(optionsOrTo, maybeSubject, maybeBody) {
+  const msg = normalizeEmailArgs(optionsOrTo, maybeSubject, maybeBody);
+  if (!msg.to) {
+    throw new Error('sendSwapSutraEmail: no recipient.');
+  }
+
+  const apiKey = getEmailProviderKey();
+  if (apiKey) {
+    try {
+      if (sendViaEmailProvider(msg, apiKey)) return true;
+    } catch (providerErr) {
+      Logger.log('Email provider threw for ' + msg.to + ': ' + providerErr.toString());
+    }
+    // Provider configured but unhappy — a misconfigured domain, a
+    // network blip, a suspended account. Falling back to MailApp keeps
+    // the OTP arriving while somebody looks at the provider.
+    Logger.log('Falling back to MailApp for ' + msg.to);
+  }
+
+  return sendViaMailApp(msg);
+}
+
+/**
+ * How much MailApp headroom is left today. Worth surfacing because the
+ * whole point of item 11 is that this number stopped mattering — if it
+ * is still falling, the provider key is not actually in use.
+ */
+function getEmailQuotaStatus() {
+  let remaining = null;
+  try {
+    remaining = MailApp.getRemainingDailyQuota();
+  } catch (e) {
+    remaining = null;
+  }
+  return {
+    success: true,
+    providerConfigured: Boolean(getEmailProviderKey()),
+    fromAddress: getEmailFromAddress(),
+    mailAppQuotaRemaining: remaining
+  };
+}
+
+// =====================================================================
+// TBR MATCH ALERTS (item 09)
+// ---------------------------------------------------------------------
+// The highest-intent notification this product can send. A reader put a
+// title on their to-be-read list, sometimes months ago; a neighbour has
+// just listed that exact book. Every input already existed — the TBR
+// flag on reading_space, the pincode on Users, the new listing itself —
+// and nothing was joining them.
+//
+// Runs inline on createBook. Deliberately capped and deliberately
+// silent: a listing must never fail, or even slow down noticeably,
+// because a match lookup had a bad day.
+// =====================================================================
+
+// How many readers one listing may alert. A popular title on a lot of
+// TBR lists must not turn one listing into a hundred emails — both for
+// quota and because an alert that arrives for everything is an alert
+// nobody opens.
+const TBR_ALERT_MAX_RECIPIENTS = 12;
+// Beyond this the listing flow stops looking. Matching is best-effort;
+// the listing is not.
+const TBR_ALERT_TIME_BUDGET_MS = 8000;
+
+/**
+ * Everyone who has this title on their TBR, is not the owner, and is
+ * near enough for the book to actually reach them.
+ *
+ * "Near enough" is the same notion the Library already uses: an exact
+ * pincode match first, then anyone in the same area name. Coordinates
+ * are not used here — a TBR row has none, and asking the Users sheet for
+ * them per reader would cost more than the alert is worth.
+ */
+function findTbrMatches(title, author, ownerEmail, pincode, area) {
+  const started = Date.now();
+  const matches = [];
+  try {
+    const normalizedTitle = normalizeCurrentReadText(title);
+    if (!normalizedTitle) return matches;
+    const normalizedAuthor = normalizeCurrentReadText(author);
+    const owner = normalizeEmail(ownerEmail);
+
+    const sheet = getReadingSpaceSheet();
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return matches;
+
+    const headers = values[0].map(h => String(h).trim());
+    const userIdx = headers.indexOf('user_id');
+    const titleIdx = headers.indexOf('normalized_book_title');
+    const authorIdx = headers.indexOf('normalized_author');
+    const tbrIdx = headers.indexOf('tbr');
+    const nameIdx = headers.indexOf('user_name');
+    if (userIdx === -1 || titleIdx === -1 || tbrIdx === -1) return matches;
+
+    // Collect candidate readers first, then resolve their location once
+    // from Users — rather than reading Users per row.
+    const wanted = {};
+    for (let r = 1; r < values.length; r++) {
+      if (Date.now() - started > TBR_ALERT_TIME_BUDGET_MS) break;
+      if (!boolFlag(values[r][tbrIdx])) continue;
+      if (String(values[r][titleIdx] || '') !== normalizedTitle) continue;
+      // An author on both sides that disagrees is a different book with
+      // the same name — a real occurrence, and a wrong alert is worse
+      // than a missed one. An author missing on either side is not
+      // evidence of anything, so it does not disqualify the match.
+      if (normalizedAuthor && authorIdx !== -1 && values[r][authorIdx]
+        && String(values[r][authorIdx]) !== normalizedAuthor) continue;
+      const reader = normalizeEmail(values[r][userIdx]);
+      if (!reader || reader === owner) continue;
+      if (!wanted[reader]) wanted[reader] = String(values[r][nameIdx] || '');
+    }
+
+    const readers = Object.keys(wanted);
+    if (!readers.length) return matches;
+
+    const locations = readerLocationsFor(readers);
+    const wantedPin = String(pincode || '').trim();
+    const wantedArea = String(area || '').trim().toLowerCase();
+
+    readers.forEach(reader => {
+      const loc = locations[reader] || {};
+      const samePin = wantedPin && String(loc.pincode || '').trim() === wantedPin;
+      const sameArea = wantedArea && String(loc.area || '').trim().toLowerCase() === wantedArea;
+      if (!samePin && !sameArea) return;
+      matches.push({ email: reader, name: wanted[reader], exact: Boolean(samePin) });
+    });
+
+    // Exact pincode matches first — those are the ones where the handover
+    // is a walk rather than a journey.
+    matches.sort((a, b) => (b.exact ? 1 : 0) - (a.exact ? 1 : 0));
+    return matches.slice(0, TBR_ALERT_MAX_RECIPIENTS);
+  } catch (err) {
+    Logger.log('findTbrMatches failed: ' + err.toString());
+    return matches;
+  }
+}
+
+/** One pass over Users to resolve area/pincode for a set of readers. */
+function readerLocationsFor(emails) {
+  const out = {};
+  try {
+    const wanted = {};
+    emails.forEach(e => { wanted[normalizeEmail(e)] = true; });
+
+    const sheet = getOrCreateSheet('Users', DB_SCHEMA.Users);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return out;
+    const headers = values[0].map(h => String(h).trim());
+    const emailIdx = headers.indexOf('email');
+    const pinIdx = headers.indexOf('pincode');
+    const areaIdx = headers.indexOf('area');
+    if (emailIdx === -1) return out;
+
+    for (let r = 1; r < values.length; r++) {
+      const email = normalizeEmail(values[r][emailIdx]);
+      if (!email || !wanted[email]) continue;
+      out[email] = {
+        pincode: pinIdx === -1 ? '' : String(values[r][pinIdx] || ''),
+        area: areaIdx === -1 ? '' : String(values[r][areaIdx] || '')
+      };
+    }
+  } catch (err) {
+    Logger.log('readerLocationsFor failed: ' + err.toString());
+  }
+  return out;
+}
+
+/**
+ * Called from createBook once the row is written. Best-effort by design:
+ * every failure path here is a log line, never an error the lister sees.
+ */
+function notifyTbrMatches(book) {
+  const summary = { matched: 0, notified: 0 };
+  try {
+    const title = String(book.title || '').trim();
+    if (!title) return summary;
+
+    const matches = findTbrMatches(title, book.author, book.ownerEmail, book.pincode, book.area);
+    summary.matched = matches.length;
+    if (!matches.length) return summary;
+
+    const ownerName = firstNameOnly(publicReaderName('', book.ownerEmail) || humanizeEmailLocalPart(book.ownerEmail)) || 'A reader';
+    const where = String(book.area || book.pincode || '').trim();
+    const author = String(book.author || '').trim();
+
+    const notifications = matches.map(m => ({
+      userEmail: m.email,
+      type: 'tbr_match',
+      title: 'A book from your list just appeared',
+      message: ownerName + (where ? ' in ' + where : ' nearby') + ' listed "' + title + '"'
+        + (author ? ' by ' + author : '') + ' — it has been on your reading list.',
+      relatedId: String(book.id || ''),
+      // One alert per reader per book, ever. Without this a reader who
+      // relists the same title would notify the same neighbours again.
+      dedupeKey: 'tbr_' + String(book.id || title),
+      link: '/browse'
+    }));
+
+    try {
+      createNotificationsBatch(notifications);
+    } catch (batchErr) {
+      Logger.log('TBR notification batch failed: ' + batchErr.toString());
+    }
+
+    matches.forEach(m => {
+      try {
+        sendSwapSutraEmail({
+          to: m.email,
+          subject: '"' + title + '" is now available near you',
+          htmlBody: getBrandedEmailTemplate(
+            'A book from your list',
+            '<p>Hello ' + escapeHtml(firstNameOnly(m.name) || 'Reader') + ',</p>'
+            + '<p><strong>' + escapeHtml(title) + '</strong>' + (author ? ' by ' + escapeHtml(author) : '')
+            + ' has been on your reading list. ' + escapeHtml(ownerName)
+            + (where ? ', in ' + escapeHtml(where) : ', nearby') + ', has just offered a copy to the community.</p>'
+            + '<p>Books move quickly when they are wanted. If this is still one you want, now is the moment to ask.</p>',
+            swapSutraSiteUrl() + '/browse',
+            'See the listing'
+          )
+        });
+        summary.notified++;
+      } catch (mailErr) {
+        Logger.log('TBR alert email failed for ' + m.email + ': ' + mailErr.toString());
+      }
+    });
+  } catch (err) {
+    Logger.log('notifyTbrMatches failed: ' + err.toString());
+  }
+  Logger.log('notifyTbrMatches: ' + JSON.stringify(summary));
+  return summary;
+}
+
+// =====================================================================
+// LIBRARY CACHE + PAGINATION (item 10)
+// ---------------------------------------------------------------------
+// getBooks reads the whole Books sheet, the whole Subscriptions sheet
+// and the whole BookRatings sheet, joins them, and returns every row —
+// on every single request. The joins were already made linear by an
+// earlier fix, but the work is still repeated in full for every reader
+// who opens Browse, and Apps Script kills an execution at six minutes.
+// The failure mode is the bad one: it arrives suddenly, on the day
+// growth works, and it takes the Library down for everybody at once.
+//
+// Two changes, neither of which alters what getBooks returns by default:
+//
+//   1. The computed payload is cached, so N readers browsing in the same
+//      two minutes cost one scan instead of N.
+//   2. Optional page / pageSize / pincode parameters. Absent, the
+//      response is byte-for-byte what it was — every existing caller is
+//      untouched. Present, the response is a paged envelope the client
+//      can adopt when it is ready.
+//
+// The cache is invalidated on every write that could change the Library,
+// so a listing still appears the moment it is created.
+// =====================================================================
+
+// CacheService caps a single value at 100KB, so a Library payload is
+// split across numbered keys with an index key recording the count.
+const LIBRARY_CACHE_CHUNK_BYTES = 90000;
+const LIBRARY_CACHE_MAX_CHUNKS = 24;   // ~2MB ceiling; past that, don't cache
+const LIBRARY_CACHE_TTL_SECONDS = 120;
+// Bumped by invalidateLibraryCache(). Every cache key carries it, so an
+// invalidation is one tiny write rather than a hunt for stale chunks —
+// and a chunk that outlives its generation is simply never read again.
+const LIBRARY_CACHE_GENERATION_KEY = 'libraryCacheGeneration';
+
+function libraryCacheGeneration() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const current = props.getProperty(LIBRARY_CACHE_GENERATION_KEY);
+    if (current) return String(current);
+    props.setProperty(LIBRARY_CACHE_GENERATION_KEY, '1');
+    return '1';
+  } catch (e) {
+    // No generation means no caching, which is correct-but-slow rather
+    // than fast-but-wrong.
+    return '';
+  }
+}
+
+/**
+ * Called by every write that can change what the Library shows. Cheap on
+ * purpose — one property write, no cache enumeration.
+ */
+function invalidateLibraryCache() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const next = Number(props.getProperty(LIBRARY_CACHE_GENERATION_KEY) || 0) + 1;
+    props.setProperty(LIBRARY_CACHE_GENERATION_KEY, String(next));
+  } catch (e) {
+    Logger.log('invalidateLibraryCache failed: ' + e.toString());
+  }
+}
+
+function libraryCacheRead(name) {
+  const generation = libraryCacheGeneration();
+  if (!generation) return null;
+  try {
+    const cache = CacheService.getScriptCache();
+    const base = 'lib_' + generation + '_' + name;
+    const count = Number(cache.get(base + '_n') || 0);
+    if (!count) return null;
+
+    const keys = [];
+    for (let i = 0; i < count; i++) keys.push(base + '_' + i);
+    const parts = cache.getAll(keys);
+
+    let joined = '';
+    for (let i = 0; i < count; i++) {
+      const part = parts[base + '_' + i];
+      // A chunk can expire independently. A partial payload is worse than
+      // no payload, so an incomplete set is treated as a miss.
+      if (part === null || part === undefined) return null;
+      joined += part;
+    }
+    return JSON.parse(joined);
+  } catch (err) {
+    Logger.log('libraryCacheRead miss (' + name + '): ' + err.toString());
+    return null;
+  }
+}
+
+function libraryCacheWrite(name, value) {
+  const generation = libraryCacheGeneration();
+  if (!generation) return false;
+  try {
+    const serialized = JSON.stringify(value);
+    const chunkCount = Math.ceil(serialized.length / LIBRARY_CACHE_CHUNK_BYTES);
+    if (chunkCount > LIBRARY_CACHE_MAX_CHUNKS) {
+      // The Library has outgrown the cache. That is the signal to move
+      // the client onto the paged path below, so say so loudly rather
+      // than silently degrading.
+      Logger.log('Library payload too large to cache: ' + serialized.length + ' bytes. Move the client to paged getBooks.');
+      return false;
+    }
+
+    const base = 'lib_' + generation + '_' + name;
+    const entries = {};
+    for (let i = 0; i < chunkCount; i++) {
+      entries[base + '_' + i] = serialized.substr(i * LIBRARY_CACHE_CHUNK_BYTES, LIBRARY_CACHE_CHUNK_BYTES);
+    }
+    const cache = CacheService.getScriptCache();
+    cache.putAll(entries, LIBRARY_CACHE_TTL_SECONDS);
+    // The index is written LAST and expires FIRST, so a reader can never
+    // find an index pointing at chunks that are already gone.
+    cache.put(base + '_n', String(chunkCount), LIBRARY_CACHE_TTL_SECONDS - 10);
+    return true;
+  } catch (err) {
+    Logger.log('libraryCacheWrite failed (' + name + '): ' + err.toString());
+    return false;
+  }
+}
+
+/**
+ * Actions that change what the Library shows. Dispatched through the
+ * accumulator tail of doPost, so they are invalidated in one place.
+ */
+const LIBRARY_MUTATING_ACTIONS = {
+  createBook: true, listBook: true, addBook: true,
+  updateUserBook: true, editBook: true, removeUserBook: true,
+  approveBook: true, manageBook: true,
+  // A request reserves a copy and a cancellation releases it — both
+  // change the availability state a Library card renders.
+  createSwapRequest: true, createBookServiceRequest: true,
+  cancelSwapRequest: true, markHandedOver: true,
+  createBookRating: true, rateBook: true
+};
+
+/** respondJson, plus dropping the Library cache. Use after a book write. */
+function bookWriteResponse(result) {
+  invalidateLibraryCache();
+  return respondJson(result);
+}
+
+/**
+ * Which cached payload this caller may see. Three audiences, three
+ * caches — a guest must never be served a member's copy, and the whole
+ * point of redactBookForAudience is that the three differ.
+ */
+function libraryAudienceKey() {
+  if (isAuthenticatedAdmin()) return 'admin';
+  return getAuthenticatedEmail() ? 'member' : 'guest';
+}
+
+/**
+ * Applies the optional filters. Absent parameters mean "everything",
+ * which is what every existing caller sends.
+ */
+function paginateLibrary(books, params) {
+  const source = params || {};
+  const pincode = String(source.pincode || '').trim();
+  const area = String(source.area || '').trim().toLowerCase();
+
+  let filtered = books;
+  if (pincode) {
+    filtered = filtered.filter(b => String(b.pincode || '').trim() === pincode);
+  } else if (area) {
+    filtered = filtered.filter(b => String(b.area || '').trim().toLowerCase() === area);
+  }
+
+  const rawPage = Number(source.page || 0);
+  const rawSize = Number(source.pageSize || 0);
+  if (!rawPage && !rawSize) {
+    // No paging asked for: hand back the plain array, exactly as before.
+    return { paged: false, data: filtered };
+  }
+
+  const pageSize = Math.min(Math.max(rawSize || 60, 1), 200);
+  const page = Math.max(rawPage || 1, 1);
+  const start = (page - 1) * pageSize;
+  const slice = filtered.slice(start, start + pageSize);
+
+  return {
+    paged: true,
+    data: slice,
+    page: page,
+    pageSize: pageSize,
+    total: filtered.length,
+    hasMore: start + pageSize < filtered.length
+  };
+}
+
+/**
+ * The whole of the old getBooks body, unchanged in what it computes —
+ * moved into a function so the result can be cached and so the router
+ * branch stays readable.
+ */
+function buildLibraryPayload() {
+  const sheet = getOrCreateSheet('Books', getBookHeaders());
+  ensureSheetHeaders(sheet, getBookHeaders());
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const ratingSheet = getOrCreateSheet('BookRatings', []);
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return { all: [], publicBooks: [] };
+
+  const subData = subSheet.getDataRange().getValues();
+  const subHeaders = subData[0];
+  const emailIdx = subHeaders.indexOf('email');
+
+  const ratingData = ratingSheet.getDataRange().getValues();
+  const ratingHeaders = ratingData[0];
+  const bookIdRatingIdx = ratingHeaders.indexOf('bookId');
+  const valRatingIdx = ratingHeaders.indexOf('rating');
+  const statusRatingIdx = ratingHeaders.indexOf('status');
+
+  const headers = data[0];
+  const now = new Date();
+  const ownerEmailIdx = headers.indexOf('ownerEmail');
+
+  const ratingsByBookId = {};
+  if (bookIdRatingIdx !== -1 && valRatingIdx !== -1) {
+    for (let r = 1; r < ratingData.length; r++) {
+      const row = ratingData[r];
+      if (statusRatingIdx !== -1 && String(row[statusRatingIdx]).toLowerCase() !== 'approved') continue;
+      const bookId = row[bookIdRatingIdx];
+      if (!bookId) continue;
+      if (!ratingsByBookId[bookId]) ratingsByBookId[bookId] = { sum: 0, count: 0 };
+      ratingsByBookId[bookId].sum += Number(row[valRatingIdx] || 0);
+      ratingsByBookId[bookId].count += 1;
+    }
+  }
+
+  const subscriptionByEmail = {};
+  if (emailIdx !== -1) {
+    for (let s = 1; s < subData.length; s++) {
+      const owner = normalizeEmail(subData[s][emailIdx]);
+      if (!owner || subscriptionByEmail[owner]) continue;
+      const sub = {};
+      subHeaders.forEach((h, i) => sub[h] = subData[s][i]);
+      subscriptionByEmail[owner] = sub;
+    }
+  }
+
+  const books = data.slice(1).map(row => {
+    let obj = {};
+    headers.forEach((h, i) => obj[h] = row[i]);
+    Object.assign(obj, bookAvailabilityFlags(obj));
+
+    // What the server has decided about this book, sent with the book.
+    //
+    // The app should never have to work any of this out for itself. If the
+    // client computes eligibility, then the client's answer and the
+    // server's answer are two answers, and the day they disagree is the
+    // day a reader is shown a Rent button on a book the server will refuse
+    // to rent. So the decision travels with the data.
+    const eligibility = bookTransactionEligibility(obj);
+    obj.authenticityStatus = eligibility.authenticity;
+    obj.can_sell = eligibility.can_sell;
+    obj.can_swap = eligibility.can_swap;
+    obj.can_rent = eligibility.can_rent;
+    obj.can_lend = eligibility.can_lend;
+    obj.eligibilityReason = eligibility.reason;
+
+    // The printed MRP and the monthly rent it produces. Both are null when
+    // unresolved, and null must render as "not available" — never as 0,
+    // which reads as a price somebody set.
+    const printed = printedMrpOf(obj);
+    obj.printedMrp = printed;
+
+    // Temporary pricing phase: the value the pricing engine actually used
+    // (userEnteredMRP first, automated fallback only for a book with none
+    // — see effectiveBookMRP), and where it came from, sent verbatim so
+    // the app never has to re-derive or guess at "is this verified".
+    const effective = effectiveBookMRP(obj);
+    obj.effectiveMRP = effective;
+    obj.userEnteredMRP = parsePrintedMrp(
+      (obj.userEnteredMRP !== undefined && obj.userEnteredMRP !== '') ? obj.userEnteredMRP : obj.printedMrp);
+    obj.automatedMRP = parsePrintedMrp(obj.automatedMRP);
+    obj.pricingSource = pricingSourceOf(obj);
+    // monthlyRentForBook, so the quote and the eligibility flag are both
+    // derived from the same known value (never the generic estimate).
+    obj.monthlyRent = eligibility.can_rent ? monthlyRentForBook(obj) : null;
+    // The owner's asking price (Oct 2026), null when the book isn't for sale.
+    obj.sellPrice = eligibility.can_sell ? sellPriceForBook(obj) : null;
+
+    // SwapSutra's own resolved value, kept under a name that cannot be
+    // mistaken for the printed MRP.
+    const resolved = bookResolvedPrice(obj);
+    obj.referenceValue = resolved;
+    obj.mrp = (obj.mrp === '' || obj.mrp === null || obj.mrp === undefined
+               || Number(obj.mrp) <= 0) ? null : Number(obj.mrp);
+
+    const tally = ratingsByBookId[obj.id];
+    if (tally && tally.count > 0) {
+      obj.averageRating = tally.sum / tally.count;
+      obj.ratingCount = tally.count;
+    } else {
+      obj.averageRating = 0;
+      obj.ratingCount = 0;
+    }
+
+    return obj;
+  });
+
+  return {
+    all: books,
+    publicBooks: books.filter(b => {
+      const status = String(b.status || "").toLowerCase();
+      const isApproved = status === 'approved' || status === 'live';
+      const expiry = b.expiresAt ? new Date(b.expiresAt) : null;
+      const notExpired = !expiry || expiry >= now;
+
+      if (!isApproved || !notExpired) return false;
+      if (!bookHasPublicLibraryVisibility(b)) return false;
+
+      // Unchanged from the original: an owner whose membership has
+      // lapsed does not appear in the public Library. See the long note
+      // on the previous implementation for why this is not `=== 'Active'`.
+      if (emailIdx !== -1 && ownerEmailIdx !== -1) {
+        const ownerEmail = normalizeEmail(b.ownerEmail);
+        if (isAdminEmail(ownerEmail)) return true;
+        // Final check (11 Oct 2026): an approved partner (bookstore, author,
+        // publisher, promoter, library) has no reader membership — its
+        // books are shown while the partnership is approved.
+        if (!subscriptionByEmail[ownerEmail]) return !!approvedPartner_(ownerEmail);
+        const sub = subscriptionByEmail[ownerEmail];
+        if (sub) {
+          const computed = computeSubscriptionStatus(sub);
+          return computed === 'TRIAL' || computed === 'FREE_TRIAL' || computed === 'PREMIUM' || computed === 'Active';
+        }
+      }
+      return false;
+    })
+  };
+}
+
+/**
+ * The getBooks router branch, cache-aware.
+ *
+ * Returns the same bare array it always did unless the caller explicitly
+ * asks for a page — so this can ship without touching the client, and
+ * the client can adopt paging on its own schedule.
+ */
+function getBooksResponse(params) {
+  const source = params || {};
+  const audience = libraryAudienceKey();
+  const cacheName = 'books_' + audience;
+
+  let payload = libraryCacheRead(cacheName);
+  if (!payload) {
+    const built = buildLibraryPayload();
+    payload = audience === 'admin'
+      ? built.all.map(withPartnerServiceArea_)
+      : built.publicBooks.map(withPartnerServiceArea_).map(redactBookForAudience);
+    libraryCacheWrite(cacheName, payload);
+  }
+
+  const result = paginateLibrary(payload, source);
+  if (!result.paged) return result.data;
+  return {
+    success: true,
+    data: result.data,
+    page: result.page,
+    pageSize: result.pageSize,
+    total: result.total,
+    hasMore: result.hasMore
+  };
+}
+
+// =====================================================================
+// PUSH SUBSCRIPTION STORAGE (item 13)
+// ---------------------------------------------------------------------
+// Web push registrations used to be kept in a JavaScript Map inside
+// server.ts. That Map was lost on every restart and every serverless
+// cold start, and the endpoint handed out a placeholder VAPID key that
+// no browser would ever accept — so no push notification was ever
+// delivered to anybody, and the reader who granted permission was told
+// it had worked.
+//
+// Subscriptions belong in the database like everything else, so here
+// they are: one row per device, keyed by endpoint (a reader with a phone
+// and a laptop has two, and both should ring).
+// =====================================================================
+
+const PUSH_SUBSCRIPTION_HEADERS = [
+  'id', 'userEmail', 'endpoint', 'p256dh', 'auth', 'userAgent',
+  'subscribedAt', 'lastSeenAt', 'failureCount', 'status'
+];
+// A push service answers 404 or 410 for an endpoint the browser has
+// thrown away. server.ts reports those and the row is retired, so dead
+// devices do not accumulate.
+const PUSH_MAX_FAILURES = 3;
+
+function getPushSubscriptionSheet() {
+  const sheet = getOrCreateSheet('PushSubscriptions', PUSH_SUBSCRIPTION_HEADERS);
+  ensureSheetHeaders(sheet, PUSH_SUBSCRIPTION_HEADERS);
+  return sheet;
+}
+
+/**
+ * Registers (or refreshes) one device. Keyed on the endpoint rather than
+ * the email so a reader's second device is added, not substituted.
+ */
+function savePushSubscription(data) {
+  try {
+    const email = normalizeEmail((data && (data.userEmail || data.email)) || getAuthenticatedEmail());
+    const endpoint = String((data && data.endpoint) || '').trim();
+    const keys = (data && data.keys) || {};
+    const p256dh = String(keys.p256dh || data.p256dh || '').trim();
+    const auth = String(keys.auth || data.auth || '').trim();
+
+    if (!email) return { success: false, message: 'Sign in before enabling notifications.', error: 'EMAIL_REQUIRED' };
+    if (!endpoint || !p256dh || !auth) return { success: false, message: 'Incomplete push subscription.', error: 'INVALID_SUBSCRIPTION' };
+
+    const sheet = getPushSubscriptionSheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(h => String(h).trim());
+    const endpointIdx = headers.indexOf('endpoint');
+    const now = new Date();
+
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][endpointIdx] || '').trim() !== endpoint) continue;
+      // Known device: refresh its keys and revive it. A reader who
+      // re-grants permission after a failure should start from zero.
+      const set = (name, value) => {
+        const idx = headers.indexOf(name);
+        if (idx !== -1) sheet.getRange(r + 1, idx + 1).setValue(value);
+      };
+      set('userEmail', email);
+      set('p256dh', p256dh);
+      set('auth', auth);
+      set('lastSeenAt', now);
+      set('failureCount', 0);
+      set('status', 'Active');
+      forgetPushDevices_();
+      return { success: true, message: 'Push subscription refreshed.', updated: true };
+    }
+
+    const row = new Array(headers.length).fill('');
+    headers.forEach((h, i) => {
+      if (h === 'id') row[i] = generateId('SS_PUSH_');
+      else if (h === 'userEmail') row[i] = email;
+      else if (h === 'endpoint') row[i] = endpoint;
+      else if (h === 'p256dh') row[i] = p256dh;
+      else if (h === 'auth') row[i] = auth;
+      else if (h === 'userAgent') row[i] = String((data && data.userAgent) || '').slice(0, 300);
+      else if (h === 'subscribedAt') row[i] = now;
+      else if (h === 'lastSeenAt') row[i] = now;
+      else if (h === 'failureCount') row[i] = 0;
+      else if (h === 'status') row[i] = 'Active';
+    });
+    sheet.appendRow(row);
+    forgetPushDevices_();
+    return { success: true, message: 'Push subscription saved.', created: true };
+  } catch (err) {
+    Logger.log('savePushSubscription failed: ' + err.toString());
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * Retires a device. An endpoint retires just that device; an email with
+ * no endpoint retires all of the reader's devices, which is what
+ * "turn notifications off" means.
+ */
+function deletePushSubscription(data) {
+  try {
+    const endpoint = String((data && data.endpoint) || '').trim();
+    const email = normalizeEmail((data && (data.userEmail || data.email)) || '');
+    if (!endpoint && !email) return { success: false, message: 'Nothing to unsubscribe.' };
+
+    const sheet = getPushSubscriptionSheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(h => String(h).trim());
+    const endpointIdx = headers.indexOf('endpoint');
+    const emailIdx = headers.indexOf('userEmail');
+    const statusIdx = headers.indexOf('status');
+    if (statusIdx === -1) return { success: false, message: 'Sheet not ready.' };
+
+    let retired = 0;
+    for (let r = 1; r < values.length; r++) {
+      const matchesEndpoint = endpoint && String(values[r][endpointIdx] || '').trim() === endpoint;
+      const matchesEmail = !endpoint && email && normalizeEmail(values[r][emailIdx]) === email;
+      if (!matchesEndpoint && !matchesEmail) continue;
+      if (String(values[r][statusIdx] || '') === 'Retired') continue;
+      // Marked rather than deleted: device_bash-style row deletion would
+      // renumber everything under it, and the history is worth keeping.
+      sheet.getRange(r + 1, statusIdx + 1).setValue('Retired');
+      retired++;
+    }
+    forgetPushDevices_();
+    return { success: true, retired: retired };
+  } catch (err) {
+    Logger.log('deletePushSubscription failed: ' + err.toString());
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * Every live device for a reader — or, with no email, for everyone.
+ * Called by the server that actually does the sending.
+ */
+function getPushSubscriptions(data) {
+  try {
+    const email = normalizeEmail((data && (data.userEmail || data.email)) || '');
+    const sheet = getPushSubscriptionSheet();
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: true, subscriptions: [] };
+
+    const headers = values[0].map(h => String(h).trim());
+    const out = [];
+    for (let r = 1; r < values.length; r++) {
+      const obj = rowToObject(headers, values[r]);
+      if (String(obj.status || 'Active') !== 'Active') continue;
+      if (email && normalizeEmail(obj.userEmail) !== email) continue;
+      out.push({
+        userEmail: normalizeEmail(obj.userEmail),
+        endpoint: String(obj.endpoint || ''),
+        keys: { p256dh: String(obj.p256dh || ''), auth: String(obj.auth || '') }
+      });
+    }
+    return { success: true, subscriptions: out };
+  } catch (err) {
+    Logger.log('getPushSubscriptions failed: ' + err.toString());
+    return { success: false, message: err.toString(), subscriptions: [] };
+  }
+}
+
+/**
+ * Called by the sending server when a push service rejects an endpoint.
+ * A 404 or 410 means the browser discarded the subscription and it will
+ * never work again, so it is retired at once rather than counted.
+ */
+function reportPushFailure(data) {
+  try {
+    const endpoint = String((data && data.endpoint) || '').trim();
+    if (!endpoint) return { success: false, message: 'Endpoint required.' };
+    const statusCode = Number((data && data.statusCode) || 0);
+    const gone = statusCode === 404 || statusCode === 410;
+
+    const sheet = getPushSubscriptionSheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(h => String(h).trim());
+    const endpointIdx = headers.indexOf('endpoint');
+    const failIdx = headers.indexOf('failureCount');
+    const statusIdx = headers.indexOf('status');
+
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][endpointIdx] || '').trim() !== endpoint) continue;
+      const failures = Number(values[r][failIdx] || 0) + 1;
+      if (failIdx !== -1) sheet.getRange(r + 1, failIdx + 1).setValue(failures);
+      if (statusIdx !== -1 && (gone || failures >= PUSH_MAX_FAILURES)) {
+        sheet.getRange(r + 1, statusIdx + 1).setValue('Retired');
+      }
+      if (gone || failures >= PUSH_MAX_FAILURES) forgetPushDevices_();
+      return { success: true, retired: gone || failures >= PUSH_MAX_FAILURES };
+    }
+    return { success: true, retired: false, message: 'Endpoint not found.' };
+  } catch (err) {
+    Logger.log('reportPushFailure failed: ' + err.toString());
+    return { success: false, message: err.toString() };
+  }
+}
+
+// =====================================================================
+// LIQUIDITY BY PINCODE (item 14)
+// ---------------------------------------------------------------------
+// The admin dashboard counts readers, listings and requests. None of
+// those tell you whether the product WORKS anywhere, because a
+// hyperlocal marketplace does not fail gradually and everywhere at once
+// — it works in the two neighbourhoods that are dense enough and fails
+// in the thirty that are not, and the platform-wide totals average that
+// into a number that looks fine while nobody is swapping.
+//
+// The number that matters is the one defined here:
+//
+//     liquidity = requests that reached handover within 7 days
+//                 ÷ requests old enough to have done so
+//
+// Cut by pincode, so acquisition can be aimed at the neighbourhoods that
+// are close to working rather than spread thin across the country.
+//
+// Handover state lives on the Chats sheet (chatStatus), not on the
+// request, so this joins the two on swapRequestId.
+// =====================================================================
+
+const LIQUIDITY_WINDOW_DAYS = 7;
+// A request younger than the window has not had its chance yet.
+// Including it would make every busy week look like a failing one.
+const LIQUIDITY_MATURITY_MS = LIQUIDITY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+// Below this a percentage is noise dressed up as a metric.
+const LIQUIDITY_MIN_SAMPLE = 3;
+
+function chatHandoverIndex() {
+  // swapRequestId → the moment it reached handover (or null).
+  const index = {};
+  try {
+    const sheet = getOrCreateSheet('Chats', []);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return index;
+
+    const headers = values[0].map(h => String(h).trim());
+    const swapIdx = headers.indexOf('swapRequestId');
+    const statusIdx = headers.indexOf('chatStatus');
+    const updatedIdx = findHeaderIndex(headers, ['updatedAt', 'lastMessageAt', 'createdAt']);
+    if (swapIdx === -1 || statusIdx === -1) return index;
+
+    for (let r = 1; r < values.length; r++) {
+      const swapId = String(values[r][swapIdx] || '').trim();
+      if (!swapId) continue;
+      const status = String(values[r][statusIdx] || '').trim().toLowerCase();
+      // 'Handed Over', 'Returned' and 'Completed' all mean the book
+      // physically moved. 'Active' and 'Archived' do not.
+      if (status !== 'handed over' && status !== 'returned' && status !== 'completed') continue;
+      const when = updatedIdx === -1 ? null : new Date(values[r][updatedIdx]);
+      index[swapId] = (when && !isNaN(when.getTime())) ? when : true;
+    }
+  } catch (err) {
+    Logger.log('chatHandoverIndex failed: ' + err.toString());
+  }
+  return index;
+}
+
+/**
+ * Liquidity overall and per pincode. Admin only — it is a map of where
+ * the product is and is not working, which is a strategy document.
+ */
+function getLiquidityMetrics(data) {
+  try {
+    const days = Math.min(Math.max(Number((data && data.days) || 90), 7), 730);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const now = Date.now();
+
+    const handovers = chatHandoverIndex();
+
+    const sheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) {
+      return { success: true, days: days, windowDays: LIQUIDITY_WINDOW_DAYS, overall: null, byPincode: [] };
+    }
+
+    const hdr = values[0].map(h => String(h).trim());
+    const idIdx = hdr.indexOf('id');
+    const createdIdx = hdr.indexOf('createdAt');
+    const statusIdx = hdr.indexOf('status');
+    const pinIdx = hdr.indexOf('pincode');
+    const areaIdx = hdr.indexOf('area');
+    if (idIdx === -1 || createdIdx === -1) {
+      return { success: true, days: days, windowDays: LIQUIDITY_WINDOW_DAYS, overall: null, byPincode: [] };
+    }
+
+    const buckets = {};
+    let matureTotal = 0;
+    let servedTotal = 0;
+    let expiredTotal = 0;
+    const daysToHandover = [];
+
+    for (let r = 1; r < values.length; r++) {
+      const created = new Date(values[r][createdIdx]);
+      if (isNaN(created.getTime()) || created < since) continue;
+      // Not yet had its seven days — counted nowhere, in either direction.
+      if (now - created.getTime() < LIQUIDITY_MATURITY_MS) continue;
+
+      const requestId = String(values[r][idIdx] || '');
+      const pincode = pinIdx === -1 ? '' : String(values[r][pinIdx] || '').trim();
+      const area = areaIdx === -1 ? '' : String(values[r][areaIdx] || '').trim();
+      const key = pincode || area || 'Unknown';
+      const status = statusIdx === -1 ? '' : String(values[r][statusIdx] || '').trim().toLowerCase();
+
+      if (!buckets[key]) {
+        buckets[key] = { pincode: pincode, area: area, mature: 0, served: 0, expired: 0 };
+      }
+      buckets[key].mature++;
+      matureTotal++;
+
+      const handover = handovers[requestId];
+      let servedInWindow = false;
+      if (handover) {
+        // A handover with no usable timestamp still counts — it happened,
+        // and the alternative is scoring a real swap as a failure.
+        servedInWindow = handover === true
+          || (handover.getTime() - created.getTime()) <= LIQUIDITY_MATURITY_MS;
+        if (handover !== true) {
+          daysToHandover.push((handover.getTime() - created.getTime()) / (24 * 60 * 60 * 1000));
+        }
+      }
+
+      if (servedInWindow) {
+        buckets[key].served++;
+        servedTotal++;
+      }
+      // Requests the SLA released unanswered: the clearest signal that a
+      // neighbourhood has listings but no responsive owners.
+      if (status === 'expired') {
+        buckets[key].expired++;
+        expiredTotal++;
+      }
+    }
+
+    const byPincode = Object.keys(buckets).map(key => {
+      const b = buckets[key];
+      return {
+        pincode: b.pincode || key,
+        area: b.area,
+        requests: b.mature,
+        served: b.served,
+        expired: b.expired,
+        // Withheld rather than guessed on a tiny sample.
+        liquidity: b.mature >= LIQUIDITY_MIN_SAMPLE ? Math.round((b.served / b.mature) * 1000) / 10 : null,
+        sampleTooSmall: b.mature < LIQUIDITY_MIN_SAMPLE
+      };
+    }).sort((a, b) => {
+      // Best-performing neighbourhoods first; the ones with too little
+      // data to judge sink to the bottom rather than topping the list on
+      // a single lucky swap.
+      if (a.liquidity === null && b.liquidity === null) return b.requests - a.requests;
+      if (a.liquidity === null) return 1;
+      if (b.liquidity === null) return -1;
+      if (b.liquidity !== a.liquidity) return b.liquidity - a.liquidity;
+      return b.requests - a.requests;
+    });
+
+    daysToHandover.sort((a, b) => a - b);
+    const median = daysToHandover.length
+      ? Math.round(daysToHandover[Math.floor(daysToHandover.length / 2)] * 10) / 10
+      : null;
+
+    return {
+      success: true,
+      days: days,
+      windowDays: LIQUIDITY_WINDOW_DAYS,
+      minSample: LIQUIDITY_MIN_SAMPLE,
+      overall: {
+        requests: matureTotal,
+        served: servedTotal,
+        expired: expiredTotal,
+        liquidity: matureTotal >= LIQUIDITY_MIN_SAMPLE ? Math.round((servedTotal / matureTotal) * 1000) / 10 : null,
+        medianDaysToHandover: median
+      },
+      byPincode: byPincode.slice(0, 50)
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// =====================================================================
+// AMBASSADOR SCOREBOARD (item 18)
+// ---------------------------------------------------------------------
+// The Campus Ambassador surface existed, but nothing attributed a signup
+// to an ambassador and nothing rewarded one on a schedule — so there was
+// no way to tell a working ambassador from a listed one.
+//
+// Rather than build a second attribution system, an ambassador is simply
+// a referrer with a public standing: the same code, the same
+// qualification rule (the invited reader must list a book), the same
+// Referrals sheet. What is added here is the ladder and the scoreboard.
+//
+// Campus is the right wedge for book-swapping in India — dense, cohorted,
+// shelves already sitting in hostel rooms — but only once you can see who
+// is actually bringing readers.
+// =====================================================================
+
+const AMBASSADOR_SHEET = 'Ambassadors';
+const AMBASSADOR_HEADERS = ['id', 'email', 'name', 'campus', 'city', 'status', 'joinedAt', 'lastDigestAt', 'notes'];
+
+// Each tier is reached by bringing that many readers who went on to list
+// a book. Deliberately not by signups: an ambassador who recruits fifty
+// empty accounts has grown nothing.
+const AMBASSADOR_TIERS = [
+  { name: 'Reader', minReaders: 0, reward: 'Your own membership, free while you are active.' },
+  { name: 'Shelf Builder', minReaders: 3, reward: '3 months of Chapters, and your name on the campus board.' },
+  { name: 'Circle Keeper', minReaders: 10, reward: '6 months of Chapters, plus a SwapSutra tote and stickers for your circle.' },
+  { name: 'Librarian', minReaders: 25, reward: 'A year of Chapters, a founding-ambassador badge, and a say in what we build next.' }
+];
+
+function ambassadorTierFor(readersBrought) {
+  let current = AMBASSADOR_TIERS[0];
+  for (let i = 0; i < AMBASSADOR_TIERS.length; i++) {
+    if (readersBrought >= AMBASSADOR_TIERS[i].minReaders) current = AMBASSADOR_TIERS[i];
+  }
+  const next = AMBASSADOR_TIERS.find(t => t.minReaders > readersBrought) || null;
+  return {
+    tier: current.name,
+    reward: current.reward,
+    nextTier: next ? next.name : null,
+    readersToNextTier: next ? next.minReaders - readersBrought : null
+  };
+}
+
+function getAmbassadorSheet() {
+  const sheet = getOrCreateSheet(AMBASSADOR_SHEET, AMBASSADOR_HEADERS);
+  ensureSheetHeaders(sheet, AMBASSADOR_HEADERS);
+  return sheet;
+}
+
+/**
+ * How many readers each ambassador has actually brought — counted from
+ * the Referrals sheet, so there is one source of truth for "brought a
+ * reader" across the referral card and the ambassador board.
+ */
+function referralCountsByOwner() {
+  const tally = {};
+  try {
+    const sheet = getOrCreateSheet(REFERRAL_SHEET, REFERRAL_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return tally;
+    const headers = values[0].map(h => String(h).trim());
+    const ownerIdx = headers.indexOf('ownerEmail');
+    const statusIdx = headers.indexOf('status');
+    for (let r = 1; r < values.length; r++) {
+      const status = String(values[r][statusIdx] || '').trim();
+      if (status !== 'Rewarded' && status !== 'Qualified') continue;
+      const owner = normalizeEmail(values[r][ownerIdx]);
+      if (owner) tally[owner] = (tally[owner] || 0) + 1;
+    }
+  } catch (err) {
+    Logger.log('referralCountsByOwner failed: ' + err.toString());
+  }
+  return tally;
+}
+
+/** An ambassador's own standing: code, count, tier, and what is next. */
+function getAmbassadorStanding(data) {
+  try {
+    const email = getAuthenticatedEmail() || normalizeEmail(data && data.email);
+    if (!email) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to see your ambassador standing.' };
+
+    const sheet = getAmbassadorSheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values.length ? values[0].map(h => String(h).trim()) : AMBASSADOR_HEADERS;
+    const emailIdx = headers.indexOf('email');
+
+    let row = null;
+    for (let r = 1; r < values.length; r++) {
+      if (normalizeEmail(values[r][emailIdx]) === email) { row = rowToObject(headers, values[r]); break; }
+    }
+
+    const readersBrought = referralCountsByOwner()[email] || 0;
+    const standing = ambassadorTierFor(readersBrought);
+
+    return {
+      success: true,
+      isAmbassador: Boolean(row),
+      status: row ? String(row.status || 'Active') : 'Not enrolled',
+      campus: row ? String(row.campus || '') : '',
+      code: referralCodeForEmail(email),
+      link: swapSutraSiteUrl() + '/?ref=' + referralCodeForEmail(email),
+      readersBrought: readersBrought,
+      tier: standing.tier,
+      reward: standing.reward,
+      nextTier: standing.nextTier,
+      readersToNextTier: standing.readersToNextTier,
+      tiers: AMBASSADOR_TIERS
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * The public board. First names only — a leaderboard is a motivator, not
+ * a directory, and it must not become a way to harvest addresses.
+ */
+function getAmbassadorLeaderboard(data) {
+  try {
+    const limit = Math.min(Math.max(Number((data && data.limit) || 20), 1), 100);
+    const counts = referralCountsByOwner();
+
+    const sheet = getAmbassadorSheet();
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: true, leaders: [], tiers: AMBASSADOR_TIERS };
+
+    const headers = values[0].map(h => String(h).trim());
+    const emailIdx = headers.indexOf('email');
+    const campusIdx = headers.indexOf('campus');
+    const statusIdx = headers.indexOf('status');
+
+    const leaders = [];
+    for (let r = 1; r < values.length; r++) {
+      const email = normalizeEmail(values[r][emailIdx]);
+      if (!email) continue;
+      if (String(values[r][statusIdx] || 'Active') !== 'Active') continue;
+      const brought = counts[email] || 0;
+      const standing = ambassadorTierFor(brought);
+      leaders.push({
+        name: firstNameOnly(publicReaderName('', email) || humanizeEmailLocalPart(email)),
+        campus: campusIdx === -1 ? '' : String(values[r][campusIdx] || ''),
+        readersBrought: brought,
+        tier: standing.tier
+      });
+    }
+
+    leaders.sort((a, b) => b.readersBrought - a.readersBrought);
+    return { success: true, leaders: leaders.slice(0, limit), tiers: AMBASSADOR_TIERS };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/** Enrolment. Idempotent — a second application updates rather than duplicates. */
+function enrollAmbassador(data) {
+  try {
+    const email = getAuthenticatedEmail() || normalizeEmail(data && data.email);
+    if (!email) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to apply.' };
+    const campus = String((data && data.campus) || '').trim().slice(0, 120);
+    if (!campus) return { success: false, message: 'Tell us which campus or neighbourhood you would represent.' };
+
+    const sheet = getAmbassadorSheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(h => String(h).trim());
+    const emailIdx = headers.indexOf('email');
+
+    for (let r = 1; r < values.length; r++) {
+      if (normalizeEmail(values[r][emailIdx]) !== email) continue;
+      const campusIdx = headers.indexOf('campus');
+      if (campusIdx !== -1) sheet.getRange(r + 1, campusIdx + 1).setValue(campus);
+      return { success: true, updated: true, message: 'Your ambassador details are updated.' };
+    }
+
+    const row = new Array(headers.length).fill('');
+    headers.forEach((h, i) => {
+      if (h === 'id') row[i] = generateId('SS_AMB_');
+      else if (h === 'email') row[i] = email;
+      else if (h === 'name') row[i] = firstNameOnly(publicReaderName('', email) || humanizeEmailLocalPart(email));
+      else if (h === 'campus') row[i] = campus;
+      else if (h === 'city') row[i] = String((data && data.city) || '').trim().slice(0, 80);
+      else if (h === 'status') row[i] = 'Active';
+      else if (h === 'joinedAt') row[i] = new Date();
+    });
+    sheet.appendRow(row);
+
+    return {
+      success: true,
+      created: true,
+      code: referralCodeForEmail(email),
+      link: swapSutraSiteUrl() + '/?ref=' + referralCodeForEmail(email),
+      message: 'You are a SwapSutra ambassador. Share your link — every reader who joins and lists a book counts.'
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// =====================================================================
+// THE SUNDAY SHELF (item 19)
+// ---------------------------------------------------------------------
+// Reading circles, the Café and events all exist as places a reader can
+// go. None of them is a reason to come back on a particular day.
+//
+// Habit beats features for retention, and the cheapest habit to install
+// on top of what is already built is an appointment: one letter, every
+// Sunday, about the reader's own neighbourhood. Books that appeared
+// nearby, readers who joined, what the Café talked about.
+//
+// Sent only to readers who have something to be told about — an empty
+// digest is worse than no digest, because it teaches people to ignore
+// the next one.
+// =====================================================================
+
+const DIGEST_HEADERS = ['lastDigestAt'];
+// Below this the letter is not worth sending: it would say "nothing
+// happened near you", which is true and useless.
+const DIGEST_MIN_NEW_BOOKS = 1;
+
+function runWeeklyShelfDigest() {
+  const started = Date.now();
+  const summary = { sent: 0, skippedEmpty: 0, scanned: 0, errors: 0 };
+  try {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    // One pass over Books, bucketed by pincode — rather than a scan per
+    // reader, which is how a weekly job turns into a six-minute timeout.
+    const booksByPincode = {};
+    const bookSheet = getOrCreateSheet('Books', getBookHeaders());
+    const bookValues = bookSheet.getDataRange().getValues();
+    if (bookValues.length > 1) {
+      const bh = bookValues[0].map(h => String(h).trim());
+      const pinIdx = bh.indexOf('pincode');
+      const titleIdx = bh.indexOf('title');
+      const authorIdx = bh.indexOf('author');
+      const statusIdx = bh.indexOf('status');
+      const listedIdx = bh.indexOf('listedAt');
+      const ownerIdx = bh.indexOf('ownerEmail');
+      for (let r = 1; r < bookValues.length; r++) {
+        const status = String(bookValues[r][statusIdx] || '').trim().toLowerCase();
+        if (status !== 'approved' && status !== 'live') continue;
+        const listed = new Date(bookValues[r][listedIdx]);
+        if (isNaN(listed.getTime()) || listed < since) continue;
+        const pin = String(bookValues[r][pinIdx] || '').trim();
+        if (!pin) continue;
+        if (!booksByPincode[pin]) booksByPincode[pin] = [];
+        booksByPincode[pin].push({
+          title: String(bookValues[r][titleIdx] || 'A book'),
+          author: String(bookValues[r][authorIdx] || ''),
+          owner: normalizeEmail(bookValues[r][ownerIdx])
+        });
+      }
+    }
+
+    const userSheet = getOrCreateSheet('Users', DB_SCHEMA.Users);
+    const userValues = userSheet.getDataRange().getValues();
+    if (userValues.length <= 1) return summary;
+    const uh = userValues[0].map(h => String(h).trim());
+    const emailIdx = uh.indexOf('email');
+    const pinIdx = uh.indexOf('pincode');
+    const nameIdx = uh.indexOf('name');
+
+    for (let r = 1; r < userValues.length; r++) {
+      // Apps Script stops an execution at six minutes. Finishing the rest
+      // next Sunday beats being killed halfway through this one.
+      if (Date.now() - started > 4 * 60 * 1000) break;
+
+      const email = normalizeEmail(userValues[r][emailIdx]);
+      if (!email || isTestQAEmail(email)) continue;
+      // Only readers whose membership is live — a digest is a member
+      // benefit, and mailing lapsed readers is what gets a domain marked
+      // as spam.
+      if (!isApprovedActiveMember(email)) continue;
+
+      summary.scanned++;
+      const pin = pinIdx === -1 ? '' : String(userValues[r][pinIdx] || '').trim();
+      const nearby = (pin && booksByPincode[pin] ? booksByPincode[pin] : []).filter(b => b.owner !== email);
+
+      if (nearby.length < DIGEST_MIN_NEW_BOOKS) { summary.skippedEmpty++; continue; }
+
+      try {
+        const name = firstNameOnly(nameIdx === -1 ? '' : String(userValues[r][nameIdx] || ''))
+          || firstNameOnly(humanizeEmailLocalPart(email)) || 'Reader';
+        const shown = nearby.slice(0, 6);
+        const list = shown.map(b =>
+          '<div class="benefit-item"><strong>' + escapeHtml(b.title) + '</strong>'
+          + (b.author ? ' &middot; ' + escapeHtml(b.author) : '') + '</div>'
+        ).join('');
+        const more = nearby.length > shown.length
+          ? '<p style="font-size:14px;color:#8C7861;">…and ' + (nearby.length - shown.length) + ' more within reach.</p>'
+          : '';
+
+        sendSwapSutraEmail({
+          to: email,
+          subject: nearby.length === 1
+            ? 'A book appeared near you this week'
+            : nearby.length + ' books appeared near you this week',
+          htmlBody: getBrandedEmailTemplate(
+            'This week on your shelf',
+            '<p>Hello ' + escapeHtml(name) + ',</p>'
+            + '<p>Readers near you added these to the Library this week:</p>'
+            + list + more
+            + '<p>If one of them has been on your list, this is the week to ask.</p>',
+            swapSutraSiteUrl() + '/browse',
+            'Open the Library'
+          )
+        });
+        summary.sent++;
+      } catch (rowErr) {
+        summary.errors++;
+        Logger.log('Weekly digest failed for ' + email + ': ' + rowErr.toString());
+      }
+    }
+  } catch (err) {
+    summary.errors++;
+    Logger.log('runWeeklyShelfDigest failed: ' + err.toString());
+  }
+  Logger.log('runWeeklyShelfDigest: ' + JSON.stringify(summary));
+  return summary;
+}
+
+// =====================================================================
+// CIRCULATION LEDGER — where the book actually is
+// ---------------------------------------------------------------------
+// The existing SwapProofs system photographs a book at four moments:
+// before the owner hands it over, when the requester receives it, before
+// it is returned, and when it comes back. That is proof of CONDITION.
+//
+// What was missing is proof of JOURNEY. Nobody could answer "how was it
+// sent", "where is it now", "is it late", or "who was holding it when it
+// went wrong" — which is also why disputes had nothing to point at.
+//
+// WHAT THIS CAN AND CANNOT DO
+// ---------------------------
+// SwapSutra has no courier integration and none planned, so it cannot
+// fetch a parcel's live location. Nothing here pretends otherwise. What
+// it does instead:
+//
+//   1. Records the route — how the book is travelling and between which
+//      two places — before it moves at all.
+//   2. Keeps an append-only ledger of events, each with an actor, a
+//      timestamp and optional photo. The trail is evidence, so entries
+//      are never edited or deleted, only added to.
+//   3. Holds the courier's own AWB and builds a link to THEIR tracking
+//      page. No integration, no API key — the reader clicks through to
+//      the company already carrying the parcel.
+//   4. Notices silence. A leg that has not moved by its expected date
+//      raises a nudge and then an escalation, the same way an unanswered
+//      swap request does.
+//   5. Decides the security deposit from the ledger rather than from
+//      memory or argument.
+//
+// ADDRESS PRIVACY
+// ---------------
+// This product's standing promise is that a reader's address is never
+// visible — book cards, profiles and the directory all strip it. Delivery
+// needs one, so addresses live in their own sheet and are released to
+// exactly one other person, only while an accepted swap is in flight,
+// and never to the Library, a profile or a search. getDeliveryAddress
+// enforces that; there is no other route to the data.
+// =====================================================================
+
+const ADDRESS_SHEET = 'DeliveryAddresses';
+const ADDRESS_HEADERS = [
+  'id', 'email', 'label', 'line1', 'line2', 'landmark',
+  'area', 'city', 'state', 'pincode', 'phone', 'createdAt', 'updatedAt'
+];
+
+const JOURNEY_SHEET = 'SwapJourney';
+const JOURNEY_HEADERS = [
+  'id', 'swapId', 'leg', 'event', 'actorEmail', 'method',
+  'courierName', 'awb', 'note', 'mediaUrl', 'expectedBy', 'createdAt',
+  // Oct 2026: a pinned meeting point (route_set, in person).
+  'lat', 'lng'
+];
+
+// The directions a book travels.
+//   outbound — the owner's book going to the requester (every exchange)
+//   counter  — the requester's own book going to the owner (a SWAP: two
+//              books cross at once, so both are tracked) — added Oct 2026
+//   return   — the owner's book coming back (a rental or a lend)
+const JOURNEY_LEGS = { outbound: true, counter: true, return: true, counter_return: true };
+
+/** Who sends and who receives on each leg. */
+function journeyLegParties_(swap, leg) {
+  if (leg === 'outbound') return { sender: swap.ownerEmail, receiver: swap.requesterEmail };
+  // counter_return: in a temporary swap the owner sends the requester's book back.
+  if (leg === 'counter_return') return { sender: swap.ownerEmail, receiver: swap.requesterEmail };
+  return { sender: swap.requesterEmail, receiver: swap.ownerEmail }; // counter and return
+}
+
+/** A real point on Earth, or null. Rounded to ~1 m. */
+function cleanLatLng_(lat, lng) {
+  const a = Number(lat), b = Number(lng);
+  if (!isFinite(a) || !isFinite(b) || Math.abs(a) > 90 || Math.abs(b) > 180) return null;
+  if (a === 0 && b === 0) return null;
+  return { lat: Math.round(a * 1e5) / 1e5, lng: Math.round(b * 1e5) / 1e5 };
+}
+
+/** The route currently agreed for an exchange (the latest route_set), or null. */
+function latestSwapRoute_(swapId) {
+  const values = getJourneySheet().getDataRange().getValues();
+  if (values.length <= 1) return null;
+  const headers = values[0].map(h => String(h).trim());
+  let best = null;
+  for (let r = 1; r < values.length; r++) {
+    const o = rowToObject(headers, values[r]);
+    if (String(o.swapId) !== String(swapId) || o.event !== 'route_set') continue;
+    if (!best || new Date(o.createdAt) >= new Date(best.createdAt)) best = o;
+  }
+  return best;
+}
+
+// The ledger's vocabulary. An allowlist, because a timeline whose events
+// are free text is a timeline nothing can reason about — the SLA job and
+// the deposit rule both read these names.
+const JOURNEY_EVENTS = {
+  route_set: 'Route agreed',
+  packed: 'Packed and ready',
+  handed_over: 'Handed over in person',
+  dispatched: 'Posted',
+  in_transit: 'Update from the sender',
+  out_for_delivery: 'Out for delivery',
+  delivered: 'Delivered',
+  received: 'Confirmed received',
+  delayed: 'Running late',
+  issue_raised: 'Problem reported'
+};
+
+// Events only the person currently holding the book can honestly report,
+// and events only the person waiting for it can. Recording who may say
+// what is what stops the ledger becoming one party's account of events.
+const SENDER_EVENTS = { packed: true, handed_over: true, dispatched: true, in_transit: true, out_for_delivery: true, delayed: true };
+const RECEIVER_EVENTS = { delivered: true, received: true, delayed: true, issue_raised: true };
+
+// Courier tracking, without a courier integration: the reader gives us
+// the AWB their courier already issued, and we build the link to that
+// company's own page. {awb} is substituted; a courier with no usable
+// template still records the number, and the reader is pointed at the
+// courier's tracking page to paste it.
+const COURIERS = {
+  'India Post': 'https://www.indiapost.gov.in/_layouts/15/DOP.Portal.Tracking/TrackConsignment.aspx',
+  'Delhivery': 'https://www.delhivery.com/track/package/{awb}',
+  'DTDC': 'https://www.dtdc.in/tracking.asp',
+  'Blue Dart': 'https://www.bluedart.com/web/guest/trackdartresult?trackFor=0&trackNo={awb}',
+  'XpressBees': 'https://www.xpressbees.com/shipment/tracking?awb={awb}',
+  'Ekart': 'https://ekartlogistics.com/shipmenttrack/{awb}',
+  'Shadowfax': 'https://tracker.shadowfax.in/#/consignments/{awb}',
+  'Professional Couriers': 'https://www.tpcindia.com/Tracking2014.aspx',
+  'Other': ''
+};
+
+function courierTrackingUrl(courierName, awb) {
+  const template = COURIERS[String(courierName || '').trim()];
+  if (!template) return '';
+  return template.indexOf('{awb}') === -1
+    ? template
+    : template.replace('{awb}', encodeURIComponent(String(awb || '').trim()));
+}
+
+function getAddressSheet() {
+  const sheet = getOrCreateSheet(ADDRESS_SHEET, ADDRESS_HEADERS);
+  ensureSheetHeaders(sheet, ADDRESS_HEADERS);
+  return sheet;
+}
+
+function getJourneySheet() {
+  const sheet = getOrCreateSheet(JOURNEY_SHEET, JOURNEY_HEADERS);
+  ensureSheetHeaders(sheet, JOURNEY_HEADERS);
+  return sheet;
+}
+
+/**
+ * The swap, plus who is on each side of it. Every function here goes
+ * through this: nothing in the ledger is readable or writable by anyone
+ * who is not a party to the exchange (or the admin).
+ */
+function loadSwapForCirculation(swapId) {
+  const sheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return null;
+  const headers = values[0].map(h => String(h).trim());
+  const idIdx = headers.indexOf('id');
+  for (let r = 1; r < values.length; r++) {
+    if (String(values[r][idIdx]) !== String(swapId)) continue;
+    const parties = resolveSwapRequestParties(headers, values[r]);
+    return {
+      rowIndex: r,
+      headers: headers,
+      row: values[r],
+      obj: rowToObject(headers, values[r]),
+      requesterEmail: normalizeEmail(parties.requesterEmail),
+      ownerEmail: normalizeEmail(parties.ownerEmail),
+      sheet: sheet
+    };
+  }
+  return null;
+}
+
+function callerIsPartyTo(swap, email) {
+  const caller = normalizeEmail(email);
+  if (!caller) return false;
+  if (isAuthenticatedAdmin()) return true;
+  return caller === swap.requesterEmail || caller === swap.ownerEmail;
+}
+
+// ---------------------------------------------------------------------
+// ADDRESSES
+// ---------------------------------------------------------------------
+
+/** A reader's own delivery address. One per reader; saving replaces it. */
+function saveDeliveryAddress(data) {
+  try {
+    const email = getAuthenticatedEmail() || normalizeEmail(data && data.email);
+    if (!email) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to save a delivery address.' };
+
+    const clean = (v, max) => String((data && v) || '').trim().slice(0, max || 120);
+    const line1 = clean(data.line1, 160);
+    const pincode = clean(data.pincode, 10);
+    const phone = normalizePhoneLast10(clean(data.phone, 20));
+
+    if (!line1) return { success: false, message: 'A street address is needed so a book can reach you.' };
+    if (!/^\d{6}$/.test(pincode)) return { success: false, message: 'Please enter a valid 6-digit pincode.' };
+    if (phone.length !== 10) return { success: false, message: 'Please enter a valid 10-digit phone number — the courier will need it.' };
+
+    const sheet = getAddressSheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(h => String(h).trim());
+    const emailIdx = headers.indexOf('email');
+    const now = new Date();
+
+    const fields = {
+      email: email,
+      label: clean(data.label, 40) || 'Home',
+      line1: line1,
+      line2: clean(data.line2, 160),
+      landmark: clean(data.landmark, 120),
+      area: clean(data.area, 120),
+      city: clean(data.city, 80),
+      state: clean(data.state, 80),
+      pincode: pincode,
+      phone: phone,
+      updatedAt: now
+    };
+
+    for (let r = 1; r < values.length; r++) {
+      if (normalizeEmail(values[r][emailIdx]) !== email) continue;
+      Object.keys(fields).forEach(key => {
+        const idx = headers.indexOf(key);
+        if (idx !== -1) sheet.getRange(r + 1, idx + 1).setValue(fields[key]);
+      });
+      return { success: true, updated: true, message: 'Delivery address saved.' };
+    }
+
+    const row = new Array(headers.length).fill('');
+    headers.forEach((h, i) => {
+      if (h === 'id') row[i] = generateId('SS_ADDR_');
+      else if (h === 'createdAt') row[i] = now;
+      else if (fields[h] !== undefined) row[i] = fields[h];
+    });
+    sheet.appendRow(row);
+    return { success: true, created: true, message: 'Delivery address saved.' };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/** Raw address lookup. Internal — callers must authorize first. */
+function readDeliveryAddress(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  const sheet = getAddressSheet();
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return null;
+  const headers = values[0].map(h => String(h).trim());
+  const emailIdx = headers.indexOf('email');
+  for (let r = 1; r < values.length; r++) {
+    if (normalizeEmail(values[r][emailIdx]) !== normalized) continue;
+    const obj = rowToObject(headers, values[r]);
+    delete obj.email; // the address is the payload; the address book key is not
+    delete obj.id;
+    return obj;
+  }
+  return null;
+}
+
+/**
+ * The counterparty's address for one swap — the ONLY way it is ever
+ * released. Three conditions, all required: the caller is a party to
+ * this swap, the swap has actually been accepted, and it has not yet
+ * closed. A pending request reveals nothing, and a finished one stops
+ * revealing.
+ */
+function getDeliveryAddress(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to view delivery details.' };
+
+    const swapId = String((data && data.swapId) || '').trim();
+    // A reader asking for their own saved address needs no swap.
+    if (!swapId) return { success: true, own: readDeliveryAddress(caller) };
+
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, caller)) {
+      return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    }
+
+    const status = String(swap.obj.status || '').trim().toLowerCase();
+    if (status === 'pending') {
+      return { success: false, error: 'NOT_ACCEPTED', message: 'Addresses are exchanged once the owner accepts the request.' };
+    }
+    if (status === 'completed' || status === 'cancelled' || status === 'expired') {
+      return { success: false, error: 'CLOSED', message: 'This exchange is closed, so the delivery details are no longer shown.' };
+    }
+
+    // Same master state machine gate as sendChatMessage/uploadSwapProof/
+    // setSwapRoute/logJourneyEvent: the counterparty's home address is
+    // exactly what lets two readers complete a physical handover, so it
+    // is released no earlier than chat itself unlocks. Admin exempt.
+    if (!isAuthenticatedAdmin() && !swapChatUnlocked(swapId)) {
+      return {
+        success: false,
+        error: 'SECURITY_FEE_PENDING',
+        message: 'The other reader\'s address is shared once SwapSutra has approved every required security-fee payment on this exchange.',
+        own: readDeliveryAddress(caller)
+      };
+    }
+
+    // Oct 2026: addresses and phone numbers are for posting a book. Readers
+    // meeting in person never need each other's home address, so it is
+    // released only once the agreed route is courier.
+    const route = latestSwapRoute_(swapId);
+    if (!isAuthenticatedAdmin() && (!route || route.method !== 'courier')) {
+      return {
+        success: false,
+        error: 'ROUTE_NOT_COURIER',
+        message: 'Addresses and phone numbers are shared only when you choose courier.',
+        own: readDeliveryAddress(caller)
+      };
+    }
+
+    const other = caller === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail;
+    const address = readDeliveryAddress(other);
+    if (!address) {
+      return {
+        success: true,
+        counterparty: null,
+        message: 'The other reader has not added a delivery address yet.'
+      };
+    }
+    return {
+      success: true,
+      counterparty: address,
+      counterpartyName: firstNameOnly(publicReaderName('', other) || humanizeEmailLocalPart(other)),
+      own: readDeliveryAddress(caller)
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// ---------------------------------------------------------------------
+// THE LEDGER
+// ---------------------------------------------------------------------
+
+/**
+ * Records the route before the book moves: in person at an agreed place,
+ * or posted. Written as the first ledger event so the timeline starts
+ * with how the journey was meant to go.
+ */
+function setSwapRoute(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    const swapId = String((data && data.swapId) || '').trim();
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+
+    // Same master state machine gate as sendChatMessage/uploadSwapProof:
+    // agreeing how the book will physically travel is exactly the
+    // coordination the security-fee gate exists to hold back, so this
+    // ledger cannot be a side door around it. Admin exempt for support.
+    if (!isAuthenticatedAdmin() && !swapChatUnlocked(swapId)) {
+      return {
+        success: false,
+        error: 'SECURITY_FEE_PENDING',
+        message: 'The delivery route can be agreed once SwapSutra has approved every required security-fee payment on this exchange.'
+      };
+    }
+
+    const method = String((data && data.method) || '').trim();
+    if (method !== 'in_person' && method !== 'courier') {
+      return { success: false, message: 'Choose whether you are meeting in person or posting the book.' };
+    }
+
+    // Oct 2026: one route for the whole exchange — in a swap both books
+    // cross at the same meeting, or both are posted — so it is always
+    // recorded on the outbound leg. Either reader may set it (they agree
+    // in the chat), and setting it again replaces it.
+    // Exchange Room (Oct 2026): the way back is agreed separately (phase
+    // 'back'), recorded on the return leg.
+    const leg = String((data && data.phase) || '') === 'back' ? 'return' : 'outbound';
+    const pin = method === 'in_person' ? cleanLatLng_(data && data.meetingLat, data && data.meetingLng) : null;
+    const place = String((data && data.meetingPoint) || '').trim().slice(0, 200);
+
+    if (method === 'in_person' && !place && !pin) {
+      return { success: false, message: 'Pin the meeting point on the map, or name a public place — a café, a metro station, a campus gate.' };
+    }
+    const note = method === 'in_person'
+      ? 'Meeting at: ' + (place || 'the pinned location')
+      : 'By courier — addresses and phone numbers are now shared with each other';
+
+    const result = appendJourneyEvent({
+      swapId: swapId,
+      leg: leg,
+      event: 'route_set',
+      actorEmail: caller,
+      method: method,
+      note: note,
+      lat: pin ? pin.lat : '',
+      lng: pin ? pin.lng : '',
+      expectedBy: data && data.expectedBy
+    }, swap);
+    if (result && result.success !== false) {
+      postRouteNoticeToChat_(swap, method, place, pin, leg === 'return');
+    }
+    return result;
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * Appends one event. Append-only by design: the ledger is evidence, and
+ * evidence that can be edited afterwards is not evidence.
+ */
+function logJourneyEvent(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    const swapId = String((data && data.swapId) || '').trim();
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+
+    // Same master state machine gate as sendChatMessage/uploadSwapProof:
+    // packed/handed-over/dispatched/delivered/received events ARE the
+    // physical exchange happening — this ledger cannot be a side door
+    // around the security-fee gate. Admin exempt for support.
+    if (!isAuthenticatedAdmin() && !swapChatUnlocked(swapId)) {
+      return {
+        success: false,
+        error: 'SECURITY_FEE_PENDING',
+        message: 'Delivery updates unlock once SwapSutra has approved every required security-fee payment on this exchange.'
+      };
+    }
+
+    const event = String((data && data.event) || '').trim();
+    if (!JOURNEY_EVENTS[event]) return { success: false, message: 'Unknown delivery update.' };
+
+    const leg = JOURNEY_LEGS[String((data && data.leg) || 'outbound')] ? String(data.leg || 'outbound') : 'outbound';
+    const legServiceType = String(swap.obj.serviceType || 'SWAP').toUpperCase();
+    if ((leg === 'counter' || leg === 'counter_return') && legServiceType !== 'SWAP') {
+      return { success: false, message: 'Only a swap has a second book travelling the other way.' };
+    }
+    // Nothing moves before the two readers have agreed how (Oct 2026 route).
+    if (event !== 'route_set' && event !== 'issue_raised' && !latestSwapRoute_(swapId)) {
+      return { success: false, error: 'ROUTE_NOT_SET', message: 'First agree how the books will travel — meet in person or courier.' };
+    }
+
+    // Who is sending and who is waiting depends on the leg: on the way
+    // out the owner sends; the requester sends their own book in a swap
+    // (counter) and sends the borrowed book back (return).
+    const legParties = journeyLegParties_(swap, leg);
+    const senderEmail = legParties.sender;
+    const receiverEmail = legParties.receiver;
+
+    if (!isAuthenticatedAdmin()) {
+      if (SENDER_EVENTS[event] && caller !== senderEmail) {
+        return { success: false, error: 'WRONG_PARTY', message: 'Only the reader sending the book can post that update.' };
+      }
+      if (RECEIVER_EVENTS[event] && !SENDER_EVENTS[event] && caller !== receiverEmail) {
+        return { success: false, error: 'WRONG_PARTY', message: 'Only the reader waiting for the book can confirm that.' };
+      }
+      // VMS (Oct 2026): no book leaves without its quality (and packing)
+      // video, and none is confirmed received without its unboxing video.
+      const vmsRoute = latestSwapRoute_(swapId);
+      const vmsMethod = vmsRoute ? vmsRoute.method : 'courier';
+      if ((event === 'dispatched' || event === 'handed_over') && caller === senderEmail) {
+        // Posting comes before the handover video (it records the parcel
+        // going to the courier), so posting needs condition + packaging.
+        const missing = vmsMissing_(swap, leg, 'sender', vmsMethod).filter(k => event !== 'dispatched' || k !== 'HANDOVER');
+        if (missing.length) {
+          return { success: false, error: 'VIDEO_REQUIRED', missing: missing,
+            message: 'Record the ' + missing.map(k => VMS_KIND_LABELS[k]).join(' and the ') + ' first. They protect you if anything is disputed.' };
+        }
+      }
+      if (event === 'received' && caller === receiverEmail) {
+        const missingR = vmsMissing_(swap, leg, 'receiver', vmsMethod);
+        if (missingR.length) {
+          return { success: false, error: 'VIDEO_REQUIRED', missing: missingR,
+            message: 'Record the receiving / unboxing video before confirming — start recording before you open the parcel.' };
+        }
+      }
+    }
+
+    return appendJourneyEvent({
+      swapId: swapId,
+      leg: leg,
+      event: event,
+      actorEmail: caller,
+      method: data && data.method,
+      courierName: data && data.courierName,
+      awb: data && data.awb,
+      note: data && data.note,
+      mediaUrl: data && data.mediaUrl,
+      expectedBy: data && data.expectedBy
+    }, swap);
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/** The write itself, plus the notification the other party needs. */
+function appendJourneyEvent(entry, swap) {
+  const sheet = getJourneySheet();
+  const headers = ensureSheetHeaders(sheet, JOURNEY_HEADERS);
+  const now = new Date();
+  const id = generateId('SS_JRN_');
+
+  const courierName = String(entry.courierName || '').trim().slice(0, 60);
+  const awb = String(entry.awb || '').trim().slice(0, 60).toUpperCase();
+
+  // Posting a parcel without its tracking number is the one thing that
+  // makes the rest of this useless, so it is required rather than asked for.
+  if (entry.event === 'dispatched' && String(entry.method || '') === 'courier' && !awb) {
+    return { success: false, message: 'Add the courier and the tracking number so the other reader can follow the parcel.' };
+  }
+
+  const row = new Array(headers.length).fill('');
+  headers.forEach((h, i) => {
+    if (h === 'id') row[i] = id;
+    else if (h === 'swapId') row[i] = entry.swapId;
+    else if (h === 'leg') row[i] = entry.leg;
+    else if (h === 'event') row[i] = entry.event;
+    else if (h === 'actorEmail') row[i] = normalizeEmail(entry.actorEmail);
+    else if (h === 'method') row[i] = String(entry.method || '');
+    else if (h === 'courierName') row[i] = courierName;
+    else if (h === 'awb') row[i] = awb;
+    else if (h === 'note') row[i] = String(entry.note || '').slice(0, 400);
+    else if (h === 'mediaUrl') row[i] = String(entry.mediaUrl || '');
+    else if (h === 'expectedBy') row[i] = entry.expectedBy ? new Date(entry.expectedBy) : '';
+    else if (h === 'createdAt') row[i] = now;
+    else if (h === 'lat') row[i] = entry.lat === undefined ? '' : entry.lat;
+    else if (h === 'lng') row[i] = entry.lng === undefined ? '' : entry.lng;
+  });
+  sheet.appendRow(row);
+
+  // Tell the other party. A delivery update that only one person can see
+  // is the situation this whole ledger exists to end.
+  try {
+    const actor = normalizeEmail(entry.actorEmail);
+    const other = actor === swap.ownerEmail ? swap.requesterEmail : swap.ownerEmail;
+    const bookTitle = String(swap.obj.requestedBookTitle || 'the book');
+    const actorName = firstNameOnly(publicReaderName('', actor) || humanizeEmailLocalPart(actor));
+    if (other) {
+      createNotification(
+        other,
+        'circulation_update',
+        JOURNEY_EVENTS[entry.event] || 'Delivery update',
+        actorName + ' posted an update on "' + bookTitle + '": ' + (JOURNEY_EVENTS[entry.event] || entry.event)
+          + (awb ? ' (' + courierName + ' ' + awb + ')' : ''),
+        entry.swapId,
+        { link: '/profile', dedupeKey: 'jrn_' + id }
+      );
+    }
+  } catch (notifyErr) {
+    Logger.log('Journey notification failed: ' + notifyErr.toString());
+  }
+
+  return { success: true, id: id, event: entry.event, message: 'Update recorded.' };
+}
+
+/**
+ * The timeline, as both parties see it — plus where the book is believed
+ * to be, the courier link if there is one, and what that means for the
+ * deposit.
+ */
+function getSwapJourney(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    const swapId = String((data && data.swapId) || '').trim();
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+
+    const sheet = getJourneySheet();
+    const values = sheet.getDataRange().getValues();
+    const headers = values.length ? values[0].map(h => String(h).trim()) : JOURNEY_HEADERS;
+    const swapIdx = headers.indexOf('swapId');
+
+    const events = [];
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][swapIdx]) !== swapId) continue;
+      const obj = rowToObject(headers, values[r]);
+      events.push({
+        id: obj.id,
+        leg: obj.leg,
+        event: obj.event,
+        label: JOURNEY_EVENTS[obj.event] || obj.event,
+        actorName: firstNameOnly(publicReaderName('', obj.actorEmail) || humanizeEmailLocalPart(obj.actorEmail)),
+        isYou: normalizeEmail(obj.actorEmail) === caller,
+        method: obj.method,
+        courierName: obj.courierName,
+        awb: obj.awb,
+        trackingUrl: obj.awb ? courierTrackingUrl(obj.courierName, obj.awb) : '',
+        note: obj.note,
+        mediaUrl: obj.mediaUrl,
+        expectedBy: obj.expectedBy || '',
+        lat: obj.lat === '' || obj.lat === undefined ? null : Number(obj.lat),
+        lng: obj.lng === '' || obj.lng === undefined ? null : Number(obj.lng),
+        at: obj.createdAt
+      });
+    }
+
+    events.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+    const serviceType = String(swap.obj.serviceType || 'SWAP').toUpperCase();
+    // A temporary swap comes back too (both books) — same rule as the stage machine.
+    const needsReturn = swapNeedsReturn(swap);
+    const twoWay = serviceType === 'SWAP';
+    let route = null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].event === 'route_set') { route = events[i]; break; }
+    }
+
+    return {
+      success: true,
+      swapId: swapId,
+      serviceType: serviceType,
+      needsReturn: needsReturn,
+      twoWay: twoWay,
+      legs: ['outbound'].concat(twoWay ? ['counter'] : []).concat(needsReturn ? ['return'] : [])
+        .concat(twoWay && needsReturn ? ['counter_return'] : []),
+      returnDeadline: needsReturn ? returnStateForSwap_(swap) : null,
+      route: route ? {
+        method: route.method, note: route.note, lat: route.lat, lng: route.lng,
+        setBy: route.isYou ? 'you' : route.actorName, at: route.at
+      } : null,
+      events: events,
+      status: summariseJourney(events, needsReturn, twoWay),
+      deposit: depositStateFromJourney(swap, events, needsReturn),
+      couriers: Object.keys(COURIERS)
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/** Where the book is, in one line, derived from the last event on each leg. */
+function summariseJourney(events, needsReturn, twoWay) {
+  const lastOf = (leg) => {
+    for (let i = events.length - 1; i >= 0; i--) if (events[i].leg === leg) return events[i];
+    return null;
+  };
+  const outbound = lastOf('outbound');
+  const back = lastOf('return');
+  // A swap (Oct 2026): two books cross, and it is done when both readers
+  // have confirmed receiving the other's book.
+  if (twoWay && outbound) {
+    const counter = lastOf('counter');
+    const gotOwners = events.some(e => e.leg === 'outbound' && e.event === 'received');
+    const gotRequesters = events.some(e => e.leg === 'counter' && e.event === 'received');
+    if (gotOwners && gotRequesters) {
+      if (!needsReturn) return { stage: 'closed', label: 'Both books received — swap complete', holder: 'both' };
+      // A temporary swap: both books now have to come back.
+      const backOwners = events.some(e => e.leg === 'return' && e.event === 'received');
+      const backRequesters = events.some(e => e.leg === 'counter_return' && e.event === 'received');
+      if (backOwners && backRequesters) return { stage: 'closed', label: 'Both books returned — swap complete', holder: 'both' };
+      if (events.some(e => e.leg === 'return' || e.leg === 'counter_return')) {
+        return { stage: 'returning', label: 'Books on their way back', holder: 'in_transit' };
+      }
+      return { stage: 'with_reader', label: 'Both readers have the books — return due', holder: 'both' };
+    }
+    if (gotOwners || gotRequesters) return { stage: 'in_transit', label: 'One book received, waiting for the other', holder: 'in_transit' };
+    if (outbound.event === 'route_set' && !counter) {
+      return { stage: 'preparing', label: 'Route agreed — ' + (outbound.method === 'courier' ? 'both books to be posted' : 'meeting in person'), holder: 'both' };
+    }
+    return { stage: 'in_transit', label: 'Books on their way', holder: 'in_transit' };
+  }
+
+  if (!outbound) return { stage: 'not_started', label: 'Route not agreed yet', holder: 'owner' };
+  if (back && (back.event === 'received')) return { stage: 'closed', label: 'Returned and confirmed', holder: 'owner' };
+  if (back) return { stage: 'returning', label: 'On its way back — ' + back.label, holder: 'in_transit' };
+  if (outbound.event === 'received') {
+    return needsReturn
+      ? { stage: 'with_reader', label: 'With the borrower', holder: 'requester' }
+      : { stage: 'closed', label: 'Delivered and confirmed', holder: 'requester' };
+  }
+  if (outbound.event === 'route_set') return { stage: 'preparing', label: 'Route agreed — ' + (outbound.method === 'courier' ? 'to be posted' : 'meeting in person'), holder: 'owner' };
+  return { stage: 'in_transit', label: outbound.label, holder: 'in_transit' };
+}
+
+/**
+ * What the ledger says should happen to the security deposit. Advisory —
+ * the money is still moved by a person — but it replaces "whose story do
+ * I believe" with "here is what was recorded, and when".
+ */
+function depositStateFromJourney(swap, events, needsReturn) {
+  const result = depositStateFromJourneyCore_(swap, events, needsReturn);
+  // The borrower is shown whether this figure came from an unverified price.
+  result.estimated = result.amount > 0 && swapDepositEstimated_(swap.obj, 'requester');
+  return result;
+}
+
+function depositStateFromJourneyCore_(swap, events, needsReturn) {
+  const amount = Number(swap.obj.securityDeposit || 0);
+  if (!amount) return { amount: 0, state: 'none', reason: 'No deposit was taken on this exchange.' };
+
+  const has = (leg, event) => events.some(e => e.leg === leg && e.event === event);
+  const issue = events.some(e => e.event === 'issue_raised');
+
+  if (issue) {
+    return { amount: amount, state: 'held_dispute', reason: 'A problem was reported. The deposit stays held until SwapSutra reviews the timeline.' };
+  }
+  if (!needsReturn && String(swap.obj.serviceType || '').toUpperCase() === 'SWAP') {
+    return has('outbound', 'received') && has('counter', 'received')
+      ? { amount: amount, state: 'release', reason: 'Both readers confirmed receiving the other\'s book.' }
+      : { amount: amount, state: 'held', reason: 'Held until both readers confirm the other\'s book arrived.' };
+  }
+  if (!needsReturn) {
+    return has('outbound', 'received')
+      ? { amount: amount, state: 'release', reason: 'Delivery was confirmed by the receiving reader.' }
+      : { amount: amount, state: 'held', reason: 'Held until the receiving reader confirms the book arrived.' };
+  }
+  if (has('return', 'received')) {
+    return { amount: amount, state: 'release', reason: 'The book came back and the owner confirmed it.' };
+  }
+  const overdue = swap.obj.dueDate && new Date(swap.obj.dueDate) < new Date();
+  if (overdue) {
+    return { amount: amount, state: 'held_overdue', reason: 'The return is past its due date. Held pending review.' };
+  }
+  return { amount: amount, state: 'held', reason: 'Held until the book is returned and the owner confirms it.' };
+}
+
+// ---------------------------------------------------------------------
+// NOTICING SILENCE
+// ---------------------------------------------------------------------
+// A parcel nobody mentions again is the failure mode this ledger exists
+// to catch. Runs alongside the swap-request SLA.
+
+const CIRCULATION_STALE_HOURS = 96;   // four days without an update
+const CIRCULATION_ESCALATE_HOURS = 240; // ten days — admin's problem now
+
+function runCirculationSla() {
+  const started = Date.now();
+  const summary = { nudged: 0, escalated: 0, scanned: 0, errors: 0 };
+  try {
+    const sheet = getJourneySheet();
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return summary;
+    const headers = values[0].map(h => String(h).trim());
+
+    // Latest event per swap, and whether that swap is already finished.
+    const latest = {};
+    for (let r = 1; r < values.length; r++) {
+      const obj = rowToObject(headers, values[r]);
+      const when = new Date(obj.createdAt);
+      if (isNaN(when.getTime())) continue;
+      const key = String(obj.swapId);
+      // >= so that, at the same moment, the later row (the newer event) wins.
+      if (!latest[key] || when >= new Date(latest[key].createdAt)) latest[key] = obj;
+    }
+
+    const now = Date.now();
+    Object.keys(latest).forEach(swapId => {
+      if (Date.now() - started > 4 * 60 * 1000) return;
+      const last = latest[swapId];
+      // A confirmed receipt on a one-way exchange, or a confirmed return,
+      // is the end of the road — nothing to chase.
+      if (last.event === 'received') return;
+
+      const ageHours = (now - new Date(last.createdAt).getTime()) / (60 * 60 * 1000);
+      if (ageHours < CIRCULATION_STALE_HOURS) return;
+
+      summary.scanned++;
+      try {
+        const swap = loadSwapForCirculation(swapId);
+        if (!swap) return;
+        const bookTitle = String(swap.obj.requestedBookTitle || 'a book');
+        const escalate = ageHours >= CIRCULATION_ESCALATE_HOURS;
+
+        [swap.ownerEmail, swap.requesterEmail].forEach(party => {
+          if (!party) return;
+          createNotification(
+            party,
+            escalate ? 'circulation_escalated' : 'circulation_stale',
+            escalate ? 'We have stepped in on "' + bookTitle + '"' : 'Where has "' + bookTitle + '" got to?',
+            escalate
+              ? 'There has been no update for ten days. SwapSutra has been notified and will help sort this out.'
+              : 'There has been no update for four days. A quick note — posted, delivered, still waiting — keeps both of you covered.',
+            swapId,
+            { link: '/profile', dedupeKey: (escalate ? 'circ_esc_' : 'circ_stale_') + swapId }
+          );
+        });
+
+        if (escalate) {
+          createNotification(
+            'swapsutra@gmail.com',
+            'circulation_escalated',
+            'Stalled circulation: ' + bookTitle,
+            'Swap ' + swapId + ' has had no delivery update for ten days. Last event: ' + last.event + '.',
+            swapId,
+            { link: '/management', dedupeKey: 'circ_admin_' + swapId }
+          );
+          summary.escalated++;
+        } else {
+          summary.nudged++;
+        }
+      } catch (rowErr) {
+        summary.errors++;
+        Logger.log('Circulation SLA failed for ' + swapId + ': ' + rowErr.toString());
+      }
+    });
+  } catch (err) {
+    summary.errors++;
+    Logger.log('runCirculationSla failed: ' + err.toString());
+  }
+  Logger.log('runCirculationSla: ' + JSON.stringify(summary));
+  return summary;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   BOOK PRICING — the sheet decides the amount, never the owner
+   ────────────────────────────────────────────────────────────────────────
+   THE PROBLEM THIS SOLVES
+   `mrp` used to be a free-text field the owner typed, and the security
+   deposit was 60% of it. So the number that decides how much money the
+   other reader has to put down was set by the person on the other side of
+   the trade. Nothing stopped a listing that claimed a Rs.200 paperback was
+   worth Rs.4000.
+
+   HOW IT WORKS NOW
+   A listing's price is resolved on the server from two sheets:
+
+     BookPrices          one row per ISBN, three tier prices (MRP basis)
+     GenrePriceDefaults  fallback rates per genre, for an unlisted ISBN
+
+   The owner chooses a FORMAT (hardcover / paperback) and an EDITION
+   (publisher / budget reprint / not sure). Those two choices pick a
+   column. The client never sends an amount and could not set one if it
+   tried — createBook and updateBook both ignore any `mrp` in the payload.
+
+   THREE RULES THAT LOOK ARBITRARY AND ARE NOT
+   1. Prices are MRP, the printed cover price — never street price. Indian
+      marketplace prices swing 20-70% week to week, and the very cheapest
+      listings are frequently not legitimate copies. Neither makes a sound
+      basis for a refundable deposit.
+   2. The tiers are NOT a ladder, so no tier is ever derived from another
+      by a multiplier. Wilco and Fingerprint sell classic HARDCOVERS at
+      ~Rs.299 while the Penguin paperback is Rs.399. Every tier is read
+      from its own column.
+   3. A blank tier means "no such edition exists for this book", which is
+      different from zero. Chetan Bhagat has no hardcover; JEE prep and
+      South Asia medical editions have no cheaper legitimate tier. A blank
+      falls through to the lowest tier that is actually filled in — which
+      is also, deliberately, where "Not sure" lands.
+   ════════════════════════════════════════════════════════════════════════ */
+
+// Per-request memo, matching __SS_SHEETS__ above. Declared rather than
+// created by assignment: `typeof` on a `let` still inside its temporal
+// dead zone throws rather than returning "undefined", so the usual
+// undeclared-global guard would have been a live bug the first time a
+// price was resolved.
+let __SS_PRICE_TABLES__ = null;
+
+const BOOK_PRICE_SHEET = 'BookPrices';
+const BOOK_PRICE_HEADERS = ['isbn13', 'isbn10', 'title', 'author', 'genre', 'unit',
+                            'hardcover', 'paperback', 'reprint', 'confidence', 'source', 'updatedAt'];
+const GENRE_PRICE_SHEET = 'GenrePriceDefaults';
+const GENRE_PRICE_HEADERS = ['genre', 'hardcover', 'paperback', 'reprint', 'note'];
+
+// Format and edition are two independent axes. They used to be one field
+// (copyType), which is why "hardcover" had nowhere to live — a hardcover
+// could be a publisher edition or a budget reprint, and the old single
+// field could only say one of those things.
+const BOOK_FORMAT_OPTIONS = ['HARDCOVER', 'PAPERBACK', 'UNKNOWN'];
+const BOOK_EDITION_OPTIONS = ['PUBLISHER', 'REPRINT', 'NOT_SURE'];
+
+// The same binding has many spellings in the wild. Open Library's
+// physical_format is free text written by whoever catalogued the edition,
+// so "Hardback", "hardcover", "Mass Market Paperback" and "trade
+// paperback" all arrive and all mean one of two things. Mapping them here
+// — in the one function every caller already goes through — is what stops
+// a hardcover being priced as a paperback because a cataloguer in 2009
+// typed the other word.
+const BOOK_FORMAT_SYNONYMS = {
+  'HARDCOVER': 'HARDCOVER',
+  'HARDBACK': 'HARDCOVER',
+  'HARD COVER': 'HARDCOVER',
+  'HARD BACK': 'HARDCOVER',
+  'HARDBOUND': 'HARDCOVER',
+  'CASEBOUND': 'HARDCOVER',
+  'PAPERBACK': 'PAPERBACK',
+  'PAPER BACK': 'PAPERBACK',
+  'SOFTCOVER': 'PAPERBACK',
+  'SOFT COVER': 'PAPERBACK',
+  'MASS MARKET PAPERBACK': 'PAPERBACK',
+  'MASS_MARKET_PAPERBACK': 'PAPERBACK',
+  'MASS MARKET': 'PAPERBACK',
+  'TRADE PAPERBACK': 'PAPERBACK',
+  'TRADE_PAPERBACK': 'PAPERBACK',
+  'PBK': 'PAPERBACK',
+  'UNKNOWN': 'UNKNOWN',
+  'OTHER': 'UNKNOWN'
+};
+
+function normalizeBookFormat(raw) {
+  const v = String(raw || '').trim().toUpperCase().replace(/[.]/g, '');
+  if (BOOK_FORMAT_SYNONYMS[v]) return BOOK_FORMAT_SYNONYMS[v];
+  return BOOK_FORMAT_OPTIONS.indexOf(v) !== -1 ? v : '';
+}
+
+// ── Authenticity ────────────────────────────────────────────────────────
+// Three states, and the third is not a polite way of saying the first.
+// UNKNOWN means nobody has established what this copy is; it must never be
+// rendered as ORIGINAL, and it must never be silently promoted.
+const BOOK_AUTHENTICITY_OPTIONS = ['ORIGINAL', 'UNAUTHORISED', 'UNKNOWN'];
+
+function normalizeAuthenticity(raw) {
+  const v = String(raw || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  if (v === 'UNAUTHORIZED' || v === 'PIRATED' || v === 'UNOFFICIAL'
+      || v === 'UNAUTHORISED_COPY' || v === 'PIRATED_COPY') return 'UNAUTHORISED';
+  if (v === 'ORIGINAL' || v === 'PUBLISHER' || v === 'GENUINE') return 'ORIGINAL';
+  return BOOK_AUTHENTICITY_OPTIONS.indexOf(v) !== -1 ? v : 'UNKNOWN';
+}
+
+/**
+ * The authenticity of a stored listing.
+ *
+ * Reads the explicit column when present, and otherwise derives it from the
+ * older edition/copyType fields so listings created before this column
+ * existed are not all reported as UNKNOWN. The fallback is deliberately
+ * one-directional: an old UNOFFICIAL declaration still reads as
+ * UNAUTHORISED, but nothing in the old data is ever read as ORIGINAL,
+ * because the old form never asked the question that would justify it.
+ */
+function bookAuthenticity(book) {
+  const explicit = String((book && book.authenticityStatus) || '').trim();
+  if (explicit) return normalizeAuthenticity(explicit);
+  const legacy = String((book && (book.bookEdition || book.copyType)) || '').trim().toUpperCase();
+  if (legacy === 'UNOFFICIAL' || legacy === 'PIRATED') return 'UNAUTHORISED';
+  return 'UNKNOWN';
+}
+
+/**
+ * Per-transaction eligibility, decided on the server.
+ *
+ * Four separate answers, never one boolean. A single `canTransact` would
+ * make "this book may be swapped" and "this book may be sold" the same
+ * fact, and they are not: an unauthorised copy is barred from all four,
+ * while an ordinary book is eligible for exactly the ones its owner ticked.
+ */
+function bookTransactionEligibility(book) {
+  const flags = bookAvailabilityFlags(book || {});
+  const authenticity = bookAuthenticity(book);
+
+  // An unauthorised copy is barred from every paid or valued transaction.
+  // This is checked here, on the server, in the function every caller uses
+  // — not by hiding buttons, which protects nobody calling the API directly.
+  if (authenticity === 'UNAUTHORISED') {
+    return {
+      authenticity: authenticity,
+      can_sell: false, can_swap: false, can_rent: false, can_lend: false,
+      reason: 'A copy declared unauthorised cannot be sold, swapped, rented or lent on SwapSutra.'
+    };
+  }
+
+  // Rent needs a resolved price at all, because the monthly charge is a
+  // fixed fraction of it — effectiveBookMRP (userEnteredMRP first, same as
+  // every other transaction type; automated/catalogue fallback only for a
+  // listing with no userEnteredMRP) is what decides "resolved" here, same
+  // as it now decides the deposit for SWAP/LEND/SELL. No resolved value,
+  // no rent — an unpriceable rental is worse than an unavailable one.
+  const mrp = knownBookMRP(book);
+  return {
+    authenticity: authenticity,
+    can_sell: Boolean(flags.sell),
+    can_swap: Boolean(flags.permanent_exchange || flags.temporary_exchange),
+    can_rent: Boolean(flags.rent) && mrp !== null,
+    can_lend: Boolean(flags.lend),
+    reason: ''
+  };
+}
+
+// ── Printed MRP ─────────────────────────────────────────────────────────
+// The number printed on the cover. It is NOT the current online selling
+// price, NOT SwapSutra's reference value, and NOT a fallback rate from the
+// price sheets. Unknown is null. Zero is not a value — a book whose MRP we
+// do not know is unpriced, and saying "Rs.0" states something false about
+// a real object.
+const MRP_EVIDENCE_TIERS = ['PHOTO_VERIFIED', 'CATALOGUE_VERIFIED', 'PUBLISHER_SOURCED', 'USER_PROVISIONAL'];
+const MRP_ANCHORING_TIERS = ['PHOTO_VERIFIED', 'CATALOGUE_VERIFIED', 'PUBLISHER_SOURCED'];
+
+/**
+ * Parses a claimed printed MRP.
+ *
+ * Returns null for anything that is not a positive number. Note what is
+ * NOT here: a `|| 0`. Every one of those in this codebase turned an
+ * unknown MRP into a confident Rs.0, and Rs.0 then flowed into deposits
+ * and rent as if it were a fact.
+ */
+function parsePrintedMrp(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+
+  // Strip separators and the currency, then take the first number that
+  // remains — INCLUDING its sign. Stripping every non-digit instead (which
+  // is what this did first) has two failure modes that both read as
+  // success: "Rs. 1,299" becomes ".1299" and prices the book at 13 paise,
+  // and "-50" becomes "50", so a negative MRP is accepted as a positive
+  // one and the rejection below never fires.
+  const cleaned = String(raw)
+    .replace(/[,\s\u20B9]/g, '')
+    .replace(/(?:rs|inr)\.?/ig, '');
+  const match = cleaned.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+
+  const n = Number(match[0]);
+  if (!isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function printedMrpOf(book) {
+  return parsePrintedMrp(book && book.printedMrp);
+}
+
+function normalizeMrpEvidenceTier(raw) {
+  const v = String(raw || '').trim().toUpperCase();
+  return MRP_EVIDENCE_TIERS.indexOf(v) !== -1 ? v : 'USER_PROVISIONAL';
+}
+
+/**
+ * The monthly rent for a book: exactly 10% of the printed MRP.
+ *
+ * Returns null when there is no resolved MRP, and the caller must then
+ * treat rent as unavailable rather than substituting anything. Nothing the
+ * seller chose enters this calculation — not their asking price, not the
+ * reference value, not the deposit. That is the whole point: the person
+ * setting the price is not the person paying the rent.
+ */
+var RENT_MONTHLY_RATE_OF_MRP = 0.10;
+
+function monthlyRentForMrp(mrp) {
+  const value = parsePrintedMrp(mrp);
+  if (value === null) return null;
+  return Math.round(value * RENT_MONTHLY_RATE_OF_MRP * 100) / 100;
+}
+
+function monthlyRentForBook(book) {
+  // Oct 2026: the owner sets their own monthly rent (ownerRentPerMonth).
+  // Listings made before that keep the old rule — 10% of the printed MRP —
+  // which is also what the listing form suggests as a starting point.
+  const own = ownerPrice_(book && book.ownerRentPerMonth);
+  if (own !== null) return own;
+  // knownBookMRP, not effectiveBookMRP: rent is a real monthly charge, so
+  // it is only quoted from a value this book actually has. No value, no
+  // rent — see knownBookMRP.
+  return monthlyRentForMrp(knownBookMRP(book));
+}
+
+/** A whole-rupee price the owner typed, or null. Never 0, never negative. */
+function ownerPrice_(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  // A minus sign is refused outright: stripping it would turn -5 into 5.
+  if (String(raw).indexOf('-') !== -1) return null;
+  const n = Number(String(raw).replace(/[^0-9.]/g, ''));
+  if (!isFinite(n) || n < 1 || n > OWNER_PRICE_CEILING) return null;
+  return Math.round(n);
+}
+
+// A sanity ceiling, not a pricing rule: the owner decides the price, but a
+// typo of ₹45000 for a ₹450 paperback should be caught.
+const OWNER_PRICE_CEILING = 50000;
+
+/**
+ * What a buyer pays for this book (Oct 2026): the owner's own asking
+ * price. Older listings, made before owners set one, fall back to the
+ * book's resolved value — which is what a sale was charged before.
+ */
+function sellPriceForBook(book) {
+  if (!book) return null;
+  const own = ownerPrice_(book.ownerSellPrice);
+  if (own !== null) return own;
+  if (bookAuthenticity(book) === 'UNAUTHORISED') return null;
+  const legacy = effectiveBookMRP(book);
+  return legacy === null || legacy === undefined ? null : Math.round(Number(legacy));
+}
+function normalizeBookEdition(raw) {
+  const v = String(raw || '').trim().toUpperCase();
+  if (v === 'ORIGINAL') return 'PUBLISHER';   // the old copyType value
+  return BOOK_EDITION_OPTIONS.indexOf(v) !== -1 ? v : '';
+}
+// Every listing created before this feature has only the old copyType.
+// Reading it back through these two keeps those listings priceable
+// instead of stranding them with no format at all.
+function bookFormatFrom(book) {
+  return normalizeBookFormat(book && (book.bookFormat || book.format)) || 'PAPERBACK';
+}
+function bookEditionFrom(book) {
+  return normalizeBookEdition(book && (book.bookEdition || book.edition || book.copyType)) || 'NOT_SURE';
+}
+
+function parsePriceCell(v) {
+  if (v === null || v === undefined || v === '') return null;   // blank != zero
+  const n = Number(String(v).replace(/[^0-9.]/g, ''));
+  return isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+/**
+ * Both price tables, keyed for lookup. Cached for an hour: these sheets
+ * change when a human edits them, not per request, and re-reading a few
+ * hundred rows on every listing view would be the slowest thing the app
+ * does.
+ */
+function loadPriceTables() {
+  if (__SS_PRICE_TABLES__) return __SS_PRICE_TABLES__;
+
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('priceTables_v1');
+  if (cached) {
+    try {
+      __SS_PRICE_TABLES__ = JSON.parse(cached);
+      return __SS_PRICE_TABLES__;
+    } catch (e) { /* fall through and rebuild */ }
+  }
+
+  const byIsbn = {};
+  const byGenre = {};
+
+  try {
+    const sheet = getOrCreateSheet(BOOK_PRICE_SHEET, BOOK_PRICE_HEADERS);
+    if (sheet.getLastRow() > 1) {
+      const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+      const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+      rows.forEach(function (r) {
+        const o = rowToObject(headers, r);
+        [o.isbn13, o.isbn10].forEach(function (raw) {
+          const key = normalizeIsbnServer(raw);
+          if (!key) return;
+          byIsbn[key] = {
+            title: String(o.title || ''),
+            author: String(o.author || ''),
+            genre: String(o.genre || ''),
+            unit: String(o.unit || 'single'),
+            hardcover: parsePriceCell(o.hardcover),
+            paperback: parsePriceCell(o.paperback),
+            reprint: parsePriceCell(o.reprint),
+            confidence: String(o.confidence || '')
+          };
+        });
+      });
+    }
+  } catch (e) {
+    console.error('[pricing] BookPrices unreadable: ' + e);
+  }
+
+  try {
+    const sheet = getOrCreateSheet(GENRE_PRICE_SHEET, GENRE_PRICE_HEADERS);
+    if (sheet.getLastRow() > 1) {
+      const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+      const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+      rows.forEach(function (r) {
+        const o = rowToObject(headers, r);
+        const g = String(o.genre || '').trim();
+        if (!g) return;
+        byGenre[g] = {
+          hardcover: parsePriceCell(o.hardcover),
+          paperback: parsePriceCell(o.paperback),
+          reprint: parsePriceCell(o.reprint)
+        };
+      });
+    }
+  } catch (e) {
+    console.error('[pricing] GenrePriceDefaults unreadable: ' + e);
+  }
+
+  __SS_PRICE_TABLES__ = { byIsbn: byIsbn, byGenre: byGenre };
+  try {
+    cache.put('priceTables_v1', JSON.stringify(__SS_PRICE_TABLES__), 3600);
+  } catch (e) {
+    // Over 100KB for the cache. Not fatal — it just re-reads next request.
+  }
+  return __SS_PRICE_TABLES__;
+}
+
+function invalidatePriceTables() {
+  __SS_PRICE_TABLES__ = null;
+  try { CacheService.getScriptCache().remove('priceTables_v1'); } catch (e) {}
+}
+
+/** The lowest tier that actually exists for this row. */
+function lowestAvailableTier(tiers) {
+  const present = [];
+  ['reprint', 'paperback', 'hardcover'].forEach(function (t) {
+    if (tiers[t] !== null && tiers[t] !== undefined) present.push({ tier: t, amount: tiers[t] });
+  });
+  if (!present.length) return null;
+  present.sort(function (a, b) { return a.amount - b.amount; });
+  return present[0];
+}
+
+/**
+ * The one place a listing's price is decided.
+ *
+ * Returns { amount, tier, basis, matchedTitle, confidence, unit }.
+ * `basis` says where the number came from — 'isbn', 'genre' or 'none' —
+ * so the UI can be honest with the owner about how firm it is, and so a
+ * listing that fell back to a genre rate can be found and corrected later.
+ */
+function resolveBookPrice(opts) {
+  const isbn = normalizeIsbnServer(opts && opts.isbn);
+  const genre = String((opts && opts.genre) || '').trim();
+  const format = normalizeBookFormat(opts && opts.format) || 'PAPERBACK';
+  const edition = normalizeBookEdition(opts && opts.edition) || 'NOT_SURE';
+  const tables = loadPriceTables();
+
+  const entry = isbn && tables.byIsbn[isbn] ? tables.byIsbn[isbn] : null;
+  const fallback = tables.byGenre[genre] || tables.byGenre['Other'] || null;
+  const source = entry || fallback;
+  const basis = entry ? 'isbn' : (fallback ? 'genre' : 'none');
+
+  // No row for this ISBN and no genre fallback. That is "we do not know",
+  // and the honest representation of it is null. Returning 0 here is what
+  // produced listings displaying "Rs. 0": the caller wrote the amount
+  // straight into the sheet, and every screen downstream reported a
+  // confident zero for a book nobody had priced.
+  if (!source) {
+    return { amount: null, tier: '', basis: 'none', matchedTitle: '', confidence: '', unit: 'single',
+             unresolvedReason: 'No price row for this ISBN and no rate for this genre.' };
+  }
+
+  // "Not sure" is deliberately the cheapest legitimate tier rather than a
+  // guess: an owner who does not know what they have should never have
+  // the other reader's deposit set by an optimistic assumption.
+  let tier;
+  if (edition === 'NOT_SURE') {
+    tier = null;
+  } else if (format === 'HARDCOVER') {
+    tier = 'hardcover';
+  } else {
+    tier = edition === 'REPRINT' ? 'reprint' : 'paperback';
+  }
+
+  let amount = tier ? source[tier] : null;
+  let usedTier = tier;
+
+  // Chosen tier does not exist for this book (no hardcover of a Bhagat
+  // novel, no budget reprint of a South Asia medical edition), or the
+  // owner said "not sure". Either way: lowest tier that is real.
+  if (amount === null || amount === undefined) {
+    const low = lowestAvailableTier(source);
+    if (!low) return { amount: null, tier: '', basis: basis, matchedTitle: (entry && entry.title) || '',
+                       confidence: '', unit: 'single',
+                       unresolvedReason: 'The matched row has no usable amount in any tier.' };
+    amount = low.amount;
+    usedTier = low.tier;
+  }
+
+  // `Number(amount) || 0` used to live here, which turned a NaN or a blank
+  // tier into a priced-at-zero listing. A value that will not parse is
+  // unknown, not free.
+  const parsed = Number(amount);
+  if (!isFinite(parsed) || parsed <= 0) {
+    return { amount: null, tier: '', basis: basis, matchedTitle: (entry && entry.title) || '',
+             confidence: '', unit: 'single',
+             unresolvedReason: 'The matched amount was not a positive number.' };
+  }
+
+  return {
+    amount: Math.round(parsed),
+    tier: usedTier,
+    basis: basis,
+    matchedTitle: (entry && entry.title) || '',
+    confidence: (entry && entry.confidence) || '',
+    unit: (entry && entry.unit) || 'single'
+  };
+}
+
+/** Router action — lets the listing form show the price before submitting. */
+function getBookPriceQuote(data) {
+  const quote = resolveBookPrice({
+    isbn: data && data.isbn,
+    genre: data && data.genre,
+    format: data && data.format,
+    edition: data && data.edition
+  });
+  return {
+    success: true,
+    price: quote.amount,
+    tier: quote.tier,
+    basis: quote.basis,
+    matchedTitle: quote.matchedTitle,
+    unit: quote.unit,
+    // Deliberately plain. The owner cannot change this number, so the
+    // screen owes them a straight answer about where it came from.
+    explanation: quote.basis === 'isbn'
+      ? 'Matched by ISBN against SwapSutra’s price list.'
+      : (quote.basis === 'genre'
+          ? 'This ISBN is not on our price list yet, so this is the standard rate for its category.'
+          : 'We could not work out a price for this book yet.')
+  };
+}
+
+/** The price stored on a book row, with a safe fallback for old listings. */
+/**
+ * SwapSutra's own resolved value for a listing, or null when unknown.
+ *
+ * Callers must handle null. It used to return 0 in that case, and every
+ * deposit and every "Rs. X" on a screen inherited the zero without anyone
+ * being told the number was never resolved.
+ */
+function bookResolvedPrice(book) {
+  if (!book) return null;
+  const stored = parsePrintedMrp(book.mrp);
+  if (stored !== null) return Math.round(stored);
+  return resolveBookPrice({
+    isbn: book.isbn,
+    genre: book.genre,
+    format: bookFormatFrom(book),
+    edition: bookEditionFrom(book)
+  }).amount;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   USER-ENTERED MRP — TEMPORARY AUTHORITATIVE PRICING INPUT
+   ────────────────────────────────────────────────────────────────────────
+   The automated/catalogue pricing estimate above (resolveBookPrice /
+   catalogueReferencePrice_ / bookResolvedPrice) has been found inaccurate
+   and was blocking real transactions with a wrong security fee. Rather
+   than wait for that system to be fixed and re-verified, the MRP the
+   OWNER TYPES IN AT LISTING TIME is, for now, the authoritative pricing
+   input for every transaction type. The automated engine keeps running
+   and its output is kept (as `automatedMRP`) for when it is trusted again
+   — it is simply no longer read first.
+
+   effectiveBookMRP() is the ONE function every deposit/rent/eligibility
+   calculation must call to get "this book's value" from now on. Nothing
+   here lets the client influence a deposit, fee or transaction value
+   directly — the client can only ever submit userEnteredMRP, a book-level
+   attribute, and only at listing/edit time; every money figure a swap
+   actually uses is still derived, server-side, from computeMutualDeposit /
+   securityFeeRequirements exactly as before.
+   ════════════════════════════════════════════════════════════════════════ */
+
+// A book's printed MRP is a whole-rupee figure on every real cover, and
+// every other money value in this file (resolveBookPrice, depositFor,
+// computeMutualDeposit) already stores/rounds to whole rupees — so this
+// matches the codebase's existing convention rather than introducing a
+// second one (no paise, no floats carried through deposit math).
+const USER_ENTERED_MRP_MAX = 50000;
+
+/**
+ * Server-side validation for a reader-typed MRP. Pure — no Sheets/Apps
+ * Script calls — so it can be exercised directly from a standalone Node
+ * test (see test-user-mrp.cjs), the same pattern already used for the PII
+ * scanner.
+ *
+ * Rejects and explains rather than clamping or coercing: a value close to
+ * valid is not treated as "close enough", because a book's MRP feeds
+ * straight into another reader's refundable deposit.
+ *
+ *   - required (a blank/missing value is rejected by the caller, which
+ *     knows whether this particular listing needs a price at all — this
+ *     function only ever sees a value that was actually submitted)
+ *   - must be numeric (rejects NaN, Infinity, "a lot", "₹abc", etc.)
+ *   - must be strictly positive (rejects 0 and negative)
+ *   - must be at or under ₹50,000 — chosen because it comfortably covers
+ *     the most expensive ordinary Indian retail books (boxed sets,
+ *     large-format art/medical volumes included) while catching the
+ *     unmistakable data-entry errors (an extra zero, a phone number typed
+ *     into the wrong box) that would otherwise inflate someone else's
+ *     deposit by 10-100x
+ */
+function validateUserEnteredMRP(raw) {
+  if (raw === null || raw === undefined || String(raw).trim() === '') {
+    return { valid: false, value: null, error: 'MRP_REQUIRED',
+             message: "Please enter the MRP printed on your book." };
+  }
+  // Strip thousands separators, whitespace and a currency mark/prefix —
+  // matching parsePrintedMrp's own normalization — then require the ENTIRE
+  // remainder to be a plain number. parsePrintedMrp deliberately takes the
+  // first number found inside arbitrary text (useful for a legacy
+  // free-text cell); this validator does the opposite on purpose, because
+  // arbitrary text ("about 400, not sure") is exactly what must be
+  // rejected here rather than silently salvaged.
+  const cleaned = String(raw).trim()
+    .replace(/[,\s₹]/g, '')
+    .replace(/^(?:rs|inr)\.?/i, '');
+  if (!/^-?\d+(?:\.\d+)?$/.test(cleaned)) {
+    return { valid: false, value: null, error: 'MRP_NOT_NUMERIC',
+             message: "Please enter the MRP as a plain number, e.g. 399." };
+  }
+  const n = Number(cleaned);
+  if (!isFinite(n) || Number.isNaN(n)) {
+    return { valid: false, value: null, error: 'MRP_NOT_NUMERIC',
+             message: "Please enter the MRP as a plain number, e.g. 399." };
+  }
+  if (n <= 0) {
+    return { valid: false, value: null, error: 'MRP_NOT_POSITIVE',
+             message: "The MRP must be greater than ₹0." };
+  }
+  if (n > USER_ENTERED_MRP_MAX) {
+    return { valid: false, value: null, error: 'MRP_TOO_HIGH',
+             message: "That MRP looks too high to be correct (over ₹" +
+               USER_ENTERED_MRP_MAX.toLocaleString('en-IN') +
+               "). Please check the printed cover price and try again." };
+  }
+  return { valid: true, value: Math.round(n), error: null, message: '' };
+}
+
+/**
+ * The value the pricing engine actually uses for a book, right now.
+ *
+ * Precedence (see the section header above for why):
+ *   1. `effectiveMRP` already stored on the row — the engine's own past
+ *      decision, read back verbatim so a listing's value cannot drift
+ *      between the moment a swap was created against it and any later
+ *      read of the same row.
+ *   2. `userEnteredMRP` (or, for a row written before that column
+ *      existed, the equivalent `printedMrp`) — the reader's own validated
+ *      claim. Present and non-null means it wins outright: it is never
+ *      overridden or averaged with the automated estimate.
+ *   3. `automatedMRP` — the automated/catalogue engine's output, kept
+ *      exactly as before.
+ *   4. The oldest fallback path (live catalogue lookup, then the
+ *      sheet-resolved `mrp`/resolveBookPrice) — unchanged behaviour for a
+ *      book that predates every one of the newer columns.
+ *
+ * Returns null when nothing above resolves, and every caller must treat
+ * that as "unknown", never as zero.
+ */
+/**
+ * The book's value where it is actually KNOWN: what the owner typed, a
+ * stored effective value, the automated figure, or a catalogue price for
+ * this exact book. Returns null when none of those exist.
+ *
+ * Deliberately WITHOUT bookResolvedPrice's last-resort genre table. That
+ * table answers "what does a book like this usually cost", which is fine
+ * for showing an estimate and wrong for charging money: a listing with no
+ * ISBN, no genre and no printed MRP resolved to the generic Rs.250 row and
+ * was then offered for rent at Rs.25 a month — a real charge derived from
+ * a number nobody had ever seen on a real book.
+ */
+function knownBookMRP(book) {
+  if (!book) return null;
+
+  const storedEffective = parsePrintedMrp(book.effectiveMRP);
+  if (storedEffective !== null) return storedEffective;
+
+  const userRaw = (book.userEnteredMRP !== undefined && book.userEnteredMRP !== '')
+    ? book.userEnteredMRP : book.printedMrp;
+  const userMrp = parsePrintedMrp(userRaw);
+  if (userMrp !== null) return userMrp;
+
+  const automated = parsePrintedMrp(book.automatedMRP);
+  if (automated !== null) return automated;
+
+  const catalogue = catalogueReferencePrice_(book);
+  if (catalogue !== null && catalogue !== undefined && Number(catalogue) > 0) return Number(catalogue);
+
+  return null;
+}
+
+function effectiveBookMRP(book) {
+  if (!book) return null;
+
+  const storedEffective = parsePrintedMrp(book.effectiveMRP);
+  if (storedEffective !== null) return storedEffective;
+
+  const userRaw = (book.userEnteredMRP !== undefined && book.userEnteredMRP !== '')
+    ? book.userEnteredMRP : book.printedMrp;
+  const userMrp = parsePrintedMrp(userRaw);
+  if (userMrp !== null) return userMrp;
+
+  const automated = parsePrintedMrp(book.automatedMRP);
+  if (automated !== null) return automated;
+
+  const catalogue = catalogueReferencePrice_(book);
+  if (catalogue !== null && catalogue !== undefined && Number(catalogue) > 0) return Number(catalogue);
+
+  return bookResolvedPrice(book);
+}
+
+/**
+ * Which source effectiveBookMRP's answer actually came from, for display
+ * ("Printed MRP entered by owner" vs "Estimated value — not yet
+ * verified") — never the other way around, and an automated/unverified
+ * figure must never be labelled as verified fact.
+ */
+function pricingSourceOf(book) {
+  if (!book) return '';
+  const explicit = String(book.pricingSource || '').trim().toUpperCase();
+  if (explicit === 'USER' || explicit === 'VERIFIED' || explicit === 'AUTOMATED_UNVERIFIED') return explicit;
+  // Legacy row predating this column: derive the same precedence live.
+  const userRaw = (book.userEnteredMRP !== undefined && book.userEnteredMRP !== '')
+    ? book.userEnteredMRP : book.printedMrp;
+  if (parsePrintedMrp(userRaw) !== null) return 'USER';
+  if (effectiveBookMRP(book) !== null) return 'AUTOMATED_UNVERIFIED';
+  return '';
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   MUTUAL SECURITY DEPOSIT
+   ────────────────────────────────────────────────────────────────────────
+   Both readers put down 60% of the OTHER person's book. If A borrows B's
+   Rs.2000 textbook and lends B a Rs.200 novel, A deposits Rs.1200 and B
+   deposits Rs.120 — each deposit protects the book its payer is holding,
+   which is the only arrangement that makes sense once the two books are
+   worth different amounts.
+
+   This needs the requester's own book to be a REAL LISTING, not the
+   free-text title the swap form used to accept: a typed string has no
+   price, so there was nothing to take 60% of. createSwapRequest now
+   resolves `offeredBookId` to a book the requester actually owns.
+
+   Both figures are computed here, on the server, from prices that also
+   came from the server. Nothing in the request payload can influence
+   either number.
+   ════════════════════════════════════════════════════════════════════════ */
+
+// Oct 2026 (owner's decision): security is a flat 65% of the book's MRP
+// for swap, rent and lend, whatever the condition. A sale takes none.
+const DEPOSIT_RATE = 0.65;
+
+/**
+ * amount * the condition-tiered rate (60/55/50%, see depositRateForCondition
+ * above the point normalizeConditionGrade is defined — this file's function
+ * declarations are hoisted, so the forward reference here is safe). When no
+ * condition is given (a caller that predates this change) the old flat
+ * DEPOSIT_RATE is used, so nothing regresses silently.
+ */
+function depositFor(amount, rawCondition) {
+  const n = Number(amount || 0);
+  if (n <= 0) return 0;
+  const rate = rawCondition === undefined ? DEPOSIT_RATE : depositRateForCondition(rawCondition);
+  return Math.round(n * rate);
+}
+
+/**
+ * True when a book's value is an estimate rather than a price the owner
+ * gave (or SwapSutra verified):
+ *   - knownBookMRP() is null, so effectiveBookMRP fell back to the generic
+ *     catalogue estimate (the Rs.250 row → Rs.150 deposit); or
+ *   - the stored value is the automated engine's own figure
+ *     (pricingSource AUTOMATED_UNVERIFIED) — a listing made without a
+ *     printed MRP stores that figure as effectiveMRP, so knownBookMRP
+ *     alone would call it "known" when no person has checked it.
+ * Only an owner-entered printed MRP (USER) or an admin-verified one
+ * (VERIFIED) makes the deposit a firm number.
+ */
+function isEstimatedBookValue_(book) {
+  if (!book) return false;
+  if (knownBookMRP(book) === null) return true;
+  return pricingSourceOf(book) === 'AUTOMATED_UNVERIFIED';
+}
+
+/**
+ * Was this side of a swap's deposit worked out from an estimate?
+ * Read from the basis recorded when the request was made; a request made
+ * before that column existed is judged from the book as it stands now.
+ */
+function swapDepositEstimated_(swapObj, role) {
+  if (!swapObj) return false;
+  const recorded = String(swapObj[role === 'owner' ? 'ownerDepositBasis' : 'requesterDepositBasis'] || '').trim().toUpperCase();
+  if (recorded === 'ESTIMATE') return true;
+  if (recorded === 'KNOWN' || recorded === 'MANUAL') return false;
+  const bookId = role === 'owner' ? swapObj.offeredBookId : swapObj.requestedBookId;
+  if (!bookId) return false;
+  return isEstimatedBookValue_(findBookById(bookId));
+}
+
+/**
+ * Both sides of a trade in one object.
+ * requesterDeposit — what the requester owes, on the owner's book.
+ * ownerDeposit     — what the owner owes, on the requester's offered book.
+ * An owner deposit only exists when a book actually travels the other way
+ * (a swap). RENT and SELL move one book, so only the requester pays.
+ */
+function computeMutualDeposit(requestedBook, offeredBook, serviceType) {
+  // The book's value now comes from effectiveBookMRP: the owner's
+  // validated userEnteredMRP when present (temporary pricing phase — see
+  // the section above), falling back to the catalogue/automated estimate
+  // only for a listing with no userEnteredMRP at all.
+  // An unauthorised copy is not valued at all. Giving it a number is what
+  // would let it be deposited against, and a deposit is the mechanism by
+  // which a transaction happens — so refusing to value it is the same act
+  // as refusing to trade it.
+  const valueOf = function (book) {
+    if (!book) return null;
+    if (bookAuthenticity(book) === 'UNAUTHORISED') return null;
+    return effectiveBookMRP(book);
+  };
+
+  // null means unresolved and stays unresolved. The old `|| 0` chain here
+  // turned "we could not price this" into "this is worth nothing", and a
+  // deposit of 60% of nothing is zero — the protection silently vanished
+  // for exactly the books nobody had priced.
+  const requestedValue = valueOf(requestedBook);
+  const offeredValue = offeredBook ? valueOf(offeredBook) : null;
+  // Only a swap has two books in it. A LEND sends one book out and brings
+  // nothing back, so there is nothing for the owner to deposit against —
+  // treating it as two-way asked the lender for money to lend their own
+  // book.
+  const twoWay = serviceType === 'SWAP';
+  // Each side's rate now comes from the CONDITION of the specific book that
+  // deposit protects — not a single shared rate — because a New book and a
+  // Poor-condition book sitting in the same swap owe different percentages.
+  // Applies identically for SWAP/RENT/LEND/SELL: this is the one function
+  // every deposit figure in the app is computed from.
+  const requesterRate = depositRateForCondition(requestedBook && requestedBook.condition);
+  const ownerRate = offeredBook ? depositRateForCondition(offeredBook.condition) : DEPOSIT_RATE;
+  // Oct 2026: a sale takes no security deposit. The buyer pays the owner's
+  // asking price (sellPriceForBook) and the platform fee; nothing is held.
+  if (serviceType === 'SELL') {
+    const salePrice = sellPriceForBook(requestedBook);
+    return {
+      requestedBookValue: requestedValue, offeredBookValue: null,
+      requesterDeposit: 0, ownerDeposit: 0,
+      unresolved: salePrice === null,
+      requesterDepositEstimated: false, ownerDepositEstimated: false,
+      requesterDepositRate: 0, ownerDepositRate: 0, rate: 0,
+      salePrice: salePrice
+    };
+  }
+  return {
+    requestedBookValue: requestedValue,
+    offeredBookValue: offeredValue,
+    requesterDeposit: requestedValue === null ? null : depositFor(requestedValue, requestedBook && requestedBook.condition),
+    ownerDeposit: (twoWay && offeredValue !== null) ? depositFor(offeredValue, offeredBook.condition) : (twoWay ? null : 0),
+    unresolved: requestedValue === null || (twoWay && offeredValue === null),
+    // Worked out from a price nobody has verified (knownBookMRP is null, so
+    // effectiveBookMRP fell back to the generic catalogue estimate — the
+    // Rs.250 row → Rs.150). Founder's decision, 24 Sep: disclose, don't
+    // block. The number is still charged; every screen that shows it says
+    // it is an estimate.
+    requesterDepositEstimated: requestedValue !== null && isEstimatedBookValue_(requestedBook),
+    ownerDepositEstimated: twoWay && offeredValue !== null && isEstimatedBookValue_(offeredBook),
+    requesterDepositRate: requesterRate,
+    ownerDepositRate: ownerRate,
+    rate: requesterRate // kept for older callers reading a single `.rate`; reflects the requester's side
+  };
+}
+
+/** Router action — the swap form shows both numbers before anyone pays. */
+function getDepositQuote(data) {
+  const requested = findBookById(data && data.requestedBookId);
+  if (!requested) return { success: false, message: 'That book could not be found.', error: 'BOOK_NOT_FOUND' };
+  const offered = (data && data.offeredBookId) ? findBookById(data.offeredBookId) : null;
+  const q = computeMutualDeposit(requested, offered, String((data && data.serviceType) || 'SWAP').toUpperCase());
+  return {
+    success: true,
+    requestedBookValue: q.requestedBookValue,
+    offeredBookValue: q.offeredBookValue,
+    requesterDeposit: q.requesterDeposit,
+    ownerDeposit: q.ownerDeposit,
+    requesterDepositEstimated: q.requesterDepositEstimated,
+    ownerDepositEstimated: q.ownerDepositEstimated,
+    // Kept for older clients that read a single ratePercent (reflects the
+    // requester's side); new clients should read the two below, since the
+    // two sides can now differ.
+    ratePercent: Math.round(q.requesterDepositRate * 100),
+    requesterDepositRatePercent: Math.round(q.requesterDepositRate * 100),
+    ownerDepositRatePercent: Math.round(q.ownerDepositRate * 100),
+    salePrice: q.salePrice === undefined ? null : q.salePrice,
+    // Oct 2026: whether these two books may be swapped, and why not.
+    swapMatch: String((data && data.serviceType) || 'SWAP').toUpperCase() === 'SWAP' && offered
+      ? swapBooksMatch_(requested, offered) : null
+  };
+}
+
+/** Reads a book row by id. Returns null rather than throwing. */
+function findBookById(id) {
+  const wanted = String(id || '').trim();
+  if (!wanted) return null;
+  try {
+    const sheet = getOrCreateSheet('Books', getBookHeaders());
+    if (sheet.getLastRow() < 2) return null;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][headers.indexOf('id')] || '').trim() === wanted) {
+        return rowToObject(headers, rows[i]);
+      }
+    }
+  } catch (e) {
+    console.error('[pricing] findBookById failed: ' + e);
+  }
+  return null;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   SUPABASE — the catalogue and pricing service
+   ────────────────────────────────────────────────────────────────────────
+   Postgres is the source of truth for the book catalogue and for every
+   price band. This file talks to it; it does not compute prices itself.
+
+   WHY THE SHEET ENGINE IS STILL HERE
+   resolveBookPrice() and the BookPrices sheet remain, demoted to a
+   FALLBACK. SwapSutra has real users and a listing must not fail because a
+   database is briefly unreachable — so if Supabase does not answer, the
+   sheet answers, the listing goes through, and the row is flagged for a
+   recompute. Two engines is a real cost; a listing flow that breaks when
+   one dependency hiccups is a bigger one.
+
+   The fallback is deliberately narrower than the real thing: it produces a
+   price, not a band, and a listing priced that way is marked
+   priceSource='SHEET_FALLBACK' so it can be found and recomputed rather
+   than quietly becoming permanent.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const SUPABASE_TIMEOUT_MS = 8000;
+
+function supabaseConfig_() {
+  const props = PropertiesService.getScriptProperties();
+  const url = String(props.getProperty('SUPABASE_URL') || '').replace(/\/+$/, '');
+  const key = String(props.getProperty('SUPABASE_SERVICE_ROLE_KEY') || '');
+  return (url && key) ? { url: url, key: key } : null;
+}
+
+/**
+ * Calls a Postgres function. Returns null on ANY failure rather than
+ * throwing — every caller has a fallback, and a pricing service being down
+ * must never be the reason a reader cannot list a book.
+ */
+function supabaseRpc_(fn, args) {
+  const cfg = supabaseConfig_();
+  if (!cfg) return null;
+  try {
+    const res = UrlFetchApp.fetch(cfg.url + '/rest/v1/rpc/' + fn, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key },
+      payload: JSON.stringify(args || {}),
+      muteHttpExceptions: true,
+      followRedirects: true
+    });
+    const code = res.getResponseCode();
+    const body = res.getContentText();
+    if (code < 200 || code >= 300) {
+      console.error('[supabase] ' + fn + ' returned ' + code + ': ' + body.slice(0, 300));
+      return null;
+    }
+    return body ? JSON.parse(body) : null;
+  } catch (e) {
+    console.error('[supabase] ' + fn + ' failed: ' + e);
+    return null;
+  }
+}
+
+/**
+ * Direct REST upsert into a Supabase table, for the one write this file
+ * does outside a Postgres function call (the Gemini estimate, below — there
+ * is no stored procedure for it, and adding one is unnecessary: it is a
+ * plain insert-or-update on listing_prices, the same table
+ * validate_and_record_listing already writes, using the same service-role
+ * key that already bypasses RLS for catalogueReferencePrice_'s read).
+ * Returns true only on a genuine 2xx; false on ANY failure, same
+ * fail-safe contract as supabaseRpc_.
+ */
+function supabaseUpsert_(table, rowObj, onConflictColumn) {
+  const cfg = supabaseConfig_();
+  if (!cfg) return false;
+  try {
+    const url = cfg.url + '/rest/v1/' + table +
+      (onConflictColumn ? ('?on_conflict=' + encodeURIComponent(onConflictColumn)) : '');
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        apikey: cfg.key,
+        Authorization: 'Bearer ' + cfg.key,
+        Prefer: 'resolution=merge-duplicates,return=minimal'
+      },
+      payload: JSON.stringify([rowObj]),
+      muteHttpExceptions: true,
+      followRedirects: true
+    });
+    const code = res.getResponseCode();
+    if (code < 200 || code >= 300) {
+      console.error('[supabase] upsert ' + table + ' returned ' + code + ': ' + res.getContentText().slice(0, 300));
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error('[supabase] upsert ' + table + ' failed: ' + e);
+    return false;
+  }
+}
+
+/** The five-grade ladder the pricing engine uses. */
+const BOOK_CONDITION_GRADES = ['AS_NEW', 'VERY_GOOD', 'GOOD', 'FAIR', 'POOR'];
+
+/**
+ * Maps a listing's condition onto a pricing grade.
+ *
+ * The app shipped with three grades — "Like New", "Good", "Fair" — and
+ * there are live listings carrying them. The ladder needs five. Rather than
+ * migrate old rows (and risk repricing books people already listed), the
+ * old values map forward and the two new grades are simply additional
+ * choices. An unrecognised value lands on GOOD, the middle rung, because
+ * failing toward the middle is the smallest error available.
+ */
+function normalizeConditionGrade(raw) {
+  const v = String(raw || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  if (BOOK_CONDITION_GRADES.indexOf(v) !== -1) return v;
+  if (v === 'LIKE_NEW' || v === 'NEW') return 'AS_NEW';
+  if (v === 'VERYGOOD') return 'VERY_GOOD';
+  if (v === 'WORN' || v === 'POOR_WORN') return 'POOR';
+  if (v === 'GOOD') return 'GOOD';
+  if (v === 'FAIR') return 'FAIR';
+  return 'GOOD';
+}
+
+/**
+ * Condition-tiered security-deposit percentage. Replaces the old flat 60%
+ * everywhere a deposit/security-fee is a percentage of a resolved book
+ * value — SWAP, RENT, LEND and SELL alike, uniformly (see depositFor(),
+ * computeMutualDeposit() and resolveListingPricing()'s SHEET_FALLBACK and
+ * GEMINI_ESTIMATED branches, which are the only places this is read).
+ *
+ * Bucket mapping, against this file's actual five-grade ladder
+ * (BOOK_CONDITION_GRADES, above):
+ *   New / Like New     -> AS_NEW                          -> 60%
+ *   Mid / Good / Fair   -> VERY_GOOD, GOOD, FAIR            -> 55%
+ *   Poor / Damaged      -> POOR                             -> 50%
+ *
+ * VERY_GOOD, GOOD and FAIR all land in "Mid" rather than splitting VERY_GOOD
+ * toward New: this file's own condition_price_ladder-equivalent language
+ * ("read once or twice, no marks" for VERY_GOOD) still describes a used
+ * book, not an unopened one, so it belongs with the other used grades
+ * instead of inheriting the new-book rate.
+ */
+// Oct 2026: flattened to 65% for every grade (owner's decision). Kept as a
+// table so a future per-condition rate is a one-line change again.
+const CONDITION_DEPOSIT_RATES = {
+  AS_NEW: 0.65,
+  VERY_GOOD: 0.65,
+  GOOD: 0.65,
+  FAIR: 0.65,
+  POOR: 0.65
+};
+
+/** The condition-tiered deposit rate for a raw (un-normalised) condition value. */
+function depositRateForCondition(rawCondition) {
+  const grade = normalizeConditionGrade(rawCondition);
+  return CONDITION_DEPOSIT_RATES[grade] || DEPOSIT_RATE;
+}
+
+/** Maps the app's format/edition pair onto the catalogue's enums. */
+function catalogueFormat_(format, isbnFormatHint) {
+  const v = String(format || '').toUpperCase();
+  if (v === 'HARDCOVER') return 'HARDCOVER';
+  if (v === 'MASS_MARKET' || v === 'MASS_MARKET_PAPERBACK') return 'MASS_MARKET_PAPERBACK';
+  if (v === 'PAPERBACK' || v === 'TRADE_PAPERBACK') return 'TRADE_PAPERBACK';
+  return String(isbnFormatHint || 'UNKNOWN').toUpperCase();
+}
+
+function catalogueTier_(edition) {
+  const v = String(edition || '').toUpperCase();
+  if (v === 'PUBLISHER' || v === 'ORIGINAL') return 'PUBLISHER';
+  if (v === 'REPRINT' || v === 'INDIAN_REPRINT') return 'INDIAN_REPRINT';
+  if (v === 'IMPORT') return 'IMPORT';
+  if (v === 'UNOFFICIAL' || v === 'PIRATED') return 'UNOFFICIAL';
+  return 'NOT_SURE';
+}
+
+/**
+ * The authoritative price decision for one listing.
+ *
+ * Returns { ok, sellPrice, allowedMin, allowedMax, referencePrice, deposit,
+ *           methodology, confidence, source, message, error }.
+ *
+ * `source` is 'SUPABASE' when the catalogue answered and 'SHEET_FALLBACK'
+ * when it did not, so a listing priced during an outage is identifiable.
+ */
+function resolveListingPricing(data, listingId) {
+  const format = catalogueFormat_(data.bookFormat || data.format);
+  const tier = catalogueTier_(data.bookEdition || data.edition || data.copyType);
+  const condition = normalizeConditionGrade(data.condition);
+  const isbn = normalizeIsbnServer(data.isbn);
+
+  // An unauthorised copy is refused a price before anything else happens.
+  if (tier === 'UNOFFICIAL') {
+    if (data.sellPrice != null && Number(data.sellPrice) > 0) {
+      return {
+        ok: false, error: 'UNOFFICIAL_NOT_SALEABLE',
+        message: 'An unofficial copy cannot be sold or rented on SwapSutra. You can still swap or lend it.'
+      };
+    }
+    return {
+      ok: true, priceable: false, source: 'POLICY',
+      format: format, tier: tier, condition: condition,
+      message: 'Unofficial copies are not priced. They can still be swapped or lent.'
+    };
+  }
+
+  if (isbn && supabaseConfig_()) {
+    const out = supabaseRpc_('validate_and_record_listing', {
+      p_listing_id: String(listingId || ''),
+      p_owner_email: normalizeEmail(data.email || data.ownerEmail),
+      p_isbn13: isbn.length === 13 ? isbn : null,
+      p_format: format,
+      p_tier: tier,
+      p_condition: condition,
+      p_sell_price: data.sellPrice != null ? Number(data.sellPrice) : null,
+      p_mrp_claim: data.mrp != null ? Number(data.mrp) : null,
+      p_mrp_proof: data.mrpProofUrl || null
+    });
+
+    if (out && out.ok === true) {
+      return {
+        ok: true, priceable: out.priceable !== false, source: 'SUPABASE',
+        format: format, tier: tier, condition: condition,
+        sellPrice: out.sell_price, allowedMin: out.allowed_min, allowedMax: out.allowed_max,
+        referencePrice: out.reference_price, deposit: out.deposit,
+        methodology: out.methodology, confidence: out.confidence
+      };
+    }
+    // A definite POLICY refusal from the catalogue is authoritative — the
+    // book WAS found and its price band says no (out of range, etc.) — and
+    // must be returned as-is, never masked by a second opinion from Gemini.
+    // "We don't have this book/enough data at all" is a different thing:
+    // that falls through to Gemini and then the sheet, same as an
+    // unreachable service always has.
+    if (out && out.ok === false) {
+      const noDataErrors = { BOOK_NOT_FOUND: true, INSUFFICIENT_DATA: true };
+      if (!noDataErrors[out.error]) {
+        return {
+          ok: false, error: out.error || 'PRICE_REJECTED',
+          message: out.message || 'That price is outside the allowed range for this book.',
+          allowedMin: out.allowed_min, allowedMax: out.allowed_max, suggested: out.suggested
+        };
+      }
+      // else: no catalogue data for this edition — fall through below.
+    }
+  }
+
+  // ── Tier 2: Gemini-estimated pricing ──────────────────────────────────
+  // Reached only when Supabase was unreachable/unconfigured, or answered
+  // with "we don't have this book" rather than a price refusal. Cleanly
+  // skips (falls through to the sheet) on ANY failure — missing API key,
+  // network error, malformed reply, or a reply that fails validation. See
+  // estimatePriceWithGemini for the full contract.
+  const geminiEstimate = estimatePriceWithGemini({
+    isbn: isbn, title: data.title, author: data.author,
+    format: format, tier: tier, condition: condition,
+    listingId: listingId, ownerEmail: data.email || data.ownerEmail
+  });
+  if (geminiEstimate && geminiEstimate.ok) {
+    return {
+      ok: true, priceable: true, source: 'GEMINI_ESTIMATED',
+      format: format, tier: tier, condition: condition,
+      sellPrice: data.sellPrice != null ? Number(data.sellPrice) : null,
+      referencePrice: geminiEstimate.referencePrice,
+      lowEstimate: geminiEstimate.lowEstimate,
+      highEstimate: geminiEstimate.highEstimate,
+      deposit: depositFor(geminiEstimate.referencePrice, condition),
+      methodology: 'GEMINI_ESTIMATED', confidence: geminiEstimate.confidenceScore,
+      geminiReasoning: geminiEstimate.reasoning
+    };
+  }
+
+  // ── Fallback: the sheet engine. Produces a value, not a band. ────────
+  const sheetPrice = resolveBookPrice({
+    isbn: data.isbn,
+    genre: normalizeBookGenre(data.genre),
+    format: format === 'HARDCOVER' ? 'HARDCOVER' : 'PAPERBACK',
+    edition: tier === 'PUBLISHER' ? 'PUBLISHER' : (tier === 'INDIAN_REPRINT' ? 'REPRINT' : 'NOT_SURE')
+  });
+  return {
+    ok: true, priceable: sheetPrice.amount > 0, source: 'SHEET_FALLBACK',
+    format: format, tier: tier, condition: condition,
+    sellPrice: null, referencePrice: sheetPrice.amount,
+    deposit: sheetPrice.amount > 0 ? depositFor(sheetPrice.amount, condition) : 0,
+    methodology: 'SHEET_FALLBACK', confidence: 0.3
+  };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   GEMINI-ESTIMATED PRICING — the tier between the Supabase catalogue and
+   the Sheet fallback
+   ────────────────────────────────────────────────────────────────────────
+   The Supabase catalogue only knows an edition once it has been bulk-
+   ingested from an Open Library dump (see pricing/README.md's "Load Open
+   Library" section) or has accumulated real observations through
+   validate_and_record_listing. Most real ISBNs a reader actually scans are
+   simply not in it yet, which is a "no data" answer, not a "we priced it
+   and this is wrong" answer — and it used to fall straight through to the
+   already-documented-unreliable Sheet/BookPrices estimator. This tier asks
+   Gemini for a realistic market-price RANGE for the exact edition +
+   condition instead, so a book missing from the catalogue still gets an
+   informed number rather than a genre-average guess.
+
+   Every response is validated server-side (validateGeminiPriceEstimate,
+   pure — see test-gemini-pricing.cjs) before it can reach a reference
+   price, and any failure anywhere in this path — no API key, a network
+   error, malformed JSON, a response that fails validation — returns
+   { ok: false } and the caller falls through to the Sheet estimator
+   exactly as if this tier were absent. Listing a book must never fail, and
+   an ungoverned LLM number must never reach a deposit calculation.
+   ════════════════════════════════════════════════════════════════════════ */
+
+// Same model family/convention server.ts's Quill feature already uses for
+// Gemini (see getGeminiClient there) — kept consistent rather than
+// introducing a second model choice into the codebase.
+const GEMINI_MODEL_ID = 'gemini-3.5-flash';
+
+// Same ceiling validateUserEnteredMRP already applies to a reader-typed
+// MRP, reused here rather than inventing a separate number: it comfortably
+// covers ordinary Indian retail books while catching an obviously broken
+// estimate before it can inflate anyone's deposit.
+const GEMINI_PRICE_CEILING = USER_ENTERED_MRP_MAX;
+
+function geminiApiKey_() {
+  try {
+    return String(PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '').trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * Pure validation of a parsed Gemini price-estimate response. No network
+ * call and no Apps Script global — exercised directly by a standalone Node
+ * test, the same pattern as validateUserEnteredMRP.
+ *
+ * Rejects rather than clamps, for the same reason validateUserEnteredMRP
+ * does: this number is about to become another reader's deposit basis.
+ *
+ *   - the response itself must be a non-null object (rejects an empty/
+ *     malformed reply)
+ *   - lowEstimate/highEstimate must both be present, numeric and finite
+ *   - both must be strictly positive
+ *   - highEstimate must be >= lowEstimate (rejects an inverted/nonsense range)
+ *   - both must be at or under `ceiling` (defaults to 50000, matching
+ *     GEMINI_PRICE_CEILING/USER_ENTERED_MRP_MAX)
+ *
+ * On success, returns the validated numbers plus a single referencePrice —
+ * the midpoint of the range. Midpoint is chosen over, say, weighting toward
+ * the low end: Gemini's low/high already encode its own uncertainty, and a
+ * midpoint is the simplest, least-opinionated way to collapse a range into
+ * one number without asserting SwapSutra has a reason to favour either
+ * extreme.
+ */
+function validateGeminiPriceEstimate(raw, ceiling) {
+  const max = (typeof ceiling === 'number' && isFinite(ceiling) && ceiling > 0) ? ceiling : 50000;
+  if (!raw || typeof raw !== 'object') {
+    return { valid: false, error: 'EMPTY_RESPONSE' };
+  }
+  const low = Number(raw.lowEstimate);
+  const high = Number(raw.highEstimate);
+  if (!isFinite(low) || !isFinite(high)) {
+    return { valid: false, error: 'NOT_NUMERIC' };
+  }
+  if (low <= 0 || high <= 0) {
+    return { valid: false, error: 'NOT_POSITIVE' };
+  }
+  if (high < low) {
+    return { valid: false, error: 'RANGE_INVERTED' };
+  }
+  if (low > max || high > max) {
+    return { valid: false, error: 'OVER_CEILING' };
+  }
+  const confidenceRaw = String(raw.confidence || '').trim().toLowerCase();
+  const confidence = ['high', 'medium', 'low'].indexOf(confidenceRaw) !== -1 ? confidenceRaw : 'low';
+  return {
+    valid: true,
+    lowEstimate: Math.round(low),
+    highEstimate: Math.round(high),
+    referencePrice: Math.round((low + high) / 2),
+    confidence: confidence,
+    reasoning: String(raw.reasoning || '').slice(0, 500)
+  };
+}
+
+/**
+ * Tier-2 pricing: ask Gemini for a realistic INR second-hand market price
+ * range for this exact edition + condition. Returns { ok: true,
+ * referencePrice, lowEstimate, highEstimate, confidence, confidenceScore,
+ * reasoning } on success, or { ok: false, reason } on ANY failure — never
+ * throws, so a caller can call this unconditionally and just check `.ok`.
+ */
+function estimatePriceWithGemini(opts) {
+  const apiKey = geminiApiKey_();
+  if (!apiKey) return { ok: false, reason: 'NOT_CONFIGURED' };
+
+  const isbn = opts.isbn || '';
+  const title = String(opts.title || '').trim();
+  const author = String(opts.author || '').trim();
+  const format = String(opts.format || 'UNKNOWN');
+  const tier = String(opts.tier || 'NOT_SURE');
+  const condition = String(opts.condition || 'GOOD');
+
+  // Nothing to price "a book" from without at least an ISBN or a title.
+  if (!isbn && !title) return { ok: false, reason: 'NO_IDENTIFYING_INFO' };
+
+  const prompt = [
+    'You price used/second-hand books for an Indian book-swap marketplace.',
+    'Book: ' + (title || '(title unknown)') + (author ? (' by ' + author) : ''),
+    'ISBN-13: ' + (isbn || 'unknown'),
+    'Format: ' + format,
+    'Edition/tier: ' + tier + ' (PUBLISHER = original publisher edition, ' +
+      'INDIAN_REPRINT = licensed Indian/South Asia reprint or student edition, ' +
+      'IMPORT = imported copy, NOT_SURE = unknown)',
+    'Condition grade: ' + condition + ' (AS_NEW = indistinguishable from new, ' +
+      'VERY_GOOD = read once or twice, no marks, GOOD = normal shelf wear, fully intact, ' +
+      'FAIR = heavy wear or highlighting but intact and readable, ' +
+      'POOR = damaged, usually give-away rather than sale)',
+    '',
+    'Give the realistic INR price RANGE this specific edition, in this specific ' +
+      'condition, would sell for second-hand in the Indian market today — the ' +
+      'lowest and highest price a buyer would plausibly pay. Base it on your ' +
+      'knowledge of this book\'s printed MRP, its edition/reprint situation, and ' +
+      'how used-book condition affects price. If you do not recognise this exact ' +
+      'ISBN, estimate from the title/author/format instead and say so in your reasoning.',
+    'Respond with ONLY the JSON object described by the schema — no other text.'
+  ].join('\n');
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'OBJECT',
+        properties: {
+          lowEstimate: { type: 'NUMBER' },
+          highEstimate: { type: 'NUMBER' },
+          confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] },
+          reasoning: { type: 'STRING' }
+        },
+        required: ['lowEstimate', 'highEstimate', 'confidence', 'reasoning']
+      }
+    }
+  };
+
+  let body;
+  try {
+    const res = UrlFetchApp.fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL_ID + ':generateContent',
+      {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'x-goog-api-key': apiKey },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true,
+        followRedirects: true
+      });
+    const code = res.getResponseCode();
+    if (code < 200 || code >= 300) {
+      console.error('[gemini-pricing] ' + code + ': ' + res.getContentText().slice(0, 300));
+      return { ok: false, reason: 'HTTP_' + code };
+    }
+    body = JSON.parse(res.getContentText() || '{}');
+  } catch (e) {
+    console.error('[gemini-pricing] request failed: ' + e);
+    return { ok: false, reason: 'NETWORK_ERROR' };
+  }
+
+  let text;
+  try {
+    text = body.candidates[0].content.parts[0].text;
+  } catch (e) {
+    return { ok: false, reason: 'MALFORMED_RESPONSE' };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return { ok: false, reason: 'NOT_JSON' };
+  }
+
+  const validated = validateGeminiPriceEstimate(parsed, GEMINI_PRICE_CEILING);
+  if (!validated.valid) {
+    console.error('[gemini-pricing] validation failed: ' + validated.error);
+    return { ok: false, reason: validated.error };
+  }
+
+  const confidenceScore = validated.confidence === 'high' ? 0.55
+    : (validated.confidence === 'medium' ? 0.4 : 0.25);
+
+  // Best-effort persistence — a failed write here never fails the estimate
+  // itself. The reader listing right now still gets Gemini's number; only
+  // the audit trail is at risk, and storeGeminiPriceEstimate_ has its own
+  // fallback for that.
+  try {
+    storeGeminiPriceEstimate_(opts, validated, confidenceScore);
+  } catch (e) {
+    console.error('[gemini-pricing] store failed: ' + e);
+  }
+
+  return {
+    ok: true,
+    referencePrice: validated.referencePrice,
+    lowEstimate: validated.lowEstimate,
+    highEstimate: validated.highEstimate,
+    confidence: validated.confidence,
+    confidenceScore: confidenceScore,
+    reasoning: validated.reasoning
+  };
+}
+
+/**
+ * Persists a validated Gemini estimate. Supabase (listing_prices — the same
+ * table validate_and_record_listing writes) is the primary store, per the
+ * owner's stated preference; a Sheets-side cache is used ONLY when that
+ * write does not succeed — Supabase unreachable, not configured, or (most
+ * likely on a project that has not yet run
+ * pricing/sql/008_gemini_estimated_methodology.sql) the GEMINI_ESTIMATED
+ * methodology value not yet existing in the boundary_method enum — so an
+ * estimate already shown to a reader is never simply lost.
+ */
+function storeGeminiPriceEstimate_(opts, validated, confidenceScore) {
+  const listingId = String(opts.listingId || '');
+  const ownerEmail = normalizeEmail(opts.ownerEmail || '');
+  if (!listingId || !ownerEmail) return; // nothing to key the row on
+
+  const isbn13 = (opts.isbn && String(opts.isbn).length === 13) ? String(opts.isbn) : null;
+  const depositAmount = depositFor(validated.referencePrice, opts.condition);
+  const row = {
+    listing_id: listingId,
+    isbn13: isbn13,
+    owner_email: ownerEmail,
+    format: opts.format,
+    edition_tier: opts.tier,
+    condition: opts.condition,
+    reference_price: validated.referencePrice,
+    deposit_amount: depositAmount,
+    methodology: 'GEMINI_ESTIMATED',
+    confidence: confidenceScore
+  };
+
+  if (supabaseConfig_() && supabaseUpsert_('listing_prices', row, 'listing_id')) {
+    return;
+  }
+
+  // Fallback cache — same getOrCreateSheet/ensureSheetHeaders pattern used
+  // by every other sheet in this file.
+  try {
+    const headers = ['listingId', 'isbn13', 'ownerEmail', 'format', 'tier', 'condition',
+      'lowEstimate', 'highEstimate', 'referencePrice', 'depositAmount',
+      'confidence', 'reasoning', 'createdAt'];
+    const sheet = getOrCreateSheet('GeminiPriceEstimates', headers);
+    ensureSheetHeaders(sheet, headers);
+    sheet.appendRow([
+      listingId, isbn13 || '', ownerEmail, opts.format, opts.tier, opts.condition,
+      validated.lowEstimate, validated.highEstimate, validated.referencePrice, depositAmount,
+      validated.confidence, validated.reasoning, new Date()
+    ]);
+  } catch (e) {
+    console.error('[gemini-pricing] sheet fallback failed: ' + e);
+  }
+}
+
+/** ISBN -> book, for the listing form. Catalogue first, then Open Library. */
+function catalogueLookup(data) {
+  const isbn = normalizeIsbnServer(data && data.isbn);
+  if (!isValidIsbnServer(isbn)) {
+    return { success: false, error: 'INVALID_ISBN',
+             message: "That doesn't look like a valid ISBN. Please scan again or check the number." };
+  }
+  const cfg = supabaseConfig_();
+  if (!cfg) {
+    return { success: false, error: 'NOT_CONFIGURED',
+             message: 'The book catalogue is not configured yet.' };
+  }
+  const quote = supabaseRpc_('price_quote', {
+    p_isbn13: isbn, p_format: catalogueFormat_(data.format),
+    p_tier: catalogueTier_(data.tier), p_condition: normalizeConditionGrade(data.condition)
+  });
+  if (!quote) {
+    return { success: false, error: 'LOOKUP_UNAVAILABLE',
+             message: 'We could not reach the catalogue just now. You can still enter the details yourself.' };
+  }
+  return Object.assign({ success: true }, quote);
+}
+
+/**
+ * The reference price the catalogue recorded for a listing, or 0.
+ *
+ * Read from listing_prices, which is where validate_and_record_listing
+ * stored it at listing time — so the deposit a counterparty is asked for is
+ * derived from the same number the owner was shown, not from a fresh
+ * computation that might have moved since.
+ */
+function catalogueReferencePrice_(book) {
+  if (!book || !book.id) return 0;
+  const cfg = supabaseConfig_();
+  if (!cfg) return 0;
+  try {
+    const res = UrlFetchApp.fetch(
+      cfg.url + '/rest/v1/listing_prices?listing_id=eq.' +
+      encodeURIComponent(String(book.id)) + '&select=reference_price&limit=1',
+      {
+        method: 'get',
+        headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key },
+        muteHttpExceptions: true
+      });
+    if (res.getResponseCode() !== 200) return 0;
+    const rows = JSON.parse(res.getContentText() || '[]');
+    return rows.length ? Number(rows[0].reference_price || 0) : 0;
+  } catch (e) {
+    console.error('[supabase] listing price read failed: ' + e);
+    return 0;
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   MASTER SWAPSUTRA TRANSACTION STATE MACHINE
+   ────────────────────────────────────────────────────────────────────────
+   The authoritative, server-side, sequential state machine for every
+   circulation — permanent (SELL / one-way, and permanent SWAP) and
+   temporary (RENT, LEND, temporary SWAP).
+
+   THE RULE THIS FILE EXISTS TO ENFORCE
+   The frontend never decides a stage is complete. Every "next stage
+   unlocked?" question is answered by getSwapStage(), computed fresh from
+   two append-only/mutable-but-audited sheets plus the existing
+   SwapRequests/Chats/SwapDisputes sheets — never from a single mutable
+   "currentStage" field, and never from anything the client sent.
+
+   SHEETS
+     SecurityFeePayments  — one row per required payer per swap (mutable,
+                             admin-approval workflow — same shape as the
+                             existing Subscriptions/approveSubscription
+                             pattern).
+     SwapStageEvents      — append-only. Every upload/confirm/decision is
+                             one row. Never updated, never deleted. Stage
+                             completion is always DERIVED by scanning this
+                             sheet, never stored.
+
+   PARTY-COUNT PARAMETERIZATION
+   Only the security-fee stage has a variable number of payers: SWAP has
+   two (requester + owner, each depositing against the book they are about
+   to hold); RENT/LEND/SELL have one (the requester only — see
+   computeMutualDeposit's own comment on why a LEND has nothing for the
+   owner to deposit against). securityFeeRequirements() is the one place
+   that decides this; every other stage (handover/logistics/receipt/
+   return) always requires BOTH real parties (owner + requester), because
+   a physical book always changes hands between exactly two people
+   regardless of service type.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const SECURITY_FEE_SHEET = 'SecurityFeePayments';
+const SECURITY_FEE_HEADERS = [
+  'id', 'swapId', 'payerRole', 'payerEmail', 'requiredAmount',
+  'utr', 'screenshotUrl', 'paymentStatus', 'adminStatus',
+  'submittedAt', 'approvedBy', 'approvedAt', 'rejectedReason',
+  'createdAt', 'updatedAt',
+  // Oct 2026: the QR amount is deposit + platform fee; the two are kept
+  // apart so a refund only ever returns the deposit.
+  'depositAmount', 'platformFee',
+  // Oct 2026: on a sale, the book's price the buyer pays SwapSutra (held
+  // until they confirm receipt, then paid to the seller).
+  'saleAmount', 'shippingAmount'
+];
+
+const STAGE_EVENTS_SHEET = 'SwapStageEvents';
+const STAGE_EVENTS_HEADERS = [
+  'id', 'swapId', 'stage', 'party', 'actionType', 'actorEmail',
+  'evidenceUrl', 'note', 'createdAt'
+];
+
+// SwapSutra's own UPI handle — the same one already hardcoded in the
+// existing subscription and swap-deposit QR flows. Not duplicated logic,
+// just the same constant reused server-side so the amount that goes into
+// the QR string is always the server-calculated figure.
+const SWAPSM_UPI_VPA = '7534845373-3@ybl';
+const SWAPSM_UPI_PAYEE = 'Unnati Goyal';
+
+const RETURN_WINDOW_DAYS = 21;
+
+const SWAPSM_STAGE_ORDER = [
+  'ACCEPTANCE', 'SECURITY_FEE', 'HANDOVER', 'LOGISTICS', 'RECEIPT',
+  'POSSESSION', 'RETURN', 'FINAL_CONDITION', 'OUTCOME', 'COMPLETED'
+];
+
+const SWAPSM_CONFIRM_STAGES = { HANDOVER: true, LOGISTICS: true, RECEIPT: true, RETURN: true, FINAL_CONDITION: true };
+
+function getSecurityFeeSheet() {
+  const sheet = getOrCreateSheet(SECURITY_FEE_SHEET, SECURITY_FEE_HEADERS);
+  ensureSheetHeaders(sheet, SECURITY_FEE_HEADERS);
+  return sheet;
+}
+
+function getStageEventsSheet() {
+  const sheet = getOrCreateSheet(STAGE_EVENTS_SHEET, STAGE_EVENTS_HEADERS);
+  ensureSheetHeaders(sheet, STAGE_EVENTS_HEADERS);
+  return sheet;
+}
+
+/** 'requester' | 'owner' | '' — never trusts a client-supplied role. */
+function swapPartyRole(swap, email) {
+  const n = normalizeEmail(email);
+  if (!n) return '';
+  if (n === swap.requesterEmail) return 'requester';
+  if (n === swap.ownerEmail) return 'owner';
+  return '';
+}
+
+/**
+ * Who owes a security fee on this swap, and how much — computed only from
+ * numbers createSwapRequest already resolved on the server
+ * (computeMutualDeposit / resolveBookPrice), never from anything in the
+ * request payload. This is the ONE place party-count is decided:
+ * SWAP = up to 2 payers, RENT/LEND/SELL = 1 payer (requester only).
+ */
+function securityFeeRequirements(swap) {
+  // Deposit (where one applies) plus the platform fee, for BOTH readers.
+  // See computeExchangePayments_ in the platform-fee section.
+  return computeExchangePayments_(swap);
+}
+
+/** Is this a temporary circulation that must come back? */
+function swapNeedsReturn(swap) {
+  const serviceType = String(swap.obj.serviceType || 'SWAP').trim().toUpperCase();
+  if (serviceType === 'RENT' || serviceType === 'LEND') return true;
+  if (serviceType === 'SWAP') {
+    return String(swap.obj.swapPreference || '').trim().toLowerCase() === 'temporary';
+  }
+  return false; // SELL, permanent SWAP
+}
+
+function loadSecurityFeeRows(swapId) {
+  const sheet = getSecurityFeeSheet();
+  const headers = ensureSheetHeaders(sheet, SECURITY_FEE_HEADERS);
+  const values = sheet.getDataRange().getValues();
+  const swapIdx = headers.indexOf('swapId');
+  const rows = [];
+  for (let r = 1; r < values.length; r++) {
+    if (String(values[r][swapIdx]) !== String(swapId)) continue;
+    rows.push({ rowIndex: r, obj: rowToObject(headers, values[r]) });
+  }
+  return { sheet, headers, rows };
+}
+
+/**
+ * Idempotently creates a SecurityFeePayments row for every required payer
+ * on this swap that does not have one yet, in state NOT_SUBMITTED. This is
+ * the mechanism behind the required retroactive migration: an
+ * already-accepted swap from before this feature existed has zero rows
+ * here, so the very first read creates them as NOT_SUBMITTED / unapproved
+ * — locking its chat exactly like a brand-new swap, with no grandfathering.
+ */
+function ensureSecurityFeeRecords(swap) {
+  if (!isEscrowSaleOrder_(swap.obj) && !swap.obj.orderCheckout) return ensureSecurityFeeRecordsUnlocked_(swap);
+  return withSaleDepositLock_(() => {
+    const current = loadSwapForCirculation(swap.obj.id);
+    if (!current) throw new Error('Purchase could not be found.');
+    swap.obj = current.obj;
+    return ensureSecurityFeeRecordsUnlocked_(swap);
+  });
+}
+
+function ensureSecurityFeeRecordsUnlocked_(swap) {
+  if (saleDepositState_(swap.obj).pending || (orderCheckout_(swap.obj) || {}).pending) return [];
+  const swapId = swap.obj.id;
+  const required = securityFeeRequirements(swap);
+  const { sheet, headers, rows } = loadSecurityFeeRows(swapId);
+  const existingByRole = {};
+  rows.forEach(r => { existingByRole[r.obj.payerRole] = r; });
+  const now = new Date();
+  let created = false;
+  // 9 Oct 2026: rows written under an older rule (e.g. a sale made before
+  // escrow, when the seller also owed ₹10 and the buyer paid only the fee)
+  // used to keep the exchange stuck at the payment step forever. Bring them
+  // in line with the rule today — but only while nothing has been paid on
+  // them: a payment that was made is never rewritten.
+  const unpaid = st => st === 'NOT_SUBMITTED' || st === 'ADMIN_REJECTED' || !st;
+  const setRowCell = (rowIndex, name, value) => {
+    const idx = headers.indexOf(name);
+    if (idx !== -1) sheet.getRange(rowIndex + 1, idx + 1).setValue(value);
+  };
+  const requiredByRole = {};
+  required.forEach(req => { requiredByRole[req.payerRole] = req; });
+  rows.forEach(r => {
+    const req = requiredByRole[r.obj.payerRole];
+    if (!unpaid(r.obj.adminStatus)) return;
+    if (!req) {
+      // No longer owed by this reader at all.
+      setRowCell(r.rowIndex, 'adminStatus', 'NOT_REQUIRED');
+      setRowCell(r.rowIndex, 'paymentStatus', 'CANCELLED');
+      setRowCell(r.rowIndex, 'updatedAt', now);
+      created = true;
+      return;
+    }
+    const want = { requiredAmount: req.requiredAmount, depositAmount: req.depositAmount === undefined ? req.requiredAmount : req.depositAmount,
+      platformFee: req.platformFee || 0, saleAmount: req.saleAmount || 0, shippingAmount: req.shippingAmount || 0 };
+    const differs = Object.keys(want).some(k => Number(r.obj[k] || 0) !== Number(want[k] || 0));
+    if (differs) {
+      Object.keys(want).forEach(k => setRowCell(r.rowIndex, k, want[k]));
+      setRowCell(r.rowIndex, 'updatedAt', now);
+      created = true;
+    }
+  });
+  required.forEach(req => {
+    if (existingByRole[req.payerRole]) return;
+    created = true;
+    const id = generateId('SS_FEE_');
+    const row = new Array(headers.length).fill('');
+    headers.forEach((h, i) => {
+      if (h === 'id') row[i] = id;
+      else if (h === 'swapId') row[i] = swapId;
+      else if (h === 'payerRole') row[i] = req.payerRole;
+      else if (h === 'payerEmail') row[i] = req.payerEmail;
+      else if (h === 'requiredAmount') row[i] = req.requiredAmount;
+      else if (h === 'depositAmount') row[i] = req.depositAmount === undefined ? req.requiredAmount : req.depositAmount;
+      else if (h === 'platformFee') row[i] = req.platformFee || 0;
+      else if (h === 'saleAmount') row[i] = req.saleAmount || 0;
+      else if (h === 'shippingAmount') row[i] = req.shippingAmount || 0;
+      else if (h === 'paymentStatus') row[i] = 'PENDING';
+      else if (h === 'adminStatus') row[i] = 'NOT_SUBMITTED';
+      else if (h === 'createdAt') row[i] = now;
+      else if (h === 'updatedAt') row[i] = now;
+    });
+    sheet.appendRow(row);
+  });
+  const checkout = orderCheckout_(swap.obj);
+  if (checkout && checkout.collected) {
+    const payment = loadSecurityFeeRows(swapId).rows.find(r => r.obj.payerRole === 'requester');
+    if (payment && payment.obj.adminStatus !== 'ADMIN_APPROVED') {
+      const fields = { paymentStatus: 'PAID', adminStatus: 'ADMIN_APPROVED', utr: checkout.reference,
+        approvedAt: checkout.collectedAt, approvedBy: checkout.collectedBy, updatedAt: checkout.collectedAt };
+      Object.keys(fields).forEach(key => setRowCell(payment.rowIndex, key, fields[key]));
+      created = true;
+    }
+  }
+  return created ? loadSecurityFeeRows(swapId).rows.map(r => r.obj) : rows.map(r => r.obj);
+}
+
+/**
+ * Full security-fee picture for a swap: every required payer, their
+ * amount (server-calculated), and where their payment stands.
+ * `viewerEmail` controls redaction — a party sees their OWN utr/
+ * screenshot but not the counterparty's; admin sees everything.
+ */
+function securityFeeStatus(swap, viewerEmail, viewerIsAdmin) {
+  // A row that is no longer owed (see ensureSecurityFeeRecords) is not shown
+  // and never holds the exchange back.
+  const records = ensureSecurityFeeRecords(swap).filter(rec => rec.adminStatus !== 'NOT_REQUIRED');
+  const viewer = normalizeEmail(viewerEmail);
+  const estimatedByRole = {};
+  const payers = records.map(rec => {
+    const isSelf = viewerIsAdmin || normalizeEmail(rec.payerEmail) === viewer;
+    if (!(rec.payerRole in estimatedByRole)) {
+      estimatedByRole[rec.payerRole] = swapDepositEstimated_(swap.obj, rec.payerRole === 'owner' ? 'owner' : 'requester');
+    }
+    return {
+      payerRole: rec.payerRole,
+      payerEmail: rec.payerEmail,
+      requiredAmount: Number(rec.requiredAmount || 0),
+      depositAmount: feeRecordBreakdown_(rec).depositAmount,
+      platformFee: feeRecordBreakdown_(rec).platformFee,
+      saleAmount: feeRecordBreakdown_(rec).saleAmount,
+      shippingAmount: Number(rec.shippingAmount || 0),
+      estimated: estimatedByRole[rec.payerRole],
+      paymentStatus: rec.paymentStatus || 'PENDING',
+      adminStatus: rec.adminStatus || 'NOT_SUBMITTED',
+      utr: isSelf ? (rec.utr || '') : '',
+      screenshotUrl: isSelf ? (rec.screenshotUrl || '') : '',
+      submittedAt: rec.submittedAt || '',
+      approvedAt: rec.approvedAt || '',
+      // When SwapSutra last acted on it (a rejection restarts the payment clock).
+      updatedAt: rec.updatedAt || '',
+      rejectedReason: isSelf ? (rec.rejectedReason || '') : ''
+    };
+  });
+  const saleDeposit = saleDepositState_(swap.obj);
+  const checkout = orderCheckout_(swap.obj);
+  const required = saleDeposit.pending || Boolean(checkout && checkout.pending) || payers.length > 0;
+  const allApproved = !saleDeposit.pending && !(checkout && checkout.pending) && (!required || payers.every(p => p.adminStatus === 'ADMIN_APPROVED'));
+  const result = { payers, required, allApproved };
+  if (checkout) {
+    result.checkout = Object.assign({}, checkout, {
+      editable: checkoutEditable_(swap),
+      total: checkout.pending || saleDeposit.pending ? null : (computeExchangePayments_(swap).find(r => r.payerRole === 'requester') || {}).requiredAmount
+    });
+    result.readyToProceed = allApproved || (!saleDeposit.pending && !checkout.pending && checkout.codConfirmed);
+  }
+  if (saleDeposit.manual) result.saleDeposit = saleDeposit;
+  return result;
+}
+
+/**
+ * THE chat gate. Called from sendChatMessage (and exposed for the
+ * frontend to pre-check). A swap with zero required fees (e.g. a free
+ * exchange) is vacuously unlocked; otherwise every required payer must be
+ * individually ADMIN_APPROVED — not merely "paid", not merely "one of
+ * two". This is what retroactively locks every already-accepted chat with
+ * no approved-payment history, per the explicit migration decision.
+ */
+function swapChatUnlocked(swapId) {
+  try {
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return false;
+    const status = securityFeeStatus(swap, '', true);
+    return status.readyToProceed || status.allApproved;
+  } catch (err) {
+    Logger.log('swapChatUnlocked failed: ' + err.toString());
+    return false;
+  }
+}
+
+/** True while any dispute on this swap is still open — blocks all forward progress. */
+function swapHasOpenDispute(swapId) {
+  try {
+    const sheet = getDisputesSheet();
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return false;
+    const headers = values[0].map(h => String(h).trim());
+    const swapIdx = headers.indexOf('swapId');
+    const statusIdx = headers.indexOf('status');
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][swapIdx]) !== String(swapId)) continue;
+      const st = String(values[r][statusIdx] || '').trim();
+      if (st === 'Open' || st === 'Under Review') return true;
+    }
+  } catch (err) {
+    Logger.log('swapHasOpenDispute failed: ' + err.toString());
+  }
+  return false;
+}
+
+function appendStageEvent(entry) {
+  const sheet = getStageEventsSheet();
+  const headers = STAGE_EVENTS_HEADERS;
+  const id = generateId('SS_STG_');
+  const row = headers.map(h => {
+    if (h === 'id') return id;
+    if (h === 'swapId') return entry.swapId;
+    if (h === 'stage') return entry.stage;
+    if (h === 'party') return entry.party;
+    if (h === 'actionType') return entry.actionType;
+    if (h === 'actorEmail') return normalizeEmail(entry.actorEmail);
+    if (h === 'evidenceUrl') return String(entry.evidenceUrl || '');
+    if (h === 'note') return String(entry.note || '').slice(0, 400);
+    if (h === 'createdAt') return new Date();
+    return '';
+  });
+  sheet.appendRow(row);
+  return id;
+}
+
+function loadStageEvents(swapId) {
+  const sheet = getStageEventsSheet();
+  const values = sheet.getDataRange().getValues();
+  const headers = values.length ? values[0].map(h => String(h).trim()) : STAGE_EVENTS_HEADERS;
+  const swapIdx = headers.indexOf('swapId');
+  const events = [];
+  for (let r = 1; r < values.length; r++) {
+    if (String(values[r][swapIdx]) !== String(swapId)) continue;
+    events.push(rowToObject(headers, values[r]));
+  }
+  events.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  return events;
+}
+
+/**
+ * Per-party, per-stage status derived purely by scanning the append-only
+ * event log — never stored. A party's stage is "confirmed" only if THEIR
+ * OWN confirm event exists and it is not earlier than their own upload
+ * event (upload must exist first). Stage is complete only when BOTH
+ * requester and owner are confirmed. This is the entire two-party gate.
+ */
+function stagePartyStatus(events, stage) {
+  const of = (party, actionType) => events
+    .filter(e => e.stage === stage && e.party === party && e.actionType === actionType)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null;
+
+  const build = (party) => {
+    const upload = of(party, 'upload');
+    const confirm = of(party, 'confirm');
+    const confirmed = !!(confirm && upload && new Date(confirm.createdAt).getTime() >= new Date(upload.createdAt).getTime());
+    return {
+      uploaded: !!upload,
+      uploadedAt: upload ? upload.createdAt : '',
+      evidenceUrl: upload ? upload.evidenceUrl : '',
+      confirmed: confirmed,
+      confirmedAt: confirmed ? confirm.createdAt : ''
+    };
+  };
+
+  const requester = build('requester');
+  const owner = build('owner');
+  return {
+    requester: requester,
+    owner: owner,
+    complete: requester.confirmed && owner.confirmed,
+    completedAt: (requester.confirmed && owner.confirmed)
+      ? (new Date(requester.confirmedAt) > new Date(owner.confirmedAt) ? requester.confirmedAt : owner.confirmedAt)
+      : ''
+  };
+}
+
+/**
+ * Marks the whole swap Completed — the ONE place this ever happens.
+ * Reuses the existing Chats.chatStatus field, which is exactly what
+ * isSwapCompletedByChat() / rateCounterparty() / getRatingPromptStatus()
+ * already read — so those three functions keep working unmodified, now
+ * gated by the NEW state machine's own Completed stage instead of the old
+ * one-sided markHandedOver('confirm_return') path.
+ */
+function markSwapCompletedInChat(swap) {
+  try {
+    const chatSheet = getOrCreateSheet('Chats', []);
+    const values = chatSheet.getDataRange().getValues();
+    if (values.length <= 1) return;
+    const headers = values[0].map(h => String(h).trim());
+    const swapIdx = headers.indexOf('swapId');
+    const statusIdx = headers.indexOf('chatStatus');
+    if (swapIdx === -1 || statusIdx === -1) return;
+    for (let r = 1; r < values.length; r++) {
+      if (String(values[r][swapIdx]) !== String(swap.obj.id)) continue;
+      // An archived room is closed for good — never pull it back to Completed.
+      if (String(values[r][statusIdx]) !== 'Completed' && String(values[r][statusIdx]) !== 'Archived') {
+        chatSheet.getRange(r + 1, statusIdx + 1).setValue('Completed');
+      }
+    }
+  } catch (err) {
+    Logger.log('markSwapCompletedInChat failed: ' + err.toString());
+  }
+}
+
+/**
+ * THE authoritative evaluator. Single source of truth for where a swap
+ * stands. Every new action re-derives its own gating from the same
+ * primitives this function uses (securityFeeStatus, stagePartyStatus,
+ * swapHasOpenDispute) rather than trusting a client-supplied stage — this
+ * function is what the FRONTEND renders, but it is not what the backend
+ * trusts; the backend re-checks independently on every write.
+ */
+function getSwapStage(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    const swapId = String((data && data.swapId) || '').trim();
+    if (!swapId) return { success: false, message: 'Swap ID required.' };
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+
+    const isAdmin = isAuthenticatedAdmin();
+    const role = swapPartyRole(swap, caller);
+    const isParty = !!role || isAdmin;
+
+    // A non-party gets a minimal, safe payload — no evidence, no UTRs, no
+    // per-party progress, not even confirmation the swap involves anyone
+    // in particular beyond what it already legitimately returns as 404.
+    if (!isParty) {
+      return { success: true, restricted: true, swapId: swapId, message: 'You are not a party to this exchange.' };
+    }
+
+    const status = String(swap.obj.status || '').trim();
+    const accepted = status && status !== 'Pending' && status !== 'Declined' && status !== 'Cancelled';
+    const needsReturn = swapNeedsReturn(swap);
+    const fee = securityFeeStatus(swap, caller, isAdmin);
+    const disputeOpen = swapHasOpenDispute(swapId);
+    const events = loadStageEvents(swapId);
+
+    const handover = stagePartyStatus(events, 'HANDOVER');
+    const logistics = stagePartyStatus(events, 'LOGISTICS');
+    const receipt = stagePartyStatus(events, 'RECEIPT');
+
+    // Possession begins the instant handover AND receipt are both fully
+    // (two-party) confirmed — the timestamp used is the later of the two
+    // REAL confirm timestamps already recorded in the append-only event
+    // log, never a client-supplied value and never text-mined.
+    let possessionStartedAt = '';
+    if (handover.complete && receipt.complete) {
+      const h = new Date(handover.completedAt).getTime();
+      const r = new Date(receipt.completedAt).getTime();
+      possessionStartedAt = new Date(Math.max(h, r)).toISOString();
+    }
+
+    // Oct 2026 (owner's rule): 21 days is a DEADLINE, not a waiting period.
+    // The borrower can return the book any time once they have it, and must
+    // have it on its way back by the due date (21 days + any agreed
+    // extension) or the deposit is forfeited — see RETURN DEADLINES.
+    // unlockAt keeps its name for older clients but now carries the due date.
+    let returnUnlockAt = '';
+    let returnTimerElapsed = !needsReturn;
+    let returnDeadline = null;
+    if (needsReturn && possessionStartedAt) {
+      returnDeadline = returnStateForSwap_(swap);
+      returnUnlockAt = (returnDeadline && returnDeadline.dueAt)
+        || new Date(new Date(possessionStartedAt).getTime() + RETURN_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      returnTimerElapsed = true;
+    }
+
+    const returnStage = needsReturn ? stagePartyStatus(events, 'RETURN') : { requester: {}, owner: {}, complete: true, completedAt: possessionStartedAt };
+    const finalCondition = stagePartyStatus(events, 'FINAL_CONDITION');
+
+    const outcomeEvents = events.filter(e => e.stage === 'OUTCOME');
+    const outcomeEvent = outcomeEvents.length ? outcomeEvents[outcomeEvents.length - 1] : null;
+    const outcomeDecided = !!outcomeEvent && !disputeOpen;
+
+    const completed = outcomeDecided; // COMPLETED is exactly "outcome decided and no open dispute"
+    if (completed) markSwapCompletedInChat(swap);
+
+    // Prerequisite chain: each stage's "unlocked" flag is computed from
+    // the stage before it — never assumed from what the client asked for.
+    const secApproved = fee.readyToProceed || fee.allApproved;
+    const handoverUnlocked = accepted && secApproved && !disputeOpen;
+    const logisticsUnlocked = handoverUnlocked && handover.complete;
+    const receiptUnlocked = logisticsUnlocked && logistics.complete;
+    const possessionUnlocked = receiptUnlocked && receipt.complete;
+    const returnUnlocked = needsReturn ? (possessionUnlocked && returnTimerElapsed) : possessionUnlocked;
+    const finalConditionUnlocked = needsReturn ? (returnUnlocked && returnStage.complete) : (possessionUnlocked && receipt.complete);
+    const outcomeUnlocked = finalConditionUnlocked && finalCondition.complete && !disputeOpen;
+
+    let currentStage = 'ACCEPTANCE';
+    if (!accepted) currentStage = 'ACCEPTANCE';
+    else if (!secApproved) currentStage = 'SECURITY_FEE';
+    else if (!handover.complete) currentStage = 'HANDOVER';
+    else if (!logistics.complete) currentStage = 'LOGISTICS';
+    else if (!receipt.complete) currentStage = 'RECEIPT';
+    else if (needsReturn && !returnTimerElapsed) currentStage = 'POSSESSION';
+    else if (needsReturn && !returnStage.complete) currentStage = 'RETURN';
+    else if (!finalCondition.complete) currentStage = 'FINAL_CONDITION';
+    else if (!outcomeEvent) currentStage = 'OUTCOME';
+    else currentStage = 'COMPLETED';
+
+    if (disputeOpen && currentStage !== 'ACCEPTANCE' && currentStage !== 'SECURITY_FEE') {
+      currentStage = 'DISPUTED';
+    }
+
+    const stageIdx = SWAPSM_STAGE_ORDER.indexOf(currentStage);
+    const lockedStages = SWAPSM_STAGE_ORDER
+      .filter(s => SWAPSM_STAGE_ORDER.indexOf(s) > (stageIdx === -1 ? SWAPSM_STAGE_ORDER.length : stageIdx))
+      .filter(s => needsReturn || (s !== 'POSSESSION' && s !== 'RETURN'))
+      .map(s => ({ stage: s, locked: true }));
+
+    // What may THIS caller do right now — the frontend renders exactly
+    // this and nothing it computes itself.
+    const myRole = role || (isAdmin ? 'admin' : '');
+    const myFee = fee.payers.find(p => p.payerRole === myRole) || null;
+    const actions = [];
+    if (!disputeOpen) {
+      if (!(fee.checkout && fee.checkout.mode === 'COD') && myFee && myFee.adminStatus !== 'ADMIN_APPROVED' && myFee.adminStatus !== 'ADMIN_PENDING') {
+        actions.push({ type: 'submitSecurityFeePayment', stage: 'SECURITY_FEE', label: 'Pay to unlock chat' });
+      }
+      const confirmable = (stageName, unlocked, partyState) => {
+        if (!unlocked || !role) return;
+        const mine = partyState[role];
+        if (!mine.uploaded) actions.push({ type: 'uploadStageEvidence', stage: stageName, label: 'Upload evidence' });
+        else if (!mine.confirmed) actions.push({ type: 'confirmStage', stage: stageName, label: 'Confirm' });
+      };
+      confirmable('HANDOVER', handoverUnlocked, handover);
+      confirmable('LOGISTICS', logisticsUnlocked, logistics);
+      confirmable('RECEIPT', receiptUnlocked, receipt);
+      if (needsReturn) confirmable('RETURN', returnUnlocked, returnStage);
+      confirmable('FINAL_CONDITION', finalConditionUnlocked, finalCondition);
+      if (isAdmin && outcomeUnlocked && !outcomeEvent) {
+        actions.push({ type: 'adminSetSecurityFeeOutcome', stage: 'OUTCOME', label: 'Record security-fee outcome' });
+      }
+      if (isAdmin) {
+        fee.payers.forEach(p => {
+          if (p.adminStatus === 'ADMIN_PENDING') {
+            actions.push({ type: 'adminApproveSecurityFeePayment', stage: 'SECURITY_FEE', label: 'Review ' + p.payerRole + ' payment', payerRole: p.payerRole });
+          }
+        });
+      }
+    }
+
+    return {
+      success: true,
+      swapId: swapId,
+      role: myRole,
+      isAdmin: isAdmin,
+      serviceType: String(swap.obj.serviceType || 'SWAP').toUpperCase(),
+      needsReturn: needsReturn,
+      accepted: accepted,
+      disputeOpen: disputeOpen,
+      currentStage: currentStage,
+      stageStatus: completed ? 'COMPLETED' : (disputeOpen ? 'BLOCKED_BY_DISPUTE' : 'IN_PROGRESS'),
+      completed: completed,
+      chatUnlocked: secApproved,
+      securityFee: fee,
+      upi: paymentDetails_(),
+      stages: {
+        handover: Object.assign({ unlocked: handoverUnlocked }, handover),
+        logistics: Object.assign({ unlocked: logisticsUnlocked }, logistics),
+        receipt: Object.assign({ unlocked: receiptUnlocked }, receipt),
+        possession: { unlocked: possessionUnlocked, startedAt: possessionStartedAt },
+        returnStage: needsReturn ? Object.assign({ unlocked: returnUnlocked, unlockAt: returnUnlockAt, dueAt: returnUnlockAt, timerElapsed: returnTimerElapsed,
+          deadline: returnDeadline }, returnStage) : { applicable: false },
+        finalCondition: Object.assign({ unlocked: finalConditionUnlocked }, finalCondition),
+        outcome: { unlocked: outcomeUnlocked, decided: !!outcomeEvent, type: outcomeEvent ? outcomeEvent.actionType : '', note: outcomeEvent ? outcomeEvent.note : '', decidedBy: outcomeEvent ? outcomeEvent.actorEmail : '', decidedAt: outcomeEvent ? outcomeEvent.createdAt : '' }
+      },
+      lockedStages: lockedStages,
+      myPendingActions: actions,
+      history: events.map(e => ({ stage: e.stage, party: e.party, actionType: e.actionType, actorEmail: isAdmin ? e.actorEmail : (e.party === role ? e.actorEmail : ''), note: e.note, at: e.createdAt }))
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/** Read-only status action for the frontend (thin wrapper, same auth as getSwapStage). */
+function getSecurityFeeStatus(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    const swapId = String((data && data.swapId) || '').trim();
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+    if (!callerIsPartyTo(swap, caller)) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    const status = securityFeeStatus(swap, caller, isAuthenticatedAdmin());
+    return Object.assign({ success: true, swapId: swapId, upi: paymentDetails_() }, status);
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+const UTR_PATTERN = /^[A-Za-z0-9]{4,25}$/;
+
+/**
+ * A party submits evidence of their own security-fee payment. The role is
+ * derived from the verified session against the swap's own two parties —
+ * never accepted from the client. The server uses the saved order terms,
+ * including the latest admin quote for a purchase.
+ */
+function submitSecurityFeePayment(data) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to submit a payment.' };
+    const swapId = String((data && data.swapId) || '').trim();
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+
+    const role = swapPartyRole(swap, caller);
+    if (!role) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours.' };
+    // Launch check (11 Oct 2026): no payments into a request that has closed.
+    if (['expired', 'cancelled', 'declined', 'rejected'].indexOf(String(swap.obj.status || '').toLowerCase()) !== -1) {
+      return { success: false, error: 'REQUEST_CLOSED', message: 'This request has closed, so there is nothing to pay. Please do not send money for it.' };
+    }
+
+    if (isEscrowSaleOrder_(swap.obj) || swap.obj.orderCheckout) {
+      return withSaleDepositLock_(() => submitSecurityFeeEvidence_(data, caller, loadSwapForCirculation(swapId)));
+    }
+    return submitSecurityFeeEvidence_(data, caller, swap);
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+function submitSecurityFeeEvidence_(data, caller, swap) {
+  try {
+    if (!swap || ['expired', 'cancelled', 'declined', 'rejected'].includes(String(swap.obj.status || '').toLowerCase())) {
+      return { success: false, error: 'REQUEST_CLOSED', message: 'This request has closed. Please do not send money for it.' };
+    }
+    const swapId = String(swap.obj.id);
+    const role = swapPartyRole(swap, caller);
+    const checkout = orderCheckout_(swap.obj);
+    if (checkout && (checkout.pending || checkout.mode === 'COD' || data.checkoutRevision !== checkout.revision)) {
+      return { success: false, message: 'Refresh the shipping quote and select online payment before submitting payment evidence.' };
+    }
+    const quote = saleDepositState_(swap.obj);
+    if (quote.pending) {
+      return { success: false, error: 'DEPOSIT_PENDING', message: 'Wait for SwapSutra to set the security deposit before paying.' };
+    }
+    if (quote.manual && !roomSwapAccepted_(swap.obj.status)) {
+      return { success: false, error: 'NOT_ACCEPTED', message: 'Wait for the purchase request to be accepted before paying.' };
+    }
+    if (quote.manual && data.depositQuotedAt && data.depositQuotedAt !== quote.quotedAt) {
+      return { success: false, error: 'DEPOSIT_CHANGED', message: 'The security deposit changed. Refresh the exchange room and check the new amount.' };
+    }
+    ensureSecurityFeeRecordsUnlocked_(swap);
+    const { sheet, headers, rows } = loadSecurityFeeRows(swapId);
+    const mine = rows.find(r => r.obj.payerRole === role);
+    if (!mine) return { success: false, message: 'No security fee is required from you on this exchange.' };
+    if (mine.obj.adminStatus === 'ADMIN_APPROVED') {
+      return { success: false, message: 'This payment is already approved.' };
+    }
+
+    const utr = String((data && data.utr) || '').trim();
+    if (!UTR_PATTERN.test(utr)) {
+      return { success: false, message: 'Enter a valid UTR / transaction reference number.' };
+    }
+
+    let screenshotUrl = String((data && data.screenshotUrl) || '').trim();
+    if (data && data.fileData) {
+      const uploaded = saveFileToDrive(data.fileData, data.fileName || 'security_fee_payment.jpg');
+      if (!uploaded) return { success: false, message: 'That payment screenshot could not be saved. Please try a JPG or PNG under 10MB.' };
+      screenshotUrl = uploaded;
+    }
+    if (!screenshotUrl) {
+      return { success: false, message: 'Attach a screenshot of the payment.' };
+    }
+
+    const now = new Date();
+    const setCell = (name, value) => {
+      const idx = headers.indexOf(name);
+      if (idx !== -1) sheet.getRange(mine.rowIndex + 1, idx + 1).setValue(value);
+    };
+    setCell('utr', utr);
+    setCell('screenshotUrl', screenshotUrl);
+    setCell('paymentStatus', 'SUBMITTED');
+    setCell('adminStatus', 'ADMIN_PENDING');
+    setCell('submittedAt', now);
+    setCell('updatedAt', now);
+    setCell('rejectedReason', '');
+
+    appendStageEvent({ swapId: swapId, stage: 'SECURITY_FEE', party: role, actionType: 'submit_payment', actorEmail: caller, evidenceUrl: screenshotUrl, note: 'UTR ' + utr });
+
+    createNotification(
+      'swapsutra@gmail.com',
+      'security_fee_submitted',
+      'Security fee payment awaiting approval',
+      `${caller} submitted a security fee payment (₹${mine.obj.requiredAmount}) on swap ${swapId}. Please review.`,
+      swapId,
+      { link: '/management' }
+    );
+
+    return { success: true, message: 'Payment submitted. SwapSutra will verify and approve it shortly.' };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * Admin-only. Approves or rejects exactly one payer's submission. Admin
+ * status comes only from the verified session (isAuthenticatedAdmin()) —
+ * never from a client-supplied flag or email.
+ */
+function adminApproveSecurityFeePayment(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  try {
+    const swapId = String((data && data.swapId) || '').trim();
+    const payerRole = String((data && data.payerRole) || '').trim();
+    const decisionKey = String((data && data.decision) || 'APPROVE').trim().toUpperCase();
+    const decision = decisionKey === 'REJECT' ? 'REJECT' : 'APPROVE';
+    const reason = String((data && data.reason) || '').trim().slice(0, 500);
+
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+
+    const { sheet, headers, rows } = loadSecurityFeeRows(swapId);
+    const row = rows.find(r => r.obj.payerRole === payerRole);
+    if (!row) return { success: false, message: 'No such security-fee record.' };
+    if (row.obj.paymentStatus !== 'SUBMITTED') {
+      return { success: false, message: 'This payer has not submitted evidence yet — nothing to approve.' };
+    }
+    if (decision === 'APPROVE' && ['expired', 'cancelled', 'declined', 'rejected'].indexOf(String(swap.obj.status || '').toLowerCase()) !== -1) {
+      return { success: false, error: 'REQUEST_CLOSED', message: 'This request has already closed. Reject this payment and refund it to the reader (Admin → Payouts) instead of approving it.' };
+    }
+
+    const admin = normalizeEmail(getAuthenticatedEmail());
+    const now = new Date();
+    const setCell = (name, value) => {
+      const idx = headers.indexOf(name);
+      if (idx !== -1) sheet.getRange(row.rowIndex + 1, idx + 1).setValue(value);
+    };
+    if (decision === 'APPROVE') {
+      setCell('adminStatus', 'ADMIN_APPROVED');
+      setCell('approvedBy', admin);
+      setCell('approvedAt', now);
+      setCell('rejectedReason', '');
+    } else {
+      setCell('adminStatus', 'ADMIN_REJECTED');
+      setCell('rejectedReason', reason);
+    }
+    setCell('updatedAt', now);
+
+    appendStageEvent({ swapId: swapId, stage: 'SECURITY_FEE', party: payerRole, actionType: decision === 'APPROVE' ? 'admin_approve' : 'admin_reject', actorEmail: admin, note: reason });
+
+    const payerEmail = row.obj.payerEmail;
+    if (payerEmail) {
+      createNotification(
+        payerEmail,
+        'security_fee_' + decision.toLowerCase(),
+        decision === 'APPROVE' ? 'Your security fee payment was approved' : 'Your security fee payment needs attention',
+        decision === 'APPROVE'
+          ? `Your payment of ₹${row.obj.requiredAmount} for exchange ${swapId} is approved.`
+          : `Your payment for exchange ${swapId} was not approved${reason ? ': ' + reason : ''}. Please resubmit.`,
+        swapId,
+        { link: '/profile', dedupeKey: 'fee_' + decision.toLowerCase() + '_' + row.obj.id }
+      );
+    }
+
+    return { success: true, message: decision === 'APPROVE' ? 'Payment approved.' : 'Payment rejected.' };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * Admin-only. The backlog queue: every accepted, not-yet-fully-approved
+ * swap, so the admin can clear the retroactive-lock migration efficiently
+ * without looking up swap IDs one at a time. Deliberately NOT a bulk
+ * "approve everything" — each row still needs individual review via
+ * adminApproveSecurityFeePayment.
+ */
+function adminListSecurityFeeBacklog(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  try {
+    const sheet = getOrCreateSheet('SwapRequests', DB_SCHEMA.SwapRequests);
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: true, swaps: [] };
+    const headers = values[0].map(h => String(h).trim());
+    const idIdx = headers.indexOf('id');
+    const statusIdx = headers.indexOf('status');
+
+    const out = [];
+    for (let r = 1; r < values.length; r++) {
+      const status = String(values[r][statusIdx] || '').trim();
+      // Closed requests (Exchange Room: Expired = not paid in 48 hours) are not waiting for anyone.
+      if (!roomSwapAccepted_(status)) continue;
+      const obj = rowToObject(headers, values[r]);
+      const swap = loadSwapForCirculation(String(values[r][idIdx]));
+      if (!swap) continue;
+      const fee = securityFeeStatus(swap, '', true);
+      if (fee.allApproved) continue; // not backlog — already clear
+      out.push({
+        swapId: obj.id,
+        serviceType: obj.serviceType,
+        requestedBookTitle: obj.requestedBookTitle,
+        requesterEmail: swap.requesterEmail,
+        ownerEmail: swap.ownerEmail,
+        status: status,
+        createdAt: obj.createdAt,
+        updatedAt: obj.updatedAt,
+        checkout: fee.checkout,
+        payers: fee.payers.map(p => ({
+          payerRole: p.payerRole, payerEmail: p.payerEmail, requiredAmount: p.requiredAmount,
+          paymentStatus: p.paymentStatus, adminStatus: p.adminStatus, estimated: p.estimated,
+          // 9 Oct 2026: what the admin needs to check a payment right here.
+          depositAmount: p.depositAmount, platformFee: p.platformFee, saleAmount: p.saleAmount, shippingAmount: p.shippingAmount,
+          utr: p.utr, screenshotUrl: p.screenshotUrl, submittedAt: p.submittedAt, rejectedReason: p.rejectedReason
+        }))
+      });
+    }
+    out.sort((a, b) => new Date(a.updatedAt || a.createdAt).getTime() - new Date(b.updatedAt || b.createdAt).getTime());
+    return { success: true, swaps: out, count: out.length };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * A party uploads evidence for a stage (handover/logistics/receipt/
+ * return/final-condition photo or note). Upload alone never completes a
+ * stage — see submitStageConfirm — but it must exist before that party's
+ * confirm is accepted.
+ */
+function submitStageEvidence(data) {
+  return stageAction(data, 'upload');
+}
+
+/**
+ * A party confirms a stage for themselves. Rejected server-side unless:
+ *  (a) the caller is a real party to this swap,
+ *  (b) that party's own upload for this stage already exists,
+ *  (c) the stage is actually the swap's current unlocked stage (no
+ *      confirming a future, still-locked stage),
+ *  (d) no dispute is open.
+ * Stage completion itself is never decided here — it is always
+ * recomputed by getSwapStage() from both parties' events, so one party's
+ * confirm can never, by itself, flip a stage to complete.
+ */
+function confirmStage(data) {
+  return stageAction(data, 'confirm');
+}
+
+function stageAction(data, actionType) {
+  try {
+    const caller = normalizeEmail(getAuthenticatedEmail());
+    if (!caller) return { success: false, error: 'SESSION_REQUIRED', message: 'Sign in to continue.' };
+    const swapId = String((data && data.swapId) || '').trim();
+    const stage = String((data && data.stage) || '').trim().toUpperCase();
+    if (!SWAPSM_CONFIRM_STAGES[stage]) return { success: false, message: 'Unknown stage.' };
+
+    const swap = loadSwapForCirculation(swapId);
+    if (!swap) return { success: false, message: 'That exchange could not be found.' };
+
+    // Role comes only from session-vs-swap comparison — never trusted
+    // from the client. Admin may NOT act on behalf of either party: doing
+    // so would let one call forge both sides of a two-party confirmation.
+    const role = swapPartyRole(swap, caller);
+    if (!role) return { success: false, error: 'UNAUTHORIZED', message: 'This exchange is not yours, or an admin cannot act as a party here.' };
+
+    if (swapHasOpenDispute(swapId)) {
+      return { success: false, error: 'DISPUTE_OPEN', message: 'A dispute is open on this exchange. Progress is paused until SwapSutra resolves it.' };
+    }
+
+    // Re-derive the entire stage picture fresh, server-side, and check
+    // this stage is actually the one currently unlocked and actionable —
+    // an attempt to confirm handover before payments are approved, or to
+    // confirm return before the 21-day timer has elapsed, is rejected
+    // here regardless of what the client believes the state to be.
+    const evalResult = getSwapStage({ swapId: swapId });
+    if (!evalResult.success) return evalResult;
+    const stageKeyMap = { HANDOVER: 'handover', LOGISTICS: 'logistics', RECEIPT: 'receipt', RETURN: 'returnStage', FINAL_CONDITION: 'finalCondition' };
+    const liveStage = evalResult.stages[stageKeyMap[stage]];
+    if (!liveStage || liveStage.unlocked !== true) {
+      return { success: false, error: 'STAGE_LOCKED', message: 'This stage is not open yet — an earlier step is still incomplete.' };
+    }
+    if (stage === 'RETURN' && !evalResult.needsReturn) {
+      return { success: false, message: 'This exchange does not have a return stage.' };
+    }
+    const mine = liveStage[role];
+    if (mine && mine.confirmed && actionType === 'confirm') {
+      return { success: false, message: 'You have already confirmed this stage.' };
+    }
+
+    let evidenceUrl = '';
+    if (actionType === 'upload') {
+      if (data && data.fileData) {
+        evidenceUrl = saveFileToDrive(data.fileData, data.fileName || (stage.toLowerCase() + '_evidence.jpg'));
+        if (!evidenceUrl) return { success: false, message: 'That photo could not be saved. Please try a JPG or PNG under 10MB.' };
+      } else if (data && data.evidenceUrl) {
+        evidenceUrl = String(data.evidenceUrl).trim();
+      }
+      if (!evidenceUrl) return { success: false, message: 'Attach a photo before uploading.' };
+    } else {
+      // confirm — an upload of THEIR OWN must already exist for this stage.
+      if (!mine || !mine.uploaded) {
+        return { success: false, error: 'NO_UPLOAD', message: 'Upload evidence for this stage before confirming it.' };
+      }
+      // VMS (Oct 2026): the same videos the delivery timeline asks for.
+      const vmsGap = vmsStageMissing_(swap, stage, role);
+      if (vmsGap.length) {
+        return { success: false, error: 'VIDEO_REQUIRED', missing: vmsGap,
+          message: 'Record the ' + vmsGap.map(k => VMS_KIND_LABELS[k]).join(' and the ') + ' in the Delivery panel first.' };
+      }
+    }
+
+    appendStageEvent({
+      swapId: swapId, stage: stage, party: role, actionType: actionType,
+      actorEmail: caller, evidenceUrl: evidenceUrl, note: String((data && data.note) || '').slice(0, 300)
+    });
+
+    // Notify the other party — same pattern appendJourneyEvent already uses.
+    try {
+      const other = role === 'owner' ? swap.requesterEmail : swap.ownerEmail;
+      if (other) {
+        createNotification(
+          other,
+          'stage_update',
+          'Update on your exchange',
+          `${firstNameOnly(publicReaderName('', caller) || humanizeEmailLocalPart(caller))} ${actionType === 'upload' ? 'uploaded evidence for' : 'confirmed'} ${stage.replace('_', ' ').toLowerCase()}.`,
+          swapId,
+          { link: '/profile', dedupeKey: 'stg_' + stage + '_' + actionType + '_' + role + '_' + swapId + '_' + Date.now() }
+        );
+      }
+    } catch (notifyErr) {
+      Logger.log('stageAction notification failed: ' + notifyErr.toString());
+    }
+
+    // Fresh re-evaluation for the response, so the client immediately sees
+    // whether both parties are now done — computed server-side, not
+    // assumed from this one call.
+    return Object.assign({ success: true, message: actionType === 'upload' ? 'Evidence uploaded.' : 'Confirmed.' }, { stage: getSwapStage({ swapId: swapId }) });
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+const SECURITY_FEE_OUTCOMES = { FULL_RELEASE: true, PARTIAL_DEDUCTION: true, FULL_DEDUCTION: true };
+
+/**
+ * Admin-only. The one and only way a security-fee outcome (and therefore
+ * COMPLETED) is ever recorded. Requires Final Condition Verification to
+ * already be fully (two-party) confirmed, and requires no open dispute.
+ * Any deduction amount is admin-entered here — never client-set from
+ * either party's own request.
+ */
+function adminSetSecurityFeeOutcome(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'UNAUTHORIZED', message: 'Unauthorized' };
+  try {
+    const swapId = String((data && data.swapId) || '').trim();
+    if (swapHasOpenDispute(swapId)) {
+      return { success: false, error: 'DISPUTE_OPEN', message: 'A dispute is open on this exchange. Resolve it before recording an outcome.' };
+    }
+    const evalResult = getSwapStage({ swapId: swapId });
+    if (!evalResult.success) return evalResult;
+    if (!evalResult.stages.outcome.unlocked) {
+      return { success: false, error: 'STAGE_LOCKED', message: 'Final Condition Verification must be fully confirmed by both parties before an outcome can be recorded.' };
+    }
+    if (evalResult.stages.outcome.decided) {
+      return { success: false, message: 'An outcome has already been recorded for this exchange.' };
+    }
+
+    const outcomeKey = String((data && data.outcome) || '').trim().toUpperCase();
+    if (!SECURITY_FEE_OUTCOMES[outcomeKey]) {
+      return { success: false, message: 'Choose FULL_RELEASE, PARTIAL_DEDUCTION or FULL_DEDUCTION.' };
+    }
+    let deductionAmount = 0;
+    if (outcomeKey === 'PARTIAL_DEDUCTION') {
+      deductionAmount = Number((data && data.deductionAmount));
+      if (!isFinite(deductionAmount) || deductionAmount <= 0) {
+        return { success: false, message: 'Enter a valid, positive deduction amount.' };
+      }
+    }
+    const reason = String((data && data.reason) || '').trim().slice(0, 500);
+    const admin = normalizeEmail(getAuthenticatedEmail());
+
+    appendStageEvent({
+      swapId: swapId, stage: 'OUTCOME', party: 'admin', actionType: outcomeKey,
+      actorEmail: admin, note: (outcomeKey === 'PARTIAL_DEDUCTION' ? ('Deducted ₹' + deductionAmount + '. ') : '') + reason
+    });
+    appendStageEvent({ swapId: swapId, stage: 'COMPLETED', party: 'admin', actionType: 'completed', actorEmail: admin, note: '' });
+
+    const swap = loadSwapForCirculation(swapId);
+    if (swap) {
+      markSwapCompletedInChat(swap);
+      [swap.requesterEmail, swap.ownerEmail].forEach(email => {
+        if (!email) return;
+        createNotification(
+          email,
+          'security_fee_outcome',
+          'Your exchange is complete',
+          `SwapSutra has recorded the security-fee outcome for this exchange: ${outcomeKey.replace('_', ' ')}.` + (reason ? ' ' + reason : ''),
+          swapId,
+          { link: '/profile', dedupeKey: 'outcome_' + swapId }
+        );
+      });
+    }
+
+    return { success: true, outcome: outcomeKey, message: 'Outcome recorded. Exchange marked Completed.' };
+  } catch (err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+// =====================================================================
+// NEWSLETTER: every member is subscribed until they unsubscribe
+// ---------------------------------------------------------------------
+// The "Count me in" box on every page is gone. Joining SwapSutra now
+// registers the reader as a newsletter subscriber (ensureNewsletterSub-
+// scriber_), and every letter carries a personal unsubscribe link. Past
+// letters are public on /newsletter (getNewsletterArchive / getNews-
+// letterEdition), so a new member can read what they missed.
+//
+// Opt-out is remembered as a row in NewsletterSubscribers with status
+// "Unsubscribed". A member with no row at all still receives letters —
+// that is what makes existing members subscribers without a migration —
+// while anyone with an Unsubscribed row never does.
+// =====================================================================
+
+const NEWSLETTER_SUB_HEADERS = ["id", "name", "email", "timestamp", "LastEmailSentAt", "LastEmailSubject", "LastEmailStatus", "MonthlyEmailCount", "status", "source", "unsubscribedAt"];
+const NEWSLETTER_UNSUB_START = '<!--SS_UNSUB-->';
+const NEWSLETTER_UNSUB_END = '<!--/SS_UNSUB-->';
+const NEWSLETTER_UNSUB_PLACEHOLDER = '{{SS_UNSUBSCRIBE_URL}}';
+
+function newsletterSubscriberSheet_() {
+  const sheet = getOrCreateSheet('NewsletterSubscribers', NEWSLETTER_SUB_HEADERS);
+  ensureSheetHeaders(sheet, NEWSLETTER_SUB_HEADERS);
+  return sheet;
+}
+
+function newsletterRowFor_(email) {
+  const sheet = newsletterSubscriberSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(h => String(h).trim());
+  const emailIdx = headers.indexOf('email');
+  const at = values.findIndex((row, i) => i > 0 && normalizeEmail(row[emailIdx]) === email);
+  return { sheet, values, headers, rowIndex: at };
+}
+
+/** Members who have not said no. Deleted accounts and rejected applications are not members. */
+function newsletterMemberEmails_() {
+  const subSheet = getOrCreateSheet('Subscriptions', []);
+  const data = subSheet.getDataRange().getValues();
+  const out = new Set();
+  if (data.length <= 1) return out;
+  const headers = data[0];
+  const emailIdx = findHeaderIndex(headers, ['email', 'useremail']);
+  const statusIdx = findHeaderIndex(headers, ['adminstatus', 'status', 'membershipstatus']);
+  data.slice(1).forEach(row => {
+    const raw = emailIdx !== -1 ? String(row[emailIdx] || '') : '';
+    if (!raw || /^deleted:/i.test(raw.trim())) return;
+    const email = normalizeEmail(raw);
+    const status = statusIdx !== -1 ? String(row[statusIdx] || '').trim().toLowerCase() : '';
+    if (!email || ['rejected', 'deleted', 'removed', 'banned'].includes(status)) return;
+    out.add(email);
+  });
+  return out;
+}
+
+/** Called when someone joins. Never overrides an earlier unsubscribe. */
+function ensureNewsletterSubscriber_(email, name, source) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return { success: false };
+  const found = newsletterRowFor_(normalized);
+  if (found.rowIndex !== -1) return { success: true, existed: true };
+  const row = new Array(found.headers.length).fill('');
+  found.headers.forEach((h, i) => {
+    if (h === 'id') row[i] = generateId('SS_NEWS_');
+    else if (h === 'name') row[i] = name || '';
+    else if (h === 'email') row[i] = normalized;
+    else if (h === 'timestamp') row[i] = new Date();
+    else if (h === 'MonthlyEmailCount') row[i] = 0;
+    else if (h === 'status') row[i] = 'Subscribed';
+    else if (h === 'source') row[i] = source || 'signup';
+  });
+  found.sheet.appendRow(row);
+  return { success: true, existed: false };
+}
+
+function setNewsletterStatus_(email, subscribed, source) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return { success: false, message: 'Email is required.' };
+  ensureNewsletterSubscriber_(normalized, '', source);
+  const found = newsletterRowFor_(normalized);
+  const r = found.rowIndex + 1;
+  const col = (h) => found.headers.indexOf(h) + 1;
+  found.sheet.getRange(r, col('status')).setValue(subscribed ? 'Subscribed' : 'Unsubscribed');
+  found.sheet.getRange(r, col('unsubscribedAt')).setValue(subscribed ? '' : new Date());
+  if (source) found.sheet.getRange(r, col('source')).setValue(source);
+  try {
+    logActivity(normalized, subscribed ? 'Newsletter Resubscribed' : 'Newsletter Unsubscribed', source || '', 'Success', 'User');
+  } catch (e) { /* logging never blocks the choice */ }
+  return { success: true, subscribed: !!subscribed };
+}
+
+function isNewsletterSubscribed_(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  const found = newsletterRowFor_(normalized);
+  if (found.rowIndex === -1) return newsletterMemberEmails_().has(normalized);
+  const status = found.values[found.rowIndex][found.headers.indexOf('status')];
+  return !isInactiveValue(status);
+}
+
+/** Admin: write a row for every existing member so the "Newsletter Subs" tab lists them all. Safe to re-run. */
+function backfillNewsletterSubscribers() {
+  const sheet = newsletterSubscriberSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(h => String(h).trim());
+  const emailIdx = headers.indexOf('email');
+  const have = new Set(values.slice(1).map(r => normalizeEmail(r[emailIdx])));
+  const rows = [];
+  const now = new Date();
+  newsletterMemberEmails_().forEach(email => {
+    if (have.has(email)) return;
+    rows.push(headers.map(h => (
+      h === 'id' ? generateId('SS_NEWS_')
+        : h === 'email' ? email
+        : h === 'timestamp' ? now
+        : h === 'MonthlyEmailCount' ? 0
+        : h === 'status' ? 'Subscribed'
+        : h === 'source' ? 'existing member'
+        : ''
+    )));
+  });
+  if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
+  return { success: true, added: rows.length };
+}
+
+// ---- unsubscribe links -------------------------------------------------
+
+function newsletterTokenSig_(email) {
+  const raw = Utilities.computeHmacSha256Signature('newsletter-unsubscribe:' + email, getSessionSigningKey());
+  return Utilities.base64EncodeWebSafe(raw).replace(/=+$/, '').slice(0, 22);
+}
+
+function newsletterUnsubscribeToken(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return '';
+  const payload = Utilities.base64EncodeWebSafe(normalized).replace(/=+$/, '');
+  return payload + '.' + newsletterTokenSig_(normalized);
+}
+
+function emailFromNewsletterToken_(token) {
+  const parts = String(token || '').trim().split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return '';
+  let email = '';
+  try {
+    const padded = parts[0] + '==='.slice((parts[0].length + 3) % 4);
+    email = normalizeEmail(Utilities.newBlob(Utilities.base64DecodeWebSafe(padded)).getDataAsString());
+  } catch (e) { return ''; }
+  if (!email || newsletterTokenSig_(email) !== parts[1]) return '';
+  return email;
+}
+
+function newsletterUnsubscribeUrl(email) {
+  return swapSutraSiteUrl() + '/newsletter?unsubscribe=' + encodeURIComponent(newsletterUnsubscribeToken(email));
+}
+
+function personaliseNewsletterHtml_(html, email) {
+  return String(html).split(NEWSLETTER_UNSUB_PLACEHOLDER).join(newsletterUnsubscribeUrl(email));
+}
+
+function stripNewsletterUnsubscribe_(html) {
+  const s = String(html);
+  const a = s.indexOf(NEWSLETTER_UNSUB_START);
+  const b = s.indexOf(NEWSLETTER_UNSUB_END);
+  return (a !== -1 && b > a) ? s.slice(0, a) + s.slice(b + NEWSLETTER_UNSUB_END.length) : s;
+}
+
+/** From the link in an email. No session: the signed token is the proof. */
+function unsubscribeNewsletter(data) {
+  const email = emailFromNewsletterToken_((data || {}).token);
+  if (!email) return { success: false, error: 'INVALID_TOKEN', message: 'This unsubscribe link is not valid. Sign in and use Settings to stop the newsletter.' };
+  setNewsletterStatus_(email, false, 'email link');
+  return { success: true, message: 'You will not receive the SwapSutra newsletter any more. Past letters stay readable on this page.' };
+}
+
+/** Signed-in reader, from Settings. Identity comes from the session only. */
+function getMyNewsletterSubscription() {
+  const email = getAuthenticatedEmail();
+  if (!email) return { success: false, error: 'SESSION_REQUIRED', message: 'Please sign in.' };
+  return { success: true, subscribed: isNewsletterSubscribed_(email) };
+}
+
+function setMyNewsletterSubscription(data) {
+  const email = getAuthenticatedEmail();
+  if (!email) return { success: false, error: 'SESSION_REQUIRED', message: 'Please sign in.' };
+  const subscribed = data && (data.subscribed === true || String(data.subscribed).toLowerCase() === 'true');
+  return setNewsletterStatus_(email, subscribed, 'settings');
+}
+
+// ---- public archive ----------------------------------------------------
+
+function sentNewsletters_() {
+  const sheet = getOrCreateSheet('MonthlyNewsletters', []);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return [];
+  const headers = values[0].map(h => String(h).trim());
+  return values.slice(1)
+    .map(row => { const o = {}; headers.forEach((h, i) => { o[h] = row[i]; }); return o; })
+    .filter(n => n.newsletterId && String(n.status || '').trim().toLowerCase() === 'sent');
+}
+
+function newsletterDateIso_(v) {
+  if (!v) return '';
+  const d = v instanceof Date ? v : new Date(v);
+  return isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+function getNewsletterArchive() {
+  const editions = sentNewsletters_().map(n => ({
+    newsletterId: String(n.newsletterId),
+    editionLabel: String(n.editionLabel || ''),
+    subject: String(n.subject || ''),
+    headerTitle: String(n.headerTitle || n.subject || ''),
+    preheader: String(n.preheader || ''),
+    sentAt: newsletterDateIso_(n.sentAt || n.scheduledDate || n.updatedAt || n.createdAt),
+  })).sort((a, b) => String(b.sentAt).localeCompare(String(a.sentAt)));
+  return { success: true, editions };
+}
+
+function getNewsletterEdition(data) {
+  const id = String((data || {}).newsletterId || '').trim();
+  const n = sentNewsletters_().find(x => String(x.newsletterId) === id);
+  if (!n) return { success: false, error: 'NOT_FOUND', message: 'That letter could not be found.' };
+  return {
+    success: true,
+    edition: {
+      newsletterId: id,
+      editionLabel: String(n.editionLabel || ''),
+      subject: String(n.subject || ''),
+      headerTitle: String(n.headerTitle || n.subject || ''),
+      sentAt: newsletterDateIso_(n.sentAt || n.scheduledDate || n.updatedAt || n.createdAt),
+    },
+    html: stripNewsletterUnsubscribe_(buildNewsletterHtml(n)),
+  };
+}
+
+
+/**
+ * An admin-approved Subscriptions row that has no membership window at all
+ * reads as "NoSubscription", which the site shows as "Waiting for Admin
+ * Approval" — to a reader who IS approved. That happened when a row was
+ * approved in the sheet by hand, or when a trial row was approved before
+ * manageMembershipApproval learned to start its window. Give such a row
+ * the window approval would have given it, starting at approvedAt (or
+ * now), and write it back so it is fixed for good.
+ *   - paid / Chapters rows: 1 year (same as manageMembershipApproval)
+ *   - everything else: the 30-day free trial
+ * Only ever acts on adminStatus Approved/Active rows with NO dates.
+ */
+function healApprovedSubscriptionWindow_(sheet, headers, rowIdx, sub) {
+  const admin = String(sub.adminStatus || '').trim().toLowerCase();
+  if (admin !== 'approved' && admin !== 'active') return false;
+  if (sub.trialStartDate || sub.trialEndDate || sub.subscriptionStartDate || sub.subscriptionExpiry) return false;
+  const membershipType = String(sub.membershipType || '').trim().toLowerCase();
+  const activationType = String(sub.activationType || '').trim().toLowerCase();
+  const paymentRequired = ['yes', 'true'].indexOf(String(sub.paymentRequired || '').trim().toLowerCase()) !== -1;
+  const isPaid = activationType !== 'free_trial' && activationType !== 'free' && membershipType !== 'trial'
+    && (paymentRequired || ['premium', 'paid', 'verified', 'verified_member'].indexOf(membershipType) !== -1);
+  const approvedAt = sub.approvedAt ? new Date(sub.approvedAt) : null;
+  const start = approvedAt && !isNaN(approvedAt.getTime()) && approvedAt.getTime() <= Date.now() ? approvedAt : new Date();
+  const updates = {};
+  if (isPaid) {
+    const end = new Date(start.getTime());
+    end.setFullYear(end.getFullYear() + 1);
+    updates.subscriptionStartDate = start;
+    updates.subscriptionExpiry = end;
+  } else {
+    updates.trialStartDate = start;
+    updates.trialEndDate = new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000);
+    if (!activationType) updates.activationType = 'free_trial';
+  }
+  let wrote = false;
+  Object.keys(updates).forEach(function (k) {
+    const col = headers.indexOf(k);
+    if (col === -1) return;
+    sheet.getRange(rowIdx + 1, col + 1).setValue(updates[k]);
+    sub[k] = updates[k];
+    wrote = true;
+  });
+  if (wrote) {
+    try { logActivity(normalizeEmail(sub.email), 'Membership Window Healed', isPaid ? 'paid: 1 year' : 'trial: 30 days', 'Success', 'System'); } catch (e) { /* never block */ }
+  }
+  return wrote;
+}
+
+
+// ---- chat thread cache (see getChatMessages) ---------------------------
+// Stored as JSON (dates become ISO strings — exactly what respondJson
+// sends anyway). CacheService caps a value at 100KB; a longer thread is
+// simply not cached and is read from the sheet as before.
+function chatThreadCacheGet_(chatId) {
+  try {
+    const raw = CacheService.getScriptCache().get('chatmsgs:' + chatId);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function chatThreadCachePut_(chatId, messages) {
+  try {
+    const raw = JSON.stringify(messages);
+    if (raw.length < 95000) CacheService.getScriptCache().put('chatmsgs:' + chatId, raw, 21600);
+  } catch (e) { /* optimisation only */ }
+}
+function chatThreadCacheClear_(chatId) {
+  try { CacheService.getScriptCache().remove('chatmsgs:' + chatId); } catch (e) { /* optimisation only */ }
+}
+
+// =====================================================================
+// DAILY BOOK UPDATES — 3–4 phone/browser pushes a day (27 Sep)
+// ---------------------------------------------------------------------
+// The founder's ask: anyone who has SwapSutra open in a browser or
+// installed as an app should hear from us a few times a day — the way
+// Swiggy or GIVA do — with something new and specific enough that it
+// pulls them back to list a book or look at the shelf.
+//
+// How it works
+//   · runDailyEngagementPush runs every hour (installGrowthTriggers).
+//     It only sends in the slot hours (IST): 9, 13, 18, 21 by default —
+//     morning "fresh on the shelf", lunchtime "list a book", evening
+//     "community", night "tonight's pick". Admin can change/pause.
+//   · Every device that allowed notifications is reached — signed-in
+//     readers AND visitors (a visitor's device is saved as guest:<id>
+//     by saveGuestPushSubscription; it becomes the reader's once they
+//     sign in).
+//   · The copy is built from real data: books listed in the last day,
+//     books near the reader's pincode, what the Wanted shelf is asking
+//     for, the reader's own shelf (empty / photos missing), café activity
+//     and upcoming events. Variants rotate by day and by reader, so no two
+//     days read the same.
+//   · Push only. It does not write to the bell, does not send email and
+//     does not touch notifyReaders_, so the existing email and
+//     notification system is unchanged.
+//   · On for everyone by default (28 Sep). There is no in-app off
+//     switch; a reader who wants them off blocks notifications in the
+//     browser, and the push service then retires that device.
+//   · Sent through the existing relay (/api/notifications/relay) with the
+//     device keys attached, so the relay does not need to call back here
+//     for every batch.
+// =====================================================================
+
+const DAILY_PUSH_DEFAULT_SLOTS = [9, 13, 18, 21];
+const DAILY_PUSH_SLOT_NAMES = { morning: true, afternoon: true, evening: true, night: true };
+const DAILY_PUSH_KEYS = {
+  paused: 'DAILY_PUSH_PAUSED',
+  slots: 'DAILY_PUSH_SLOTS',
+  stats: 'DAILY_PUSH_STATS',
+  donePrefix: 'DAILY_PUSH_DONE_'
+};
+const DAILY_PUSH_BATCH = 50;          // the relay takes at most 50 items per call
+const DAILY_PUSH_PARALLEL = 4;        // relay calls in flight at once
+const DAILY_PUSH_TIME_BUDGET_MS = 4 * 60 * 1000;
+const GUEST_PUSH_MAX_ROWS = 20000;
+const PUSH_ENDPOINT_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(fcm\.googleapis\.com|android\.googleapis\.com|push\.services\.mozilla\.com|web\.push\.apple\.com|notify\.windows\.com|push\.apple\.com)(:\d+)?\//i;
+
+/** IST clock without depending on the project's time zone. */
+function istParts_(now) {
+  const d = new Date((now instanceof Date ? now.getTime() : Number(now) || Date.now()) + 330 * 60 * 1000);
+  const pad = (n) => (n < 10 ? '0' : '') + n;
+  return {
+    hour: d.getUTCHours(),
+    day: d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()),
+    weekday: d.getUTCDay(),
+    ms: d.getTime()
+  };
+}
+
+function dailyPushSlots_() {
+  const raw = String(PropertiesService.getScriptProperties().getProperty(DAILY_PUSH_KEYS.slots) || '').trim();
+  if (!raw) return DAILY_PUSH_DEFAULT_SLOTS.slice();
+  const hours = raw.split(/[,\s]+/).map(Number)
+    .filter(function (h) { return Number.isInteger(h) && h >= 8 && h <= 22; });
+  const uniq = hours.filter(function (h, i) { return hours.indexOf(h) === i; }).sort(function (a, b) { return a - b; });
+  return uniq.length ? uniq.slice(0, 4) : DAILY_PUSH_DEFAULT_SLOTS.slice();
+}
+
+/** Which theme an hour gets. With fewer than four slots, themes stay in this order. */
+function dailyPushSlotName_(hour, slots) {
+  const order = ['morning', 'afternoon', 'evening', 'night'];
+  const i = slots.indexOf(hour);
+  if (i === -1) return '';
+  if (slots.length === 4) return order[i];
+  // Fewer slots: pick by time of day so "night" copy never goes at noon.
+  if (hour < 12) return 'morning';
+  if (hour < 16) return 'afternoon';
+  if (hour < 20) return 'evening';
+  return 'night';
+}
+
+function dailyHash_(s) {
+  let h = 5381;
+  s = String(s || '');
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function dailyPick_(list, seed) {
+  if (!list || !list.length) return null;
+  return list[dailyHash_(seed) % list.length];
+}
+
+function isGuestPushId_(email) {
+  return /^guest:/.test(String(email || ''));
+}
+
+function shortTitle_(t, max) {
+  t = String(t || '').trim();
+  max = max || 40;
+  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+}
+
+// ── Devices ──────────────────────────────────────────────────────────
+
+function pushSheetRows_() {
+  const sheet = getPushSubscriptionSheet();
+  const values = sheet.getDataRange().getValues();
+  const headers = (values[0] || []).map(function (h) { return String(h).trim(); });
+  return { sheet: sheet, values: values, headers: headers };
+}
+
+/**
+ * A visitor who is not signed in allows notifications. Their device is
+ * saved under a guest id so the daily updates reach them too. Public: the
+ * push endpoint is itself an unguessable capability, and it is checked to
+ * belong to a real browser push service.
+ */
+function saveGuestPushSubscription(data) {
+  try {
+    const endpoint = String((data && data.endpoint) || '').trim();
+    const keys = (data && data.keys) || {};
+    const p256dh = String(keys.p256dh || (data && data.p256dh) || '').trim();
+    const auth = String(keys.auth || (data && data.auth) || '').trim();
+    if (!endpoint || !p256dh || !auth) return { success: false, message: 'Incomplete push subscription.', error: 'INVALID_SUBSCRIPTION' };
+    if (endpoint.length > 1000 || !PUSH_ENDPOINT_HOSTS.test(endpoint)) {
+      return { success: false, message: 'Unknown push service.', error: 'INVALID_ENDPOINT' };
+    }
+    try {
+      const cache = CacheService.getScriptCache();
+      const burst = Number(cache.get('guest_push_burst') || 0);
+      if (burst >= 300) return { success: false, message: 'Please try again in a few minutes.', error: 'RATE_LIMITED' };
+      cache.put('guest_push_burst', String(burst + 1), 600);
+    } catch (cacheErr) { /* never block on the cache */ }
+
+    const t = pushSheetRows_();
+    const col = function (n) { return t.headers.indexOf(n); };
+    const now = new Date();
+    let guests = 0;
+    for (let r = 1; r < t.values.length; r++) {
+      const rowEmail = String(t.values[r][col('userEmail')] || '');
+      if (isGuestPushId_(rowEmail)) guests++;
+      if (String(t.values[r][col('endpoint')] || '').trim() !== endpoint) continue;
+      const set = function (name, value) { const i = col(name); if (i !== -1) t.sheet.getRange(r + 1, i + 1).setValue(value); };
+      // Known device. If a reader has signed in on it, it stays theirs —
+      // a visit while signed out must not turn it back into a guest.
+      set('p256dh', p256dh);
+      set('auth', auth);
+      set('lastSeenAt', now);
+      set('failureCount', 0);
+      set('status', 'Active');
+      return { success: true, refreshed: true, guest: isGuestPushId_(rowEmail) };
+    }
+    if (guests >= GUEST_PUSH_MAX_ROWS) return { success: false, message: 'Guest list is full.', error: 'GUEST_LIMIT' };
+
+    const id = generateId('guest:').toLowerCase();
+    const row = new Array(t.headers.length).fill('');
+    t.headers.forEach(function (h, i) {
+      if (h === 'id') row[i] = generateId('SS_PUSH_');
+      else if (h === 'userEmail') row[i] = id;
+      else if (h === 'endpoint') row[i] = endpoint;
+      else if (h === 'p256dh') row[i] = p256dh;
+      else if (h === 'auth') row[i] = auth;
+      else if (h === 'userAgent') row[i] = String((data && data.userAgent) || '').slice(0, 300);
+      else if (h === 'subscribedAt' || h === 'lastSeenAt') row[i] = now;
+      else if (h === 'failureCount') row[i] = 0;
+      else if (h === 'status') row[i] = 'Active';
+    });
+    t.sheet.appendRow(row);
+    forgetPushDevices_();
+    return { success: true, created: true, guest: true };
+  } catch (err) {
+    Logger.log('saveGuestPushSubscription failed: ' + err);
+    return { success: false, message: String(err) };
+  }
+}
+
+/**
+ * Readers who get daily pushes: email → live devices. Everyone whose
+ * browser allowed notifications (28 Sep: on by default, no in-app off
+ * switch — a reader turns them off in the browser, and the push service
+ * then retires the device).
+ */
+function dailyPushAudience_() {
+  const t = pushSheetRows_();
+  const h = function (n) { return t.headers.indexOf(n); };
+  const byReader = {};
+  for (let r = 1; r < t.values.length; r++) {
+    const row = t.values[r];
+    const who = normalizeEmail(row[h('userEmail')]);
+    if (!who) continue;
+    if (String(row[h('status')] || 'Active') !== 'Active') continue;
+    if (!isGuestPushId_(who) && isTestQAEmail(who)) continue;
+    const endpoint = String(row[h('endpoint')] || '');
+    if (!endpoint) continue;
+    (byReader[who] = byReader[who] || []).push({ endpoint: endpoint, keys: { p256dh: String(row[h('p256dh')] || ''), auth: String(row[h('auth')] || '') } });
+  }
+  return byReader;
+}
+
+// ── What is happening today (read once per run) ─────────────────────
+
+function dailyPushContext_(now) {
+  const ist = istParts_(now);
+  const nowMs = (now instanceof Date ? now.getTime() : Number(now) || Date.now());
+  const ctx = {
+    day: ist.day, weekday: ist.weekday,
+    fresh: [], live: [], byOwner: {}, partialByOwner: {}, nearbyByPin: {},
+    wanted: [], cafeToday: 0, cafeSpeakersToday: 0, nextEvent: null, users: {},
+    festival: festivalFor_(ist.day), aiCopy: null
+  };
+
+  // Books
+  try {
+    const sheet = getOrCreateSheet('Books', getBookHeaders());
+    const v = sheet.getDataRange().getValues();
+    const bh = (v[0] || []).map(function (x) { return String(x).trim(); });
+    const col = function (n) { return bh.indexOf(n); };
+    for (let r = 1; r < v.length; r++) {
+      const row = v[r];
+      const status = String(row[col('status')] || '').trim().toLowerCase();
+      const owner = normalizeEmail(row[col('ownerEmail')]);
+      const book = {
+        id: String(row[col('id')] || ''),
+        title: String(row[col('title')] || '').trim(),
+        author: String(row[col('author')] || '').trim(),
+        pincode: String(row[col('pincode')] || '').trim(),
+        owner: owner,
+        listedAt: new Date(row[col('listedAt')] || row[col('createdAt')] || '')
+      };
+      if (owner && status !== 'rejected' && status !== 'deleted' && status !== 'removed') {
+        ctx.byOwner[owner] = (ctx.byOwner[owner] || 0) + 1;
+        const obj = {};
+        bh.forEach(function (k, i) { obj[k] = row[i]; });
+        if (listingPhotoGaps_(obj).length && !ctx.partialByOwner[owner]) ctx.partialByOwner[owner] = book;
+      }
+      if (status !== 'approved' && status !== 'live') continue;
+      if (!book.id || !book.title) continue;
+      ctx.live.push(book);
+      const age = nowMs - book.listedAt.getTime();
+      if (!isNaN(age) && age >= 0 && age <= 24 * 3600 * 1000) ctx.fresh.push(book);
+      if (!isNaN(age) && age >= 0 && age <= 3 * 24 * 3600 * 1000 && book.pincode) {
+        (ctx.nearbyByPin[book.pincode] = ctx.nearbyByPin[book.pincode] || []).push(book);
+      }
+    }
+    ctx.fresh.sort(function (a, b) { return b.listedAt - a.listedAt; });
+  } catch (e) { Logger.log('dailyPush books: ' + e); }
+
+  // Readers' first names and pincodes
+  try {
+    const us = getOrCreateSheet('Users', DB_SCHEMA.Users);
+    const uv = us.getDataRange().getValues();
+    const uh = (uv[0] || []).map(function (x) { return String(x).trim(); });
+    for (let r = 1; r < uv.length; r++) {
+      const email = normalizeEmail(uv[r][uh.indexOf('email')]);
+      if (!email) continue;
+      ctx.users[email] = {
+        name: firstNameOnly(String(uv[r][uh.indexOf('name')] || '')) || '',
+        pincode: uh.indexOf('pincode') === -1 ? '' : String(uv[r][uh.indexOf('pincode')] || '').trim()
+      };
+    }
+  } catch (e) { Logger.log('dailyPush users: ' + e); }
+
+  // The Wanted shelf: titles readers are asking for (last 30 days, still open)
+  try {
+    const rs = getOrCreateSheet('BookRequests', ["requestId", "userEmail", "title", "author", "city", "requestType", "note", "status", "createdAt", "updatedAt"]);
+    const rv = rs.getDataRange().getValues();
+    const rh = (rv[0] || []).map(function (x) { return String(x).trim(); });
+    const counts = {};
+    for (let r = 1; r < rv.length; r++) {
+      const st = String(rv[r][rh.indexOf('status')] || '').toLowerCase();
+      if (/fulfil|closed|cancel|found|done|deleted|rejected/.test(st)) continue;
+      const created = new Date(rv[r][rh.indexOf('createdAt')]);
+      if (!isNaN(created.getTime()) && nowMs - created.getTime() > 30 * 24 * 3600 * 1000) continue;
+      const title = String(rv[r][rh.indexOf('title')] || '').trim();
+      if (!title) continue;
+      const key = title.toLowerCase();
+      counts[key] = counts[key] || { title: title, askers: {} };
+      counts[key].askers[normalizeEmail(rv[r][rh.indexOf('userEmail')])] = true;
+    }
+    ctx.wanted = Object.keys(counts).map(function (k) {
+      return { title: counts[k].title, askers: Object.keys(counts[k].askers) };
+    }).sort(function (a, b) { return b.askers.length - a.askers.length; });
+  } catch (e) { Logger.log('dailyPush wanted: ' + e); }
+
+  // Café today
+  try {
+    const rows = getCurrentReadRows();
+    const speakers = {};
+    (rows.messages || []).forEach(function (m) {
+      if (!isReadersCafeCircle(m.circle_id)) return;
+      if (istParts_(new Date(m.created_at)).day !== ist.day) return;
+      ctx.cafeToday++;
+      speakers[normalizeEmail(m.user_id)] = true;
+    });
+    ctx.cafeSpeakersToday = Object.keys(speakers).length;
+  } catch (e) { Logger.log('dailyPush cafe: ' + e); }
+
+  // Next event in the coming week
+  try {
+    const es = getOrCreateSheet('EventMaster', []);
+    const ev = es.getDataRange().getValues();
+    const eh = (ev[0] || []).map(function (x) { return String(x).trim(); });
+    let best = null;
+    for (let r = 1; r < ev.length; r++) {
+      const st = String(ev[r][eh.indexOf('Status')] || '').toLowerCase();
+      if (/cancel|draft|hidden|completed|past/.test(st)) continue;
+      const d = new Date(ev[r][eh.indexOf('Date')]);
+      if (isNaN(d.getTime())) continue;
+      const ahead = d.getTime() - (nowMs - 12 * 3600 * 1000);
+      if (ahead < 0 || ahead > 8 * 24 * 3600 * 1000) continue;
+      if (!best || d < best.date) best = { title: String(ev[r][eh.indexOf('Title')] || '').trim(), date: d, id: String(ev[r][eh.indexOf('EventID')] || '') };
+    }
+    if (best && best.title) ctx.nextEvent = best;
+  } catch (e) { Logger.log('dailyPush events: ' + e); }
+
+  return ctx;
+}
+
+// ── Indian festive calendar (28 Sep) ─────────────────────────────────
+// Dates are IST calendar days (sources: calendarena.com, samvat.in).
+// Moon-dependent dates (Eid) are marked approx and only ever greeted on
+// the day — never counted down to. `lead` = days before the festival the
+// "coming up" nudge runs; `days` = how long it lasts (Navratri 9).
+// Add later years here (or let Gemini's own copy carry the season).
+const DAILY_PUSH_FESTIVALS = [
+  { key: 'navratri', name: 'Navratri', date: '2026-10-11', days: 9, lead: 4, emoji: '🪔',
+    greet: 'Nine nights, nine stories. Pick a book for every night of Navratri.',
+    nudge: { title: '🪔 Navratri: 9 nights, 9 stories', message: 'Pick a book for every night — or list the ones you have finished so others can read them.' } },
+  { key: 'dussehra', name: 'Dussehra', date: '2026-10-20', lead: 3, emoji: '🏹',
+    greet: 'Out with the old, in with a new story. Swap a finished book today.',
+    nudge: { title: '🏹 Out with the old this Dussehra', message: 'Clear your shelf: list the books you have finished and swap them for new stories.' } },
+  { key: 'karwachauth', name: 'Karwa Chauth', date: '2026-10-29', lead: 0, emoji: '🌙',
+    greet: 'A good book makes the wait for the moon shorter. Find one on the shelf.' },
+  { key: 'dhanteras', name: 'Dhanteras', date: '2026-11-06', lead: 0, emoji: '✨',
+    greet: 'The best thing to bring home today? A story. Swap one instead of buying.' },
+  { key: 'diwali', name: 'Diwali', date: '2026-11-08', lead: 12, emoji: '🪔',
+    greet: 'May your year be full of light and good stories. Happy Diwali from SwapSutra!',
+    nudge: { title: '🪔 Diwali cleaning has begun', message: 'Found old books while cleaning? Don\'t throw them away — list them on SwapSutra in 30 seconds.' } },
+  { key: 'bhaidooj', name: 'Bhai Dooj', date: '2026-11-11', lead: 2, emoji: '🎁',
+    greet: 'Gift your sibling a story today — there is one waiting on the shelf.',
+    nudge: { title: '🎁 Bhai Dooj gift sorted?', message: 'Gift your sibling a story. Find one on the shelf, or swap one of yours for it.' } },
+  { key: 'childrensday', name: 'Children\'s Day', date: '2026-11-14', lead: 3, emoji: '🧸',
+    greet: 'Share a story with a child today. Picture books and comics are on the shelf.',
+    nudge: { title: '🧸 Children\'s Day is coming', message: 'Outgrown picture books and comics at home? List them so another child can read them.' } },
+  { key: 'chhath', name: 'Chhath Puja', date: '2026-11-15', lead: 0, emoji: '🌅',
+    greet: 'Wishing you and your family a blessed Chhath.' },
+  { key: 'gurunanak', name: 'Guru Nanak Jayanti', date: '2026-11-24', lead: 0, emoji: '🙏',
+    greet: 'Wishing you peace and light on Gurpurab.' },
+  { key: 'christmas', name: 'Christmas', date: '2026-12-25', lead: 7, emoji: '🎄',
+    greet: 'Merry Christmas! Curl up with a story today.',
+    nudge: { title: '🎄 Secret Santa idea: a book', message: 'List a book you loved and pick a Christmas present from the shelf.' } },
+  { key: 'newyear', name: 'New Year', date: '2027-01-01', lead: 4, emoji: '🎆',
+    greet: 'Happy New Year! Make 2027 the year you read more — start with one swap.',
+    nudge: { title: '🎆 Read more in 2027?', message: 'Start with one swap: list a book you have finished and pick your first read of the year.' } },
+  { key: 'lohri', name: 'Lohri', date: '2027-01-13', lead: 0, emoji: '🔥',
+    greet: 'Happy Lohri! Warm up by the fire with a good book.' },
+  { key: 'sankranti', name: 'Makar Sankranti & Pongal', date: '2027-01-14', lead: 2, emoji: '🪁',
+    greet: 'Kites up, books out! Happy Sankranti and Pongal.',
+    nudge: { title: '🪁 A new season, a new story', message: 'Sankranti is almost here. Swap a finished book for something fresh.' } },
+  { key: 'republicday', name: 'Republic Day', date: '2027-01-26', lead: 0, emoji: '🇮🇳',
+    greet: 'Happy Republic Day! Read a story of India today.' },
+  { key: 'vasantpanchami', name: 'Vasant Panchami', date: '2027-02-11', lead: 3, emoji: '📜',
+    greet: 'The day of Saraswati, goddess of learning. Celebrate with a new book.',
+    nudge: { title: '📜 Vasant Panchami is coming', message: 'Celebrate the festival of learning with a new book — list one, take one.' } },
+  { key: 'shivratri', name: 'Maha Shivaratri', date: '2027-03-06', lead: 0, emoji: '🔱',
+    greet: 'Wishing you a peaceful Maha Shivaratri.' },
+  { key: 'eidulfitr', name: 'Eid', date: '2027-03-10', lead: 0, approx: true, emoji: '🌙',
+    greet: 'Eid Mubarak from SwapSutra! Share a story with someone you love.' },
+  { key: 'holi', name: 'Holi', date: '2027-03-23', lead: 5, emoji: '🎨',
+    greet: 'Happy Holi! Add some colour to your shelf with a new story.',
+    nudge: { title: '🎨 Add some colour to your shelf', message: 'Holi is coming. Swap a finished book for a new one before the holidays.' } },
+  { key: 'ugadi', name: 'Gudi Padwa & Ugadi', date: '2027-04-07', lead: 0, emoji: '🌼',
+    greet: 'A new year begins. Start it with a new story.' },
+  { key: 'baisakhi', name: 'Baisakhi', date: '2027-04-14', lead: 0, emoji: '🌾',
+    greet: 'Happy Baisakhi! Harvest a new story from the shelf.' },
+  { key: 'ramnavami', name: 'Ram Navami', date: '2027-04-15', lead: 0, emoji: '🙏',
+    greet: 'Wishing you a blessed Ram Navami.' },
+  { key: 'worldbookday', name: 'World Book Day', date: '2027-04-23', lead: 5, emoji: '📚',
+    greet: 'Happy World Book Day! Pass a book on — list one you loved.',
+    nudge: { title: '📚 World Book Day is almost here', message: 'Celebrate by passing a book on. List one you loved in 30 seconds.' } },
+  { key: 'akshayatritiya', name: 'Akshaya Tritiya', date: '2027-05-08', lead: 0, emoji: '✨',
+    greet: 'A day for good beginnings. Begin a new book today.' },
+  { key: 'bakrid', name: 'Eid al-Adha', date: '2027-05-17', lead: 0, approx: true, emoji: '🌙',
+    greet: 'Eid Mubarak! Share a story with someone you love.' },
+  { key: 'readingday', name: 'National Reading Day', date: '2027-06-19', lead: 3, emoji: '📖',
+    greet: 'Happy National Reading Day! Pick your next book from the shelf.',
+    nudge: { title: '📖 National Reading Day is coming', message: 'Get ready: list a book you have finished and pick your next read.' } },
+  { key: 'independenceday', name: 'Independence Day', date: '2027-08-15', lead: 0, emoji: '🇮🇳',
+    greet: 'Happy Independence Day! Read a story of freedom today.' },
+  { key: 'rakhi', name: 'Raksha Bandhan', date: '2027-08-17', lead: 4, emoji: '🎁',
+    greet: 'Happy Raksha Bandhan! A book is a gift that lasts.',
+    nudge: { title: '🎁 Rakhi gift idea: a book', message: 'Find a story your sibling will love — or swap one of yours for it.' } },
+  { key: 'ganeshchaturthi', name: 'Ganesh Chaturthi', date: '2027-09-04', days: 10, lead: 0, emoji: '🙏',
+    greet: 'Ganpati Bappa Morya! Begin something new — start a new book.' },
+  { key: 'teachersday', name: 'Teachers\' Day', date: '2027-09-05', lead: 2, emoji: '🍎',
+    greet: 'Thank a teacher today — with a book they will love.',
+    nudge: { title: '🍎 Teachers\' Day is coming', message: 'Thank a teacher with a book. Find one on the shelf.' } },
+  { key: 'onam', name: 'Onam', date: '2027-09-12', lead: 0, emoji: '🌸',
+    greet: 'Happy Onam! Wishing you a feast of stories.' },
+  { key: 'navratri27', name: 'Navratri', date: '2027-09-30', days: 9, lead: 4, emoji: '🪔',
+    greet: 'Nine nights, nine stories. Pick a book for every night of Navratri.',
+    nudge: { title: '🪔 Navratri: 9 nights, 9 stories', message: 'Pick a book for every night — or list the ones you have finished so others can read them.' } },
+  { key: 'dussehra27', name: 'Dussehra', date: '2027-10-09', lead: 3, emoji: '🏹',
+    greet: 'Out with the old, in with a new story. Swap a finished book today.',
+    nudge: { title: '🏹 Out with the old this Dussehra', message: 'Clear your shelf: list the books you have finished and swap them for new stories.' } },
+  { key: 'diwali27', name: 'Diwali', date: '2027-10-29', lead: 12, emoji: '🪔',
+    greet: 'May your year be full of light and good stories. Happy Diwali from SwapSutra!',
+    nudge: { title: '🪔 Diwali cleaning has begun', message: 'Found old books while cleaning? Don\'t throw them away — list them on SwapSutra in 30 seconds.' } },
+  { key: 'christmas27', name: 'Christmas', date: '2027-12-25', lead: 7, emoji: '🎄',
+    greet: 'Merry Christmas! Curl up with a story today.',
+    nudge: { title: '🎄 Secret Santa idea: a book', message: 'List a book you loved and pick a Christmas present from the shelf.' } }
+];
+
+function dayNumber_(day) { return Math.round(Date.parse(day + 'T00:00:00Z') / 86400000); }
+
+/**
+ * The festival that colours a day: one happening today (or during a
+ * multi-day festival) beats one coming up; among those coming up, the
+ * nearest wins. Returns null on an ordinary day.
+ */
+function festivalFor_(day) {
+  const today = dayNumber_(day);
+  let best = null;
+  DAILY_PUSH_FESTIVALS.forEach(function (f) {
+    const start = dayNumber_(f.date);
+    const end = start + (f.days || 1) - 1;
+    let phase = '', away = start - today;
+    if (today === start) phase = 'today';
+    else if (today > start && today <= end) phase = 'during';
+    else if (away > 0 && away <= (f.lead || 0) && f.nudge && !f.approx) phase = 'soon';
+    if (!phase) return;
+    const rank = phase === 'soon' ? 10 + away : (phase === 'today' ? 0 : 1);
+    if (!best || rank < best.rank) best = { key: f.key, name: f.name, emoji: f.emoji, phase: phase, daysAway: Math.max(0, away), greet: f.greet, nudge: f.nudge || null, rank: rank };
+  });
+  if (best) delete best.rank;
+  return best;
+}
+
+/** Festivals in the next `n` days (for Gemini's context and the admin panel). */
+function upcomingFestivals_(day, n) {
+  const today = dayNumber_(day);
+  return DAILY_PUSH_FESTIVALS.filter(function (f) {
+    const d = dayNumber_(f.date) - today;
+    return d >= 0 && d <= n;
+  }).map(function (f) { return { name: f.name, date: f.date, inDays: dayNumber_(f.date) - today, approx: !!f.approx }; });
+}
+
+// ── Gemini copy (28 Sep) ─────────────────────────────────────────────
+// Once a day, Gemini writes the four slots' lines in English for that
+// day's festival and numbers. It runs on the website (Vercel already
+// has GEMINI_API_KEY for Quill), reached through the push relay's secret:
+// PUSH_RELAY_URL …/relay → …/daily-copy. The answer is checked there and
+// again here, cached for the day, and anything missing or odd falls back
+// to the hand-written lines below — so a Gemini outage never stops a push.
+const DAILY_PUSH_LINKS = {
+  library: '/library', list: '/library?list=1', wanted: '/book-requests',
+  cafe: '/readers-cafe', events: '/events', tracker: '/tracker'
+};
+const DAILY_COPY_KEY = 'DAILY_PUSH_COPY_';
+
+function cleanAiLine_(s, max) {
+  s = String(s || '').replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s || s.length > max) return '';
+  if (/https?:|www\.|@|\.com\b|\bdiscount\b|\bfree gift\b|\bprize\b|\bcash\b/i.test(s)) return '';
+  // Allow at most the {name} placeholder; any other braces mean a broken template.
+  if (/[{}]/.test(s.replace(/\{name\}/g, ''))) return '';
+  return s;
+}
+
+/** Keeps only well-formed slots; returns null if nothing usable. */
+function validateDailyCopy_(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  let n = 0;
+  ['morning', 'afternoon', 'evening', 'night'].forEach(function (slot) {
+    const s = raw[slot];
+    if (!s || typeof s !== 'object') return;
+    const title = cleanAiLine_(s.title, 70);
+    const message = cleanAiLine_(s.message, 170);
+    const link = DAILY_PUSH_LINKS[String(s.link || '')] ? String(s.link) : '';
+    if (!title || !message || !link) return;
+    out[slot] = { title: title, message: message, link: link };
+    n++;
+  });
+  return n ? out : null;
+}
+
+/** What Gemini is told about the day — counts and public titles only, never anyone's email or name. */
+function dailyCopyBrief_(ctx) {
+  return {
+    date: ctx.day,
+    weekday: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][ctx.weekday],
+    festival: ctx.festival ? { name: ctx.festival.name, phase: ctx.festival.phase, daysAway: ctx.festival.daysAway } : null,
+    upcomingFestivals: upcomingFestivals_(ctx.day, 21),
+    newBooksLast24h: ctx.fresh.length,
+    booksOnShelf: ctx.live.length,
+    mostWantedTitles: ctx.wanted.slice(0, 3).map(function (w) { return w.title.slice(0, 60); }),
+    cafeMessagesToday: ctx.cafeToday,
+    nextEvent: ctx.nextEvent ? { title: ctx.nextEvent.title.slice(0, 80), when: dailyEventWhen_(ctx.nextEvent.date, ctx) } : null
+  };
+}
+
+/** Today's Gemini copy, fetched at most once a day (retried after 2 h on failure). */
+function dailyGeminiCopy_(ctx, opts) {
+  opts = opts || {};
+  const props = PropertiesService.getScriptProperties();
+  if (String(props.getProperty('DAILY_PUSH_AI') || '') === 'off') return null;
+  const key = DAILY_COPY_KEY + ctx.day;
+  try {
+    const cached = JSON.parse(props.getProperty(key) || 'null');
+    if (cached && cached.copy && !opts.refresh) return validateDailyCopy_(cached.copy);
+    if (cached && cached.failedAt && !opts.refresh && Date.now() - Date.parse(cached.failedAt) < 2 * 3600 * 1000) return null;
+  } catch (e) { /* re-fetch */ }
+  const relay = String(props.getProperty('PUSH_RELAY_URL') || '').trim();
+  const secret = String(props.getProperty('PUSH_RELAY_SECRET') || '').trim();
+  if (!/^https:\/\/.+\/relay$/i.test(relay) || !secret) return null;
+  let copy = null;
+  try {
+    const res = UrlFetchApp.fetch(relay.replace(/\/relay$/i, '/daily-copy'), {
+      method: 'post', contentType: 'application/json', headers: { 'X-Relay-Secret': secret },
+      payload: JSON.stringify({ brief: dailyCopyBrief_(ctx) }), muteHttpExceptions: true
+    });
+    const body = JSON.parse(res.getContentText() || '{}');
+    copy = body && body.success ? validateDailyCopy_(body.copy) : null;
+  } catch (e) { Logger.log('daily copy (Gemini) failed: ' + e); }
+  try {
+    props.setProperty(key, JSON.stringify(copy ? { copy: copy, at: new Date().toISOString() } : { failedAt: new Date().toISOString() }));
+    // Forget earlier days' copy.
+    (typeof props.getKeys === 'function' ? props.getKeys() : []).forEach(function (k) {
+      if (k.indexOf(DAILY_COPY_KEY) === 0 && k !== key) props.deleteProperty(k);
+    });
+  } catch (e) { /* cache only */ }
+  return copy;
+}
+
+// ── The copy (English) ───────────────────────────────────────────────
+
+function dailyEventWhen_(date, ctx) {
+  const d = istParts_(date);
+  if (d.day === ctx.day) return 'today';
+  const diff = dayNumber_(d.day) - dayNumber_(ctx.day);
+  if (diff === 1) return 'tomorrow';
+  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return 'on ' + names[d.weekday];
+}
+
+/**
+ * One push for one reader in one slot. Order of preference:
+ *   1. something about this reader (a book near them, their listing's
+ *      missing photo, a meetup) — the most specific thing wins;
+ *   2. today's Gemini line for the slot (festival-aware);
+ *   3. the hand-written festival line;
+ *   4. data-driven lines (new books, Wanted shelf, café, tonight's pick);
+ *   5. a line that needs no data at all — so an empty shelf still sends.
+ */
+function composeDailyPush_(slot, who, ctx) {
+  const guest = isGuestPushId_(who);
+  const me = guest ? null : (ctx.users[who] || { name: '', pincode: '' });
+  const name = me && me.name ? me.name : '';
+  const hi = name ? ', ' + name : '';
+  const seed = who + '|' + ctx.day + '|' + slot;
+  const fest = ctx.festival || null;
+  const notMine = function (b) { return b && b.owner !== who; };
+  const pickOf = function (list, salt) { return dailyPick_((list || []).filter(notMine), seed + salt); };
+  const by = function (b) { return b.author ? ' by ' + shortTitle_(b.author, 24) : ''; };
+  const out = function (title, message, targetUrl, variant) {
+    return {
+      userEmail: who,
+      title: title,
+      message: message,
+      targetUrl: targetUrl + (targetUrl.indexOf('?') === -1 ? '?' : '&') + 'ss_push=' + slot,
+      tag: 'ss-daily-' + slot + '-' + ctx.day,
+      type: 'daily_' + slot,
+      variant: variant
+    };
+  };
+  const ai = ctx.aiCopy && ctx.aiCopy[slot];
+  const fromAi = function () {
+    const fill = function (s) {
+      return name ? s.replace(/\{name\}/g, name) : s.replace(/,?\s*\{name\}/g, '');
+    };
+    return out(fill(ai.title), fill(ai.message), DAILY_PUSH_LINKS[ai.link], 'ai_' + slot);
+  };
+
+  if (slot === 'morning') {
+    const near = me && me.pincode ? (ctx.nearbyByPin[me.pincode] || []).filter(notMine) : [];
+    if (near.length) {
+      const b = pickOf(near, 'near');
+      return out('📦 A new book near you',
+        '"' + shortTitle_(b.title) + '"' + by(b) + ' was just listed near ' + me.pincode + '. Request it before someone else does!',
+        '/book/' + encodeURIComponent(b.id), 'morning_near');
+    }
+    if (ai) return fromAi();
+    if (fest && (fest.phase === 'today' || fest.phase === 'during')) {
+      return out(fest.emoji + ' Happy ' + fest.name + hi + '!', fest.greet, '/library', 'morning_festival');
+    }
+    const fresh = ctx.fresh.filter(notMine);
+    if (fresh.length >= 2) {
+      const b = pickOf(fresh.slice(0, 10), 'fresh');
+      return out(dailyPick_(['☀️ Fresh on the shelf: ' + fresh.length + ' new books', '☀️ Good morning' + hi + '! ' + fresh.length + ' new books today'], seed),
+        '"' + shortTitle_(b.title) + '" and ' + (fresh.length - 1) + ' more arrived since yesterday. Take a look with your chai?',
+        '/library', 'morning_fresh');
+    }
+    if (fresh.length === 1) {
+      return out('☀️ A new book landed last night',
+        '"' + shortTitle_(fresh[0].title) + '"' + by(fresh[0]) + '. Have a look before someone else requests it.',
+        '/book/' + encodeURIComponent(fresh[0].id), 'morning_fresh1');
+    }
+    const b = pickOf(ctx.live, 'pick');
+    if (b) {
+      return out('☀️ Good morning' + hi + '! Today\'s pick',
+        '"' + shortTitle_(b.title) + '"' + by(b) + ' is waiting for you on the shelf.',
+        '/book/' + encodeURIComponent(b.id), 'morning_pick');
+    }
+    return out('☀️ Good morning' + hi + '!', 'Which story will you start today? See what readers are sharing on SwapSutra.', '/library', 'morning_plain');
+  }
+
+  if (slot === 'afternoon') {
+    // The lunchtime push is the one that asks for a listing.
+    if (!guest && ctx.partialByOwner[who]) {
+      const b = ctx.partialByOwner[who];
+      return out('📸 Just one photo left',
+        'Add the back cover or an inside photo of "' + shortTitle_(b.title) + '" — readers see its condition and swaps happen faster.',
+        '/profile', 'afternoon_finish');
+    }
+    if (ai) return fromAi();
+    if (fest && fest.nudge) return out(fest.nudge.title, fest.nudge.message, '/library?list=1', 'afternoon_festival');
+    const wanted = ctx.wanted.filter(function (w) { return w.askers.indexOf(who) === -1; });
+    if (wanted.length && dailyHash_(seed + 'w') % 2 === 0) {
+      const w = wanted[dailyHash_(seed + 'wt') % Math.min(3, wanted.length)];
+      const n = w.askers.length;
+      return out('🔎 ' + (n > 1 ? n + ' readers are' : 'A reader is') + ' looking for "' + shortTitle_(w.title, 30) + '"',
+        'Have a copy? List it — a photo of the front cover is enough.',
+        '/book-requests', 'afternoon_wanted');
+    }
+    if (guest) {
+      return out(dailyPick_(['📚 Books gathering dust at home?', '📚 Your old book is someone\'s next story'], seed),
+        'List them on SwapSutra and swap them for new reads. Joining is free.',
+        '/library?list=1', 'afternoon_guest');
+    }
+    const mine = ctx.byOwner[who] || 0;
+    if (!mine) {
+      return out(dailyPick_(['📚 ' + (name ? name + ', which' : 'Which') + ' book will be your first?', '📚 Your old book is someone\'s next story', '⏱️ A 30-second job for your lunch break'], seed),
+        'Just snap a photo of the front cover and your listing is ready. List one book today?',
+        '/library?list=1', 'afternoon_first');
+    }
+    return out(dailyPick_(['📚 You have ' + mine + ' ' + (mine === 1 ? 'book' : 'books') + ' on your shelf', '➕ One more book, one more swap'], seed),
+      'The bigger your shelf, the more swaps come your way. Add one more over lunch?',
+      '/library?list=1', 'afternoon_more');
+  }
+
+  if (slot === 'evening') {
+    if (ctx.nextEvent && dailyHash_(seed + 'e') % 3 !== 0) {
+      return out('🎟️ ' + shortTitle_(ctx.nextEvent.title, 50),
+        'Readers are meeting ' + dailyEventWhen_(ctx.nextEvent.date, ctx) + '. Join them — save your seat.',
+        '/events', 'evening_event');
+    }
+    if (ai) return fromAi();
+    if (ctx.cafeToday >= 3) {
+      return out('☕ ' + ctx.cafeToday + ' conversations in the Café today',
+        ctx.cafeSpeakersToday + ' readers are talking books over evening chai. Join in!',
+        '/readers-cafe', 'evening_cafe');
+    }
+    return out(dailyPick_(['☕ What are you reading this week?', '☕ Evening chai and a book chat?'], seed),
+      'Drop a line in the Café' + hi + ' — fellow readers will reply.',
+      '/readers-cafe', 'evening_ask');
+  }
+
+  // night
+  if (ai) return fromAi();
+  if (fest && fest.phase === 'today') {
+    return out('🌙 ' + fest.emoji + ' Happy ' + fest.name + hi + '!', 'End the day with a story. See what is on the shelf tonight.', '/library', 'night_festival');
+  }
+  if (!guest && dailyHash_(seed + 't') % 3 === 0) {
+    return out('📖 How many pages did you read today?', 'Log them in your tracker and keep your reading streak alive 🔥', '/tracker', 'night_tracker');
+  }
+  const pick = pickOf(ctx.live, 'night');
+  if (pick) {
+    return out('🌙 Tonight\'s pick: "' + shortTitle_(pick.title, 34) + '"',
+      (pick.author ? shortTitle_(pick.author, 24) + '\'s book' : 'This book') + ' is on the shelf. Send a request and chat with the owner directly.',
+      '/book/' + encodeURIComponent(pick.id), 'night_pick');
+  }
+  return out('🌙 10 pages before bed?', 'A fresh list of books will be waiting for you in the morning.', '/library', 'night_plain');
+}
+
+// ── Sending ──────────────────────────────────────────────────────────
+
+function sendDailyPushItems_(items) {
+  const props = PropertiesService.getScriptProperties();
+  const url = String(props.getProperty('PUSH_RELAY_URL') || '').trim();
+  const secret = String(props.getProperty('PUSH_RELAY_SECRET') || '').trim();
+  if (!url || !secret || !/^https:\/\//i.test(url)) return { configured: false, sent: 0, failed: 0, calls: 0 };
+  const requests = [];
+  for (let i = 0; i < items.length; i += DAILY_PUSH_BATCH) {
+    requests.push({
+      url: url, method: 'post', contentType: 'application/json',
+      headers: { 'X-Relay-Secret': secret },
+      payload: JSON.stringify({ items: items.slice(i, i + DAILY_PUSH_BATCH) }),
+      muteHttpExceptions: true
+    });
+  }
+  let sent = 0, failed = 0;
+  for (let i = 0; i < requests.length; i += DAILY_PUSH_PARALLEL) {
+    const group = requests.slice(i, i + DAILY_PUSH_PARALLEL);
+    let responses = [];
+    try {
+      responses = typeof UrlFetchApp.fetchAll === 'function'
+        ? UrlFetchApp.fetchAll(group)
+        : group.map(function (g) { return UrlFetchApp.fetch(g.url, g); });
+    } catch (e) { Logger.log('daily push relay failed: ' + e); failed += group.length; continue; }
+    responses.forEach(function (res) {
+      try {
+        const body = JSON.parse(res.getContentText() || '{}');
+        sent += Number(body.sent || 0);
+        failed += Number(body.failed || 0);
+      } catch (e) { /* counts are best-effort */ }
+    });
+  }
+  return { configured: true, sent: sent, failed: failed, calls: requests.length };
+}
+
+function bumpDailyPushStats_(day, slot, field, n) {
+  let lock = null;
+  try {
+    if (typeof LockService !== 'undefined') { lock = LockService.getScriptLock(); lock.tryLock(3000); }
+    const props = PropertiesService.getScriptProperties();
+    let stats = {};
+    try { stats = JSON.parse(props.getProperty(DAILY_PUSH_KEYS.stats) || '{}') || {}; } catch (e) { stats = {}; }
+    stats[day] = stats[day] || {};
+    stats[day][slot] = stats[day][slot] || { readers: 0, sent: 0, opens: 0 };
+    stats[day][slot][field] = (Number(stats[day][slot][field]) || 0) + n;
+    // Two weeks is enough to see what works; the property has a size limit.
+    Object.keys(stats).sort().slice(0, Math.max(0, Object.keys(stats).length - 14)).forEach(function (k) { delete stats[k]; });
+    props.setProperty(DAILY_PUSH_KEYS.stats, JSON.stringify(stats));
+  } catch (e) {
+    Logger.log('daily push stats: ' + e);
+  } finally {
+    try { if (lock) lock.releaseLock(); } catch (e) { /* ignore */ }
+  }
+}
+
+/**
+ * The hourly trigger. Sends only in a slot hour, once per slot per day.
+ * opts (for tests and the admin's "send now"): { now, force: 'morning'|…, only: [emails] }
+ */
+function runDailyEngagementPush(opts) {
+  opts = (opts && typeof opts === 'object' && !opts.triggerUid) ? opts : {};
+  const started = Date.now();
+  const now = opts.now ? new Date(opts.now) : new Date();
+  const ist = istParts_(now);
+  const props = PropertiesService.getScriptProperties();
+  const summary = { day: ist.day, hour: ist.hour, slot: '', readers: 0, items: 0, sent: 0, failed: 0, skipped: '' };
+
+  const forced = opts.force && DAILY_PUSH_SLOT_NAMES[opts.force] ? opts.force : '';
+  if (!forced && String(props.getProperty(DAILY_PUSH_KEYS.paused) || '') === 'true') { summary.skipped = 'paused'; return summary; }
+  const slot = forced || dailyPushSlotName_(ist.hour, dailyPushSlots_());
+  summary.slot = slot;
+  if (!slot) { summary.skipped = 'not a slot hour'; return summary; }
+
+  const doneKey = DAILY_PUSH_KEYS.donePrefix + ist.day + '_' + slot;
+  if (!forced) {
+    if (props.getProperty(doneKey)) { summary.skipped = 'already sent'; return summary; }
+    // Claimed before sending: a second trigger run in the same hour must
+    // not send the slot twice.
+    props.setProperty(doneKey, new Date().toISOString());
+    // Forget the claims from before yesterday.
+    try {
+      const keys = typeof props.getKeys === 'function' ? props.getKeys() : [];
+      keys.forEach(function (k) {
+        if (k.indexOf(DAILY_PUSH_KEYS.donePrefix) === 0 && k.slice(DAILY_PUSH_KEYS.donePrefix.length, DAILY_PUSH_KEYS.donePrefix.length + 10) < istParts_(now.getTime() - 2 * 24 * 3600 * 1000).day) props.deleteProperty(k);
+      });
+    } catch (e) { /* tidy-up only */ }
+  }
+
+  try {
+    let audience = dailyPushAudience_();
+    if (Array.isArray(opts.only)) {
+      const only = {};
+      opts.only.forEach(function (e) { only[normalizeEmail(e)] = true; });
+      Object.keys(audience).forEach(function (k) { if (!only[k]) delete audience[k]; });
+    }
+    const readers = Object.keys(audience);
+    summary.readers = readers.length;
+    if (!readers.length) { summary.skipped = 'no devices'; return summary; }
+
+    const ctx = dailyPushContext_(now);
+    ctx.aiCopy = dailyGeminiCopy_(ctx);
+    summary.festival = ctx.festival ? ctx.festival.name + ' (' + ctx.festival.phase + ')' : '';
+    summary.copy = ctx.aiCopy && ctx.aiCopy[slot] ? 'gemini' : 'templates';
+    const items = [];
+    readers.forEach(function (who) {
+      if (Date.now() - started > DAILY_PUSH_TIME_BUDGET_MS) return;
+      try {
+        const p = composeDailyPush_(slot, who, ctx);
+        items.push({ userEmail: p.userEmail, title: p.title, message: p.message, targetUrl: p.targetUrl, tag: p.tag, type: p.type, devices: audience[who] });
+      } catch (e) { Logger.log('daily push compose failed for one reader: ' + e); }
+    });
+    summary.items = items.length;
+    const res = sendDailyPushItems_(items);
+    summary.sent = res.sent;
+    summary.failed = res.failed;
+    if (!res.configured) summary.skipped = 'relay not configured';
+    if (!forced) {
+      bumpDailyPushStats_(ist.day, slot, 'readers', items.length);
+      bumpDailyPushStats_(ist.day, slot, 'sent', res.sent);
+    }
+  } catch (err) {
+    Logger.log('runDailyEngagementPush failed: ' + err);
+    summary.skipped = 'error: ' + err;
+  }
+  Logger.log('runDailyEngagementPush: ' + JSON.stringify(summary));
+  return summary;
+}
+
+/** Public: a daily push was tapped (the app sees ?ss_push=<slot>). Counts only. */
+function recordPushOpen(data) {
+  const slot = String((data && data.slot) || '');
+  if (!DAILY_PUSH_SLOT_NAMES[slot]) return { success: false, message: 'Unknown slot.' };
+  try {
+    const cache = CacheService.getScriptCache();
+    const burst = Number(cache.get('push_open_burst') || 0);
+    if (burst >= 500) return { success: true, counted: false };
+    cache.put('push_open_burst', String(burst + 1), 600);
+  } catch (e) { /* never block on the cache */ }
+  bumpDailyPushStats_(istParts_(new Date()).day, slot, 'opens', 1);
+  return { success: true, counted: true };
+}
+
+// ── Admin ────────────────────────────────────────────────────────────
+
+function getDailyPushAdmin(data) {
+  const props = PropertiesService.getScriptProperties();
+  let stats = {};
+  try { stats = JSON.parse(props.getProperty(DAILY_PUSH_KEYS.stats) || '{}') || {}; } catch (e) { stats = {}; }
+  const audience = dailyPushAudience_();
+  const readers = Object.keys(audience);
+  const guests = readers.filter(isGuestPushId_).length;
+  const relayReady = Boolean(String(props.getProperty('PUSH_RELAY_URL') || '').trim() && String(props.getProperty('PUSH_RELAY_SECRET') || '').trim());
+  // What each slot would say to the admin today — the preview.
+  const me = normalizeEmail(getAuthenticatedEmail() || '');
+  const slots = dailyPushSlots_();
+  let preview = [];
+  let festival = null, upcoming = [], copySource = 'templates';
+  try {
+    const ctx = dailyPushContext_(new Date());
+    ctx.aiCopy = dailyGeminiCopy_(ctx, { refresh: !!(data && data.refreshCopy) });
+    festival = ctx.festival;
+    upcoming = upcomingFestivals_(ctx.day, 45);
+    copySource = ctx.aiCopy ? 'gemini' : 'templates';
+    const sampleGuest = 'guest:preview';
+    preview = slots.map(function (h) {
+      const slot = dailyPushSlotName_(h, slots);
+      return { hour: h, slot: slot, member: composeDailyPush_(slot, me || 'admin@preview', ctx), visitor: composeDailyPush_(slot, sampleGuest, ctx) };
+    });
+  } catch (e) { Logger.log('daily push preview: ' + e); }
+  return {
+    success: true,
+    paused: String(props.getProperty(DAILY_PUSH_KEYS.paused) || '') === 'true',
+    slots: slots,
+    relayReady: relayReady,
+    devicesReached: readers.reduce(function (n, k) { return n + audience[k].length; }, 0),
+    readers: readers.length - guests,
+    visitors: guests,
+    stats: stats,
+    preview: preview,
+    festival: festival,
+    upcomingFestivals: upcoming,
+    copySource: copySource,
+    aiEnabled: String(props.getProperty('DAILY_PUSH_AI') || '') !== 'off'
+  };
+}
+
+function setDailyPushSettings(data) {
+  const props = PropertiesService.getScriptProperties();
+  if (data && data.paused !== undefined) props.setProperty(DAILY_PUSH_KEYS.paused, (data.paused === true || data.paused === 'true') ? 'true' : 'false');
+  if (data && data.ai !== undefined) props.setProperty('DAILY_PUSH_AI', (data.ai === false || data.ai === 'off') ? 'off' : 'on');
+  if (data && data.slots !== undefined) {
+    const list = String(Array.isArray(data.slots) ? data.slots.join(',') : data.slots || '');
+    if (!list.trim()) props.deleteProperty(DAILY_PUSH_KEYS.slots);
+    else props.setProperty(DAILY_PUSH_KEYS.slots, list);
+  }
+  return getDailyPushAdmin(data);
+}
+
+/** Admin: send one slot right now, to the admin's own devices only. */
+function sendDailyPushTest(data) {
+  const me = normalizeEmail(getAuthenticatedEmail() || '');
+  if (!me) return { success: false, message: 'Sign in first.' };
+  const slot = String((data && data.slot) || 'morning');
+  if (!DAILY_PUSH_SLOT_NAMES[slot]) return { success: false, message: 'Unknown slot.' };
+  const summary = runDailyEngagementPush({ force: slot, only: [me] });
+  return { success: true, summary: summary };
+}
+
+// =====================================================================
+// COFFEE MUGS — marketplace shelf + custom mug enquiries (30 Sep 2026)
+// ---------------------------------------------------------------------
+// Two sheet tabs, both created on first use:
+//
+//   MugProducts          What the /mugs shelf shows. EMPTY at launch: it is
+//                        filled only from authorised sources (an affiliate
+//                        feed, a merchant's own product data, products
+//                        SwapSutra has permission to list). Nothing is
+//                        scraped or copied from Amazon/Flipkart. A row is
+//                        shown only when status = "live".
+//
+//   CustomMugEnquiries   One row per "Create My Mug" request. Written ONLY
+//                        after the server has re-validated every field; the
+//                        website shows "on its way" only when this returns
+//                        success with the new id. adminNotes and
+//                        assignedManufacturer are internal and are never
+//                        returned to a customer.
+//
+// Manufacturer workflow the statuses follow: new → reviewing →
+// manufacturer_search → prototype → quoted → customer_approval →
+// manufacturing → shipped → completed (or rejected). Nothing here promises
+// feasibility, a price, a manufacturer or a date.
+// =====================================================================
+
+const MUG_PRODUCT_HEADERS = [
+  'id', 'title', 'description', 'category', 'imageUrl', 'price', 'mrp', 'currency',
+  'availability', 'sourceMarketplace', 'sourceUrl', 'affiliateUrl', 'vendor',
+  'rating', 'ratingCount', 'ratingSource', 'status', 'sortOrder', 'updatedAt'
+];
+const MUG_CATEGORY_IDS = ['bookish', 'minimal', 'funny-reader', 'cafe-style', 'aesthetic', 'personalized'];
+
+const MUG_ENQUIRY_HEADERS = [
+  'id', 'createdAt', 'name', 'email', 'phone', 'idea', 'referenceImageUrl',
+  'mugType', 'volumeMl', 'volumeRange', 'quantityRange', 'quantityExact',
+  'budgetType', 'budgetAmount', 'budgetRange', 'pincode', 'city', 'state',
+  'timeline', 'specificDate', 'additionalNotes',
+  'status', 'adminNotes', 'assignedManufacturer', 'lastUpdatedAt'
+];
+const MUG_ENQUIRY_STATUSES = ['new', 'reviewing', 'manufacturer_search', 'prototype', 'quoted',
+  'customer_approval', 'manufacturing', 'shipped', 'completed', 'rejected'];
+// The website (src/utils/mugEnquiry.ts) offers exactly these; the server
+// accepts nothing else. tests/test_custom_mug_enquiry.cjs keeps them equal.
+const MUG_TYPES = ['Coffee Mug', 'Café Mug', 'Travel Mug', 'Handleless Mug', 'Large Mug', 'Mini Mug', 'Espresso Cup', 'Tea Cup', 'Other'];
+const MUG_VOLUME_RANGES = {
+  '100-150': { label: '100–150 ml — Espresso / Mini', min: 100, max: 150 },
+  '150-200': { label: '150–200 ml — Small', min: 150, max: 200 },
+  '200-250': { label: '200–250 ml — Regular', min: 200, max: 250 },
+  '250-300': { label: '250–300 ml — Medium', min: 250, max: 300 },
+  '300-350': { label: '300–350 ml — Large', min: 300, max: 350 },
+  '350-450': { label: '350–450 ml — Extra Large', min: 350, max: 450 },
+  '450-600': { label: '450–600 ml — Oversized', min: 450, max: 600 }
+};
+const MUG_CUSTOM_VOLUME = { min: 30, max: 2000 };
+const MUG_QUANTITY_RANGES = { '1': [1, 1], '2-5': [2, 5], '6-20': [6, 20], '21-50': [21, 50], '50+': [51, 100000] };
+const MUG_BUDGET_TYPES = { per_mug: 'per mug', total: 'total project' };
+const MUG_BUDGET_RANGES = ['Under ₹500', '₹500–₹1,000', '₹1,000–₹2,000', '₹2,000–₹5,000', '₹5,000–₹10,000', '₹10,000+'];
+const MUG_TIMELINES = {
+  no_rush: 'No rush', within_2_weeks: 'Within 2 weeks', within_1_month: 'Within 1 month',
+  '1_3_months': '1–3 months', specific_date: 'Need it by a specific date'
+};
+const MUG_IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
+
+/**
+ * Admin: list mugs sold on Amazon, Flipkart or another store (30 Sep 2026).
+ * The admin pastes the product's own link and the details shown on its
+ * page — nothing is scraped. Visitors click "Buy on Amazon/Flipkart" and
+ * the store opens in a new tab; the order is placed there, not here.
+ * Status: live (on the shelf), draft (saved, hidden) or removed.
+ */
+const MUG_PRODUCT_STATUSES = ['live', 'draft', 'removed'];
+
+/** "Amazon" / "Flipkart" from a product link, or '' for any other store. */
+function mugMarketplaceFromUrl_(url) {
+  const m = String(url || '').toLowerCase().match(/^https:\/\/([^\/?#]+)/);
+  const host = m ? m[1].replace(/^www\./, '') : '';
+  if (/(^|\.)amazon\.(in|com)$|^amzn\.(to|in|eu)$|^a\.co$/.test(host)) return 'Amazon';
+  if (/(^|\.)flipkart\.com$|^fkrt\.(it|cc|co)$|^fktr\.in$/.test(host)) return 'Flipkart';
+  return '';
+}
+
+function getAdminMugProducts() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const sheet = getOrCreateSheet('MugProducts', MUG_PRODUCT_HEADERS);
+  ensureSheetHeaders(sheet, MUG_PRODUCT_HEADERS);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(function (h) { return String(h).trim(); });
+  const items = values.slice(1).map(function (r) {
+    const o = {};
+    headers.forEach(function (h, i) { o[h] = r[i] instanceof Date ? r[i].toISOString() : r[i]; });
+    return o;
+  }).filter(function (o) { return String(o.id || '').trim() && String(o.status || '').toLowerCase() !== 'removed'; });
+  return { success: true, items: items, categories: MUG_CATEGORY_IDS, statuses: MUG_PRODUCT_STATUSES };
+}
+
+function saveMugProduct(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  data = data || {};
+  const https = function (u) { u = String(u || '').trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u.slice(0, 1000) : ''; };
+  const money = function (n) { if (n === '' || n === null || n === undefined) return ''; n = Number(n); return isFinite(n) && n > 0 && n < 1000000 ? Math.round(n) : NaN; };
+  const status = String(data.status || 'draft').toLowerCase();
+  if (MUG_PRODUCT_STATUSES.indexOf(status) === -1) return { success: false, message: 'Unknown status.' };
+
+  const title = mugText_(data.title, 120);
+  const category = String(data.category || '').trim();
+  const sourceUrl = https(data.sourceUrl);
+  const affiliateUrl = https(data.affiliateUrl);
+  const imageUrl = https(data.imageUrl);
+  const price = money(data.price), mrp = money(data.mrp);
+  const errors = {};
+  if (status !== 'removed') {
+    if (!title) errors.title = 'Give the mug a name.';
+    if (MUG_CATEGORY_IDS.indexOf(category) === -1) errors.category = 'Pick a category.';
+    if (!sourceUrl) errors.sourceUrl = 'Paste the product link (it must start with https://).';
+    if (String(data.affiliateUrl || '').trim() && !affiliateUrl) errors.affiliateUrl = 'The affiliate link must start with https://.';
+    if (String(data.imageUrl || '').trim() && !imageUrl) errors.imageUrl = 'The image link must start with https://.';
+    if (price !== '' && isNaN(price)) errors.price = 'Price must be a number in rupees.';
+    if (mrp !== '' && isNaN(mrp)) errors.mrp = 'MRP must be a number in rupees.';
+    if (status === 'live' && !imageUrl) errors.imageUrl = 'Add the product photo link before putting it live.';
+  }
+  if (Object.keys(errors).length) return { success: false, errors: errors, message: 'Please fix the highlighted fields.' };
+
+  const marketplace = mugMarketplaceFromUrl_(sourceUrl) || mugText_(data.sourceMarketplace, 40);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getOrCreateSheet('MugProducts', MUG_PRODUCT_HEADERS);
+    ensureSheetHeaders(sheet, MUG_PRODUCT_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(function (h) { return String(h).trim(); });
+    const col = function (h) { return headers.indexOf(h); };
+    const id = String(data.id || '').trim();
+    let rowIndex = -1;
+    if (id) {
+      for (let i = 1; i < values.length; i++) if (String(values[i][col('id')]) === id) { rowIndex = i; break; }
+      if (rowIndex === -1) return { success: false, message: 'That mug no longer exists.' };
+    }
+    const row = rowIndex === -1 ? headers.map(function () { return ''; }) : values[rowIndex].slice();
+    const set = function (h, v) { if (col(h) !== -1) row[col(h)] = v; };
+    const newId = id || ('MUGP-' + Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyyMMdd') + '-' + Utilities.getUuid().slice(0, 5).toUpperCase());
+    set('id', newId);
+    set('status', status);
+    set('updatedAt', new Date().toISOString());
+    if (status !== 'removed') {
+      set('title', title);
+      set('description', mugText_(data.description, 400));
+      set('category', category);
+      set('imageUrl', imageUrl);
+      set('price', price === '' ? '' : price);
+      set('mrp', mrp !== '' && price !== '' && mrp > price ? mrp : '');
+      set('currency', 'INR');
+      set('availability', mugText_(data.availability, 40));
+      set('sourceMarketplace', marketplace);
+      set('sourceUrl', sourceUrl);
+      set('affiliateUrl', affiliateUrl);
+      set('vendor', mugText_(data.vendor, 60));
+      set('sortOrder', Number(data.sortOrder) || 0);
+      // Ratings are never typed in by hand: a number with no verifiable
+      // source is exactly the fake review this shop refuses to show.
+      set('rating', ''); set('ratingCount', ''); set('ratingSource', '');
+    }
+    if (rowIndex === -1) sheet.appendRow(row);
+    else sheet.getRange(rowIndex + 1, 1, 1, row.length).setValues([row]);
+    return { success: true, id: newId, sourceMarketplace: marketplace };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function mugText_(v, max) {
+  return String(v === undefined || v === null ? '' : v).replace(/\u0000/g, '').trim().slice(0, max);
+}
+
+/** Server-side validation. Returns { ok, errors, clean }. Never trusts the browser. */
+function validateCustomMugEnquiry_(data, now) {
+  const d = data || {};
+  const errors = {};
+  const clean = {};
+  now = now || new Date();
+
+  clean.name = mugText_(d.name, 80);
+  if (clean.name.length < 2) errors.name = 'Please tell us your name.';
+
+  clean.email = mugText_(d.email, 120).toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(clean.email)) errors.email = 'Please enter a valid email address.';
+
+  const digits = String(d.phone || '').replace(/[\s\-().]/g, '');
+  const m = digits.match(/^(?:\+?91|0)?([6-9]\d{9})$/);
+  if (!m) errors.phone = 'Please enter a 10-digit Indian mobile number.';
+  else clean.phone = '+91' + m[1];
+
+  clean.idea = mugText_(d.idea, 3000);
+  if (clean.idea.length < 20) errors.idea = 'Tell us a little more about your mug idea (at least 20 characters).';
+
+  clean.mugType = mugText_(d.mugType, 40);
+  if (MUG_TYPES.indexOf(clean.mugType) === -1) errors.mugType = 'Please choose a mug style.';
+
+  const volumeRange = mugText_(d.volumeRange, 20);
+  if (volumeRange === 'custom') {
+    const ml = Number(d.volumeMl);
+    if (!isFinite(ml) || ml < MUG_CUSTOM_VOLUME.min || ml > MUG_CUSTOM_VOLUME.max) {
+      errors.volumeMl = 'Enter a capacity between ' + MUG_CUSTOM_VOLUME.min + ' and ' + MUG_CUSTOM_VOLUME.max + ' ml.';
+    } else {
+      clean.volumeMl = Math.round(ml);
+      clean.volumeRange = 'Custom';
+    }
+  } else if (MUG_VOLUME_RANGES[volumeRange]) {
+    const r = MUG_VOLUME_RANGES[volumeRange];
+    // A range is stored as its midpoint in ml (a number the manufacturer
+    // can work with) plus the range itself.
+    clean.volumeMl = Math.round((r.min + r.max) / 2);
+    clean.volumeRange = r.min + '–' + r.max + ' ml';
+  } else {
+    errors.volumeRange = 'Please choose how much it should hold.';
+  }
+
+  const qRange = mugText_(d.quantityRange, 10);
+  if (!MUG_QUANTITY_RANGES[qRange]) errors.quantityRange = 'Please choose how many mugs you need.';
+  else clean.quantityRange = qRange;
+  if (d.quantityExact !== undefined && d.quantityExact !== null && String(d.quantityExact).trim() !== '') {
+    const q = Number(d.quantityExact);
+    if (!Number.isInteger(q) || q < 1 || q > 100000) errors.quantityExact = 'Exact quantity must be a whole number.';
+    else if (clean.quantityRange && (q < MUG_QUANTITY_RANGES[clean.quantityRange][0] || q > MUG_QUANTITY_RANGES[clean.quantityRange][1])) {
+      errors.quantityExact = 'That number does not match the range you picked.';
+    } else clean.quantityExact = q;
+  } else clean.quantityExact = '';
+
+  clean.budgetType = mugText_(d.budgetType, 20);
+  if (!MUG_BUDGET_TYPES[clean.budgetType]) errors.budgetType = 'Is the budget per mug or for the whole order?';
+  const amount = Number(d.budgetAmount);
+  if (!isFinite(amount) || amount <= 0 || amount > 10000000) errors.budgetAmount = 'Please enter a budget in rupees.';
+  else clean.budgetAmount = Math.round(amount);
+  clean.budgetRange = MUG_BUDGET_RANGES.indexOf(String(d.budgetRange || '')) !== -1 ? String(d.budgetRange) : '';
+
+  clean.pincode = mugText_(d.pincode, 6);
+  if (!/^[1-9]\d{5}$/.test(clean.pincode)) errors.pincode = 'Please enter a valid 6-digit pincode.';
+  clean.city = mugText_(d.city, 60);
+  clean.state = mugText_(d.state, 60);
+
+  clean.timeline = mugText_(d.timeline, 20);
+  if (!MUG_TIMELINES[clean.timeline]) errors.timeline = 'When do you need it?';
+  clean.specificDate = '';
+  if (clean.timeline === 'specific_date') {
+    const s = mugText_(d.specificDate, 10);
+    const when = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T00:00:00Z') : null;
+    // "Today" in India, whatever the script's own time zone.
+    const todayIst = new Date(now.getTime() + 330 * 60 * 1000).toISOString().slice(0, 10);
+    const startOfToday = new Date(todayIst + 'T00:00:00Z');
+    if (!when || isNaN(when.getTime())) errors.specificDate = 'Please pick the date you need it by.';
+    else if (when < startOfToday) errors.specificDate = 'That date has already passed.';
+    else if (when.getTime() - startOfToday.getTime() > 2 * 366 * 24 * 3600 * 1000) errors.specificDate = 'Please pick a date within the next two years.';
+    else clean.specificDate = s;
+  }
+
+  clean.additionalNotes = mugText_(d.additionalNotes, 1000);
+  return { ok: Object.keys(errors).length === 0, errors: errors, clean: clean };
+}
+
+function mugTimelineText_(row) {
+  const t = MUG_TIMELINES[row.timeline] || row.timeline || '';
+  return row.timeline === 'specific_date' && row.specificDate ? 'By ' + row.specificDate : t;
+}
+
+function mugBudgetText_(row) {
+  const amount = Number(row.budgetAmount) || 0;
+  return '₹' + amount.toLocaleString('en-IN') + ' ' + (MUG_BUDGET_TYPES[row.budgetType] || row.budgetType || '')
+    + (row.budgetRange ? ' (' + row.budgetRange + ')' : '');
+}
+
+function mugQuantityText_(row) {
+  return row.quantityExact ? row.quantityExact + ' mugs' : (row.quantityRange === '1' ? '1 mug' : row.quantityRange + ' mugs');
+}
+
+/**
+ * The manufacturer RFQ text for one enquiry: the same block can be sent
+ * to several ceramic manufacturers for a quote. It carries no customer
+ * contact details (those stay with SwapSutra) and states that capacity is
+ * approximate until prototyping.
+ */
+function buildMugManufacturerBrief_(row) {
+  const lines = [
+    'CUSTOM MUG REQUEST',
+    'Reference: ' + row.id,
+    '',
+    'Idea:',
+    String(row.idea || ''),
+    '',
+    'Style: ' + (row.mugType || ''),
+    'Capacity: ' + (row.volumeMl ? row.volumeMl + ' ml' : '') + (row.volumeRange && row.volumeRange !== 'Custom' ? ' (range ' + row.volumeRange + ')' : '')
+      + ' — approximate; final usable volume to be confirmed at prototype',
+    'Quantity: ' + mugQuantityText_(row),
+    'Customer budget: ' + mugBudgetText_(row),
+    'Delivery pincode: ' + (row.pincode || '') + (row.city || row.state ? ' (' + [row.city, row.state].filter(String).join(', ') + ')' : ''),
+    'Timeline: ' + mugTimelineText_(row),
+    'Reference image: ' + (row.referenceImageUrl || 'none'),
+    'Additional notes: ' + (row.additionalNotes || 'none')
+  ];
+  return lines.join('\n');
+}
+
+function mugEnquirySheet_() {
+  const sheet = getOrCreateSheet('CustomMugEnquiries', MUG_ENQUIRY_HEADERS);
+  ensureSheetHeaders(sheet, MUG_ENQUIRY_HEADERS);
+  return sheet;
+}
+
+function newMugEnquiryId_(now) {
+  const ymd = new Date(now.getTime() + 330 * 60 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
+  return 'MUG-' + ymd + '-' + Utilities.getUuid().replace(/-/g, '').slice(0, 5).toUpperCase();
+}
+
+/** Public: a visitor sends a custom mug idea. */
+function submitCustomMugEnquiry(data) {
+  try {
+    const d = data || {};
+    // Honeypot: a hidden field a person never fills. Answer as if it
+    // worked so a bot learns nothing, but store nothing.
+    if (String(d.website || '').trim()) return { success: true, id: 'MUG-RECEIVED' };
+
+    const v = validateCustomMugEnquiry_(d, new Date());
+    if (!v.ok) return { success: false, error: 'VALIDATION', message: 'Please check the highlighted fields.', fieldErrors: v.errors };
+
+    // Rate limits: the same email at most 5 an hour; the whole form at
+    // most 120 an hour, so a script cannot flood the sheet or Drive.
+    try {
+      const cache = CacheService.getScriptCache();
+      const perEmailKey = 'mug_enq_' + v.clean.email.replace(/[^a-z0-9]/g, '').slice(0, 60);
+      const mine = Number(cache.get(perEmailKey) || 0);
+      const all = Number(cache.get('mug_enq_all') || 0);
+      if (mine >= 5 || all >= 120) return { success: false, error: 'RATE_LIMITED', message: 'We have received several ideas from you already. Please try again in an hour.' };
+      cache.put(perEmailKey, String(mine + 1), 3600);
+      cache.put('mug_enq_all', String(all + 1), 3600);
+    } catch (e) { /* the cache is a courtesy, not a gate */ }
+
+    // Optional reference image: jpg / png / webp only, already shrunk by the
+    // browser; refused (not silently dropped) if it is anything else.
+    let imageUrl = '';
+    const img = String(d.referenceImage || '');
+    if (img) {
+      const mm = img.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,/);
+      if (!mm) return { success: false, error: 'VALIDATION', message: 'The reference image must be a JPG, PNG or WebP.', fieldErrors: { referenceImage: 'Use a JPG, PNG or WebP image.' } };
+      const bytes = Math.floor((img.length - mm[0].length) * 3 / 4);
+      if (bytes > MUG_IMAGE_MAX_BYTES) return { success: false, error: 'VALIDATION', message: 'The reference image is too large.', fieldErrors: { referenceImage: 'Please use an image under 1.5 MB.' } };
+      imageUrl = saveFileToDrive(img, 'mug-reference.' + (mm[1].split('/')[1] === 'jpeg' ? 'jpg' : mm[1].split('/')[1]));
+      if (!imageUrl) return { success: false, error: 'UPLOAD_FAILED', message: 'We could not save your reference image. Please try again, or send the idea without it.' };
+    }
+
+    const now = new Date();
+    const row = Object.assign({}, v.clean, {
+      id: newMugEnquiryId_(now),
+      createdAt: now,
+      referenceImageUrl: imageUrl,
+      status: 'new',
+      adminNotes: '',
+      assignedManufacturer: '',
+      lastUpdatedAt: now
+    });
+    const sheet = mugEnquirySheet_();
+    const headers = sheet.getDataRange().getValues()[0].map(function (h) { return String(h).trim(); });
+    sheet.appendRow(headers.map(function (h) { return row[h] === undefined ? '' : row[h]; }));
+
+    // Emails are best-effort: the idea is already safely stored.
+    try {
+      const owner = String(PropertiesService.getScriptProperties().getProperty('MUG_ENQUIRY_NOTIFY_EMAIL') || 'swapsutra@gmail.com').trim();
+      sendSwapSutraEmail(owner, 'New custom mug idea — ' + row.id + ' (' + mugQuantityText_(row) + ', ' + mugBudgetText_(row) + ')',
+        buildMugManufacturerBrief_(row) + '\n\nCustomer (internal only): ' + row.name + ' · ' + row.email + ' · ' + row.phone);
+    } catch (e) { Logger.log('mug enquiry owner email failed: ' + e); }
+    try {
+      const first = escapeHtml(row.name.split(' ')[0]);
+      sendSwapSutraEmail({
+        to: row.email,
+        subject: 'Your mug idea is on its way (' + row.id + ')',
+        htmlBody: getBrandedEmailTemplate('Your mug idea is on its way',
+          '<p>Hi ' + first + ',</p>'
+          + '<p>Thank you for sending us your mug idea. We will review it, check what kind of manufacturing it needs, and get back to you with the next step.</p>'
+          + '<p style="padding:14px;border-left:4px solid #8E4A59;background:#FAF7F2;">' + escapeHtml(row.idea.slice(0, 400)) + (row.idea.length > 400 ? '…' : '') + '</p>'
+          + '<p>Your reference: <strong>' + row.id + '</strong>. Nothing is confirmed yet — no price, maker or delivery date — until we have reviewed it with you.</p>')
+      });
+    } catch (e) { Logger.log('mug enquiry customer email failed: ' + e); }
+
+    return { success: true, id: row.id };
+  } catch (err) {
+    Logger.log('submitCustomMugEnquiry failed: ' + err);
+    return { success: false, error: 'SERVER', message: 'We could not save your idea just now. Please try again in a minute.' };
+  }
+}
+
+/** Admin: every enquiry, newest first, with its manufacturer brief. */
+function getAdminCustomMugEnquiries(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, message: 'Unauthorized' };
+  const values = mugEnquirySheet_().getDataRange().getValues();
+  const headers = values[0].map(function (h) { return String(h).trim(); });
+  const items = values.slice(1).filter(function (r) { return r.some(String); }).map(function (r) {
+    const row = {};
+    headers.forEach(function (h, i) { row[h] = r[i] instanceof Date ? r[i].toISOString() : r[i]; });
+    row.manufacturerBrief = buildMugManufacturerBrief_(row);
+    return row;
+  }).reverse();
+  return { success: true, items: items, statuses: MUG_ENQUIRY_STATUSES };
+}
+
+/** Admin: status, internal notes, manufacturer. Nothing else can change. */
+function updateCustomMugEnquiry(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, message: 'Unauthorized' };
+  const id = String((data && data.id) || '');
+  const sheet = mugEnquirySheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(function (h) { return String(h).trim(); });
+  const idIdx = headers.indexOf('id');
+  for (let r = 1; r < values.length; r++) {
+    if (String(values[r][idIdx]) !== id) continue;
+    const set = function (name, value) { const i = headers.indexOf(name); if (i !== -1) sheet.getRange(r + 1, i + 1).setValue(value); };
+    if (data.status !== undefined) {
+      if (MUG_ENQUIRY_STATUSES.indexOf(String(data.status)) === -1) return { success: false, message: 'Unknown status.' };
+      set('status', String(data.status));
+    }
+    if (data.adminNotes !== undefined) set('adminNotes', mugText_(data.adminNotes, 5000));
+    if (data.assignedManufacturer !== undefined) set('assignedManufacturer', mugText_(data.assignedManufacturer, 200));
+    set('lastUpdatedAt', new Date());
+    return { success: true, message: 'Enquiry updated.' };
+  }
+  return { success: false, message: 'Enquiry not found.' };
+}
+
+/**
+ * Public: the mug shelf. Only rows marked live, only http(s) links, and
+ * only the fields a shopper needs. A price cut (MRP) and a rating are
+ * passed on only when the row actually carries them from its source.
+ */
+function getMugProducts() {
+  try {
+    const sheet = getOrCreateSheet('MugProducts', MUG_PRODUCT_HEADERS);
+    ensureSheetHeaders(sheet, MUG_PRODUCT_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(function (h) { return String(h).trim(); });
+    const httpUrl = function (u) { u = String(u || '').trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u : ''; };
+    const num = function (n) { n = Number(n); return isFinite(n) && n > 0 ? n : null; };
+    const items = values.slice(1).map(function (r) {
+      const o = {};
+      headers.forEach(function (h, i) { o[h] = r[i]; });
+      return o;
+    }).filter(function (o) {
+      return String(o.status || '').toLowerCase() === 'live' && String(o.title || '').trim()
+        && MUG_CATEGORY_IDS.indexOf(String(o.category || '').trim()) !== -1;
+    }).map(function (o) {
+      const price = num(o.price), mrp = num(o.mrp);
+      const rating = Number(o.rating);
+      const hasRating = isFinite(rating) && rating > 0 && rating <= 5 && String(o.ratingSource || '').trim();
+      return {
+        id: String(o.id || ''), title: mugText_(o.title, 120), description: mugText_(o.description, 400),
+        category: String(o.category).trim(), imageUrl: httpUrl(o.imageUrl),
+        price: price, mrp: mrp && price && mrp > price ? mrp : null, currency: String(o.currency || 'INR'),
+        availability: mugText_(o.availability, 40), sourceMarketplace: mugText_(o.sourceMarketplace, 40),
+        sourceUrl: httpUrl(o.sourceUrl), affiliateUrl: httpUrl(o.affiliateUrl), vendor: mugText_(o.vendor, 60),
+        rating: hasRating ? Math.round(rating * 10) / 10 : null, ratingCount: hasRating ? (Number(o.ratingCount) || null) : null,
+        ratingSource: hasRating ? mugText_(o.ratingSource, 40) : '', sortOrder: Number(o.sortOrder) || 0
+      };
+    }).sort(function (a, b) { return a.sortOrder - b.sortOrder; });
+    return { success: true, items: items };
+  } catch (err) {
+    Logger.log('getMugProducts failed: ' + err);
+    return { success: false, items: [], message: 'The mug shelf could not be loaded.' };
+  }
+}
+
+
+// =====================================================================
+// SPONSORED ADS — bookstores, authors and books (9 Oct 2026)
+// ---------------------------------------------------------------------
+// The admin places an ad for a bookstore, an author or a particular book.
+// It shows on the Library's banner, between the books on the shelf, or
+// both. Every ad is labelled "Sponsored" on the site and its link opens
+// with rel="sponsored". A "book" ad may point at a SwapSutra listing
+// (bookId) instead of an outside link.
+//
+//   SponsoredAds   one row per ad; status live / paused / removed.
+//                  startDate / endDate (optional, yyyy-mm-dd, IST) limit
+//                  when a live ad shows. clicks is a simple counter.
+// =====================================================================
+
+const AD_HEADERS = [
+  'id', 'kind', 'sponsor', 'headline', 'tagline', 'imageUrl', 'linkUrl', 'bookId',
+  'ctaLabel', 'placement', 'status', 'startDate', 'endDate', 'clicks',
+  'createdAt', 'updatedAt', 'createdBy',
+  // A partner's own ad (9 Oct 2026): it waits as "pending" until the admin approves it.
+  'partnerId', 'reviewNote'
+];
+// 11 Oct 2026 (owner's request): publishers and promoters too.
+const AD_KINDS = ['bookstore', 'author', 'publisher', 'promoter', 'library', 'book'];
+const AD_PLACEMENTS = ['both', 'banner', 'shelf'];
+const AD_STATUSES = ['live', 'paused', 'removed', 'pending', 'rejected'];
+const AD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+
+function adSheet_() {
+  const sheet = getOrCreateSheet('SponsoredAds', AD_HEADERS);
+  ensureSheetHeaders(sheet, AD_HEADERS);
+  return sheet;
+}
+
+function adRows_() {
+  const values = adSheet_().getDataRange().getValues();
+  if (!values.length) return { headers: AD_HEADERS.slice(), rows: [] };
+  const headers = values[0].map(function (h) { return String(h).trim(); });
+  const rows = [];
+  for (let i = 1; i < values.length; i++) {
+    const o = {};
+    headers.forEach(function (h, j) {
+      const v = values[i][j];
+      // Sheets turns "2026-10-15" into a Date at midnight of the sheet's
+      // time zone (India); read it back as the same India day (launch check).
+      o[h] = v instanceof Date ? ((h === 'startDate' || h === 'endDate') ? adDate_(v) : v.toISOString()) : v;
+    });
+    if (String(o.id || '').trim()) rows.push({ rowIndex: i, obj: o });
+  }
+  return { headers: headers, rows: rows };
+}
+
+/** yyyy-mm-dd for "today" in India. */
+function adTodayIst_(now) {
+  const d = new Date((now ? now.getTime() : Date.now()) + 5.5 * 3600e3);
+  return d.toISOString().slice(0, 10);
+}
+function adDate_(v) {
+  if (v instanceof Date) return new Date(v.getTime() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const s = String(v || '').trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '';
+}
+
+/** Is this ad on the site right now? */
+function adIsShowing_(o, today) {
+  if (String(o.status || '').toLowerCase() !== 'live') return false;
+  const start = adDate_(o.startDate), end = adDate_(o.endDate);
+  if (start && today < start) return false;
+  if (end && today > end) return false;
+  return true;
+}
+
+/**
+ * Public: the ads to show now. Only what a visitor needs — no click
+ * counts, no admin details.
+ */
+function getSponsoredAds() {
+  try {
+    const today = adTodayIst_();
+    const https = function (u) { u = String(u || '').trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u : ''; };
+    const partnersById = {};
+    try { partnerRows_().rows.forEach(function (r) { partnersById[String(r.obj.id)] = r.obj; }); } catch (e) { /* no partners yet */ }
+    const items = adRows_().rows.map(function (r) { return r.obj; })
+      .filter(function (o) { return adIsShowing_(o, today) && String(o.headline || '').trim() && (https(o.linkUrl) || String(o.bookId || '').trim()); })
+      // A partner's ad runs only while their promotion is paid up (or free) and they want ads.
+      .filter(function (o) { return !String(o.partnerId || '') || partnerPromotionLive_(partnersById[String(o.partnerId)], 'ads'); })
+      .map(function (o) {
+        const placement = AD_PLACEMENTS.indexOf(String(o.placement)) === -1 ? 'both' : String(o.placement);
+        return {
+          id: String(o.id), kind: AD_KINDS.indexOf(String(o.kind)) === -1 ? 'book' : String(o.kind),
+          sponsor: mugText_(o.sponsor, 80), headline: mugText_(o.headline, 90), tagline: mugText_(o.tagline, 160),
+          imageUrl: https(o.imageUrl), linkUrl: https(o.linkUrl), bookId: mugText_(o.bookId, 60),
+          ctaLabel: mugText_(o.ctaLabel, 30), placement: placement, partner: !!String(o.partnerId || '')
+        };
+      }).concat(partnerBannerAds_());
+    return { success: true, items: items };
+  } catch (err) {
+    Logger.log('getSponsoredAds failed: ' + err);
+    return { success: true, items: [] };
+  }
+}
+
+/** Public: count a click (no reader details are stored). */
+function recordAdClick(data) {
+  const id = String((data || {}).id || '').trim();
+  if (!id) return { success: false };
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(3000)) return { success: false };
+  try {
+    // A partner's Library banner (id "PB-<partnerId>") counts on its partner row.
+    if (id.indexOf('PB-') === 0) {
+      const pr = partnerRows_();
+      const ph = pr.rows.find(function (r) { return String(r.obj.id) === id.slice(3); });
+      if (!ph || String(ph.obj.status) !== 'APPROVED') return { success: false };
+      const headers = ensureSheetHeaders(partnerSheet_(), PARTNER_HEADERS);
+      partnerSheet_().getRange(ph.rowIndex + 1, headers.indexOf('bannerClicks') + 1).setValue((Number(ph.obj.bannerClicks) || 0) + 1);
+      return { success: true };
+    }
+    const sheet = adSheet_();
+    const all = adRows_();
+    const hit = all.rows.find(function (r) { return String(r.obj.id) === id; });
+    if (!hit || !adIsShowing_(hit.obj, adTodayIst_())) return { success: false };
+    const col = all.headers.indexOf('clicks');
+    sheet.getRange(hit.rowIndex + 1, col + 1).setValue((Number(hit.obj.clicks) || 0) + 1);
+    return { success: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getAdminSponsoredAds() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const today = adTodayIst_();
+  const items = adRows_().rows.map(function (r) { return r.obj; })
+    .filter(function (o) { return String(o.status || '').toLowerCase() !== 'removed'; })
+    .map(function (o) {
+      const partner = String(o.partnerId || '') ? ((partnerRows_().rows.find(function (r) { return String(r.obj.id) === String(o.partnerId); }) || {}).obj || null) : null;
+      return Object.assign({}, o, { startDate: adDate_(o.startDate), endDate: adDate_(o.endDate), clicks: Number(o.clicks) || 0,
+        showingNow: adIsShowing_(o, today) && (!partner || partnerPromotionLive_(partner, 'ads')),
+        partnerName: partner ? partner.name : '', partnerPromotionActive: partner ? partnerPromotionLive_(partner, 'ads') : null });
+    });
+  return { success: true, items: items, kinds: AD_KINDS, placements: AD_PLACEMENTS, statuses: AD_STATUSES };
+}
+
+/** Validation shared by save and the tests. Returns { errors, clean }. */
+function validateSponsoredAd_(data) {
+  const d = data || {};
+  const errors = {};
+  const https = function (u) { u = String(u || '').trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u.slice(0, 1000) : ''; };
+  const status = String(d.status || 'live').toLowerCase();
+  const clean = {
+    kind: String(d.kind || '').toLowerCase(), sponsor: mugText_(d.sponsor, 80), headline: mugText_(d.headline, 90),
+    tagline: mugText_(d.tagline, 160), imageUrl: https(d.imageUrl), linkUrl: https(d.linkUrl), bookId: mugText_(d.bookId, 60),
+    ctaLabel: mugText_(d.ctaLabel, 30), placement: String(d.placement || 'both').toLowerCase(), status: status,
+    startDate: adDate_(d.startDate), endDate: adDate_(d.endDate)
+  };
+  if (AD_STATUSES.indexOf(status) === -1) errors.status = 'Unknown status.';
+  if (status === 'removed') return { errors: errors, clean: clean };
+  if (status === 'rejected') { clean.status = 'rejected'; }
+  if (AD_KINDS.indexOf(clean.kind) === -1) errors.kind = 'Choose bookstore, author, publisher, promoter, library or book.';
+  if (AD_PLACEMENTS.indexOf(clean.placement) === -1) errors.placement = 'Choose where the ad shows.';
+  if (!clean.sponsor) errors.sponsor = 'Who is the ad for? (the bookstore, author or publisher)';
+  if (!clean.headline) errors.headline = 'Write a short headline.';
+  if (String(d.linkUrl || '').trim() && !clean.linkUrl) errors.linkUrl = 'The link must start with https://.';
+  if (!clean.linkUrl && !(clean.kind === 'book' && clean.bookId)) errors.linkUrl = clean.kind === 'book'
+    ? 'Paste a link (https://) or pick the SwapSutra listing.' : 'Paste the link the ad opens (https://).';
+  if (String(d.imageUrl || '').trim() && !clean.imageUrl) errors.imageUrl = 'The image link must start with https://.';
+  if (!clean.imageUrl) errors.imageUrl = 'Add the ad picture (upload one or paste an https:// link).';
+  if (String(d.startDate || '').trim() && !clean.startDate) errors.startDate = 'Use a date like 2026-10-15.';
+  if (String(d.endDate || '').trim() && !clean.endDate) errors.endDate = 'Use a date like 2026-10-31.';
+  if (clean.startDate && clean.endDate && clean.endDate < clean.startDate) errors.endDate = 'The end date is before the start date.';
+  return { errors: errors, clean: clean };
+}
+
+function saveSponsoredAd(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const v = validateSponsoredAd_(data);
+  if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = adSheet_();
+    const all = adRows_();
+    const headers = all.headers;
+    const id = String((data || {}).id || '').trim();
+    const hit = id ? all.rows.find(function (r) { return String(r.obj.id) === id; }) : null;
+    if (id && !hit) return { success: false, message: 'That ad no longer exists.' };
+    const now = new Date().toISOString();
+    const rec = hit ? Object.assign({}, hit.obj) : { id: 'AD-' + Utilities.getUuid().slice(0, 8).toUpperCase(), clicks: 0, createdAt: now, createdBy: getAuthenticatedEmail() || '' };
+    const wasPending = hit && String(hit.obj.status) === 'pending';
+    if (v.clean.status === 'removed') rec.status = 'removed';
+    else Object.keys(v.clean).forEach(function (k) { rec[k] = v.clean[k]; });
+    if (rec.partnerId && hit) rec.sponsor = hit.obj.sponsor; // a partner's ad keeps the partner's name
+    rec.reviewNote = v.clean.status === 'rejected' ? mugText_((data || {}).reviewNote, 300) : '';
+    rec.updatedAt = now;
+    if (rec.partnerId && wasPending && (rec.status === 'live' || rec.status === 'rejected')) {
+      try {
+        const partner = (partnerRows_().rows.find(function (r) { return String(r.obj.id) === String(rec.partnerId); }) || {}).obj;
+        if (partner) returnNotify_(partner.email, 'partner_ad_review', rec.status === 'live' ? 'Your ad is approved' : 'Your ad needs a change',
+          rec.status === 'live' ? '"' + rec.headline + '" is approved and runs on the Library page.' : '"' + rec.headline + '" was not approved' + (rec.reviewNote ? ': ' + rec.reviewNote : '.'),
+          '', 'partner_ad_rev_' + rec.id + '_' + Date.now());
+      } catch (e) { /* saved */ }
+    }
+    const row = headers.map(function (h) { return rec[h] !== undefined ? rec[h] : ''; });
+    if (hit) sheet.getRange(hit.rowIndex + 1, 1, 1, row.length).setValues([row]);
+    else sheet.appendRow(row);
+    return { success: true, id: rec.id };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Admin: upload the ad picture to Drive and get back a link for it. */
+function uploadSponsoredAdImage(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  return savePublicImage_(data, 'SwapSutra_Ads', 'ad_');
+}
+
+// =====================================================================
+// PAYMENT DETAILS — editable by the admin (9 Oct 2026, owner's request:
+// "admin kabhi bhi chahe toh apna personal qr code or bank details change
+// kar sakta hai"). Stored in the Script Property PAYMENT_DETAILS_JSON; every
+// payment box on the site (exchange payments, listing unlock, partner ad
+// fees, Support SwapSutra) reads paymentDetails_(). Each change is logged
+// in the PaymentSettingsLog sheet.
+// =====================================================================
+
+const PAYMENT_DETAILS_PROP = 'PAYMENT_DETAILS_JSON';
+const PAYMENT_LOG_HEADERS = ['changedAt', 'changedBy', 'vpa', 'payee', 'qrImageUrl', 'useQrImage', 'bankAccountName', 'bankAccountLast4', 'ifsc', 'bankName'];
+
+function paymentDetails_() {
+  let saved = {};
+  try { saved = JSON.parse(readScriptProperty_(PAYMENT_DETAILS_PROP) || '{}') || {}; } catch (e) { saved = {}; }
+  const bank = saved.bank || {};
+  const hasBank = !!(bank.accountNumber || bank.ifsc);
+  return {
+    vpa: String(saved.vpa || SWAPSM_UPI_VPA),
+    payee: String(saved.payee || SWAPSM_UPI_PAYEE),
+    qrImageUrl: String(saved.qrImageUrl || ''),
+    useQrImage: !!(saved.useQrImage && saved.qrImageUrl),
+    bank: hasBank ? { accountName: String(bank.accountName || ''), accountNumber: String(bank.accountNumber || ''), ifsc: String(bank.ifsc || ''), bankName: String(bank.bankName || '') } : null
+  };
+}
+
+/** Public: what a payer needs to pay SwapSutra. */
+function getPaymentDetails() {
+  return { success: true, upi: paymentDetails_() };
+}
+
+function getAdminPaymentSettings() {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  let meta = {};
+  try { meta = JSON.parse(readScriptProperty_(PAYMENT_DETAILS_PROP) || '{}') || {}; } catch (e) { meta = {}; }
+  return { success: true, upi: paymentDetails_(), updatedAt: meta.updatedAt || '', updatedBy: meta.updatedBy || '' };
+}
+
+function validatePaymentSettings_(data) {
+  const d = data || {};
+  const errors = {};
+  const vpa = String(d.vpa || '').trim();
+  const payee = mugText_(d.payee, 60);
+  const qrImageUrl = String(d.qrImageUrl || '').trim();
+  const b = d.bank || {};
+  const accountNumber = String(b.accountNumber || '').replace(/\s+/g, '');
+  const ifsc = String(b.ifsc || '').trim().toUpperCase();
+  if (!/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/.test(vpa)) errors.vpa = 'Enter a UPI ID like name@okhdfcbank.';
+  if (payee.length < 2) errors.payee = 'Enter the name shown in UPI apps.';
+  if (qrImageUrl && !/^https:\/\/[^\s]+$/i.test(qrImageUrl)) errors.qrImageUrl = 'The QR picture link must start with https://.';
+  if (d.useQrImage && !qrImageUrl) errors.qrImageUrl = 'Upload your QR picture first.';
+  if (accountNumber && !/^\d{6,20}$/.test(accountNumber)) errors.accountNumber = 'Account number: 6 to 20 digits.';
+  if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) errors.ifsc = 'IFSC looks like HDFC0001234.';
+  if ((accountNumber && !ifsc) || (!accountNumber && ifsc)) errors[accountNumber ? 'ifsc' : 'accountNumber'] = 'Give both the account number and the IFSC (or neither).';
+  return {
+    errors: errors,
+    clean: {
+      vpa: vpa, payee: payee, qrImageUrl: qrImageUrl, useQrImage: !!(d.useQrImage && qrImageUrl),
+      bank: accountNumber ? { accountName: mugText_(b.accountName, 80), accountNumber: accountNumber, ifsc: ifsc, bankName: mugText_(b.bankName, 60) } : null
+    }
+  };
+}
+
+function saveAdminPaymentSettings(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  const v = validatePaymentSettings_(data);
+  if (Object.keys(v.errors).length) return { success: false, errors: v.errors, message: 'Please fix the highlighted fields.' };
+  const who = getAuthenticatedEmail() || '';
+  const rec = Object.assign({}, v.clean, { updatedAt: new Date().toISOString(), updatedBy: who });
+  PropertiesService.getScriptProperties().setProperty(PAYMENT_DETAILS_PROP, JSON.stringify(rec));
+  try {
+    const sheet = getOrCreateSheet('PaymentSettingsLog', PAYMENT_LOG_HEADERS);
+    const h = ensureSheetHeaders(sheet, PAYMENT_LOG_HEADERS);
+    const b = rec.bank || {};
+    const row = { changedAt: new Date(), changedBy: who, vpa: rec.vpa, payee: rec.payee, qrImageUrl: rec.qrImageUrl, useQrImage: rec.useQrImage ? 'yes' : 'no',
+      bankAccountName: b.accountName || '', bankAccountLast4: b.accountNumber ? String(b.accountNumber).slice(-4) : '', ifsc: b.ifsc || '', bankName: b.bankName || '' };
+    sheet.appendRow(h.map(function (k) { return row[k] !== undefined ? row[k] : ''; }));
+  } catch (e) { /* the saved setting is what matters */ }
+  return { success: true, upi: paymentDetails_() };
+}
+
+/** Admin: upload SwapSutra's own UPI QR picture. */
+function uploadPaymentQrImage(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, error: 'ADMIN_ONLY', message: 'Admins only.' };
+  return savePublicImage_(data, 'SwapSutra_Payment', 'upi_qr_');
+}
+
+/** A JPG/PNG/WebP data URL (≤2 MB) → a public picture link in a Drive folder. */
+function savePublicImage_(data, folderName, prefix) {
+  const raw = String((data || {}).dataUrl || '');
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+\/=]+)$/.exec(raw);
+  if (!m) return { success: false, message: 'Choose a JPG, PNG or WebP picture.' };
+  const bytes = Utilities.base64Decode(m[2]);
+  if (bytes.length > 2 * 1024 * 1024) return { success: false, message: 'The picture is too large (2 MB at most).' };
+  try {
+    const folder = getOrCreateFolder(folderName);
+    const file = folder.createFile(Utilities.newBlob(bytes, m[1], prefix + Date.now() + '.' + m[1].split('/')[1]));
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return { success: true, url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w1600' };
+  } catch (err) {
+    Logger.log('savePublicImage_ failed: ' + err);
+    return { success: false, message: 'The picture could not be saved. Try again.' };
+  }
+}
+
+
+/* =========================================================================
+   SwapSutra — free registration, per-exchange platform fee, listing allowance
+   (Oct 2026)
+
+   Wired into: computeSubscriptionStatus, hasApprovedActiveSubscription,
+   checkSubscription, createBook, securityFeeRequirements,
+   ensureSecurityFeeRecords, securityFeeStatus and doPost.
+
+   WHAT CHANGES
+   1. Registration is free and permanent. Name + email + phone, verified by
+      OTP, is a full member. No ₹49, no 30-day trial, nothing expires.
+   2. Every swap / lend / rent / sell charges a small platform fee to BOTH
+      readers, paid by UPI QR after the owner accepts. It rides on the
+      existing SecurityFeePayments flow: one QR, one UTR, one admin approval,
+      and the chat unlocks when both are approved. Where a refundable deposit
+      also applies, the QR amount is deposit + fee, and the two are stored
+      separately so refunds never touch the fee.
+   3. Every reader may list up to 20 books free. A one-time ₹20 (QR, admin
+      verified) or the code BOOKSTORE2627 removes the limit for good.
+
+   SETTINGS can be overridden without redeploying, via Project Settings →
+   Script Properties:
+     PLATFORM_FEE_PER_PARTY   e.g. "10"
+     FREE_LISTING_LIMIT       e.g. "20"
+     LISTING_UNLOCK_FEE       e.g. "20"
+     LISTING_UNLOCK_COUPONS   comma-separated, e.g. "BOOKSTORE2627,LAUNCHWEEK"
+   ========================================================================= */
+
+// The switch. A function rather than a const so it is hoisted: it is read
+// from computeSubscriptionStatus, which other code may call before this
+// part of the file has been evaluated.
+function freeRegistrationMode_() { return true; }
+
+const PLATFORM_FEE_DEFAULT = 10;          // ₹ per reader, per exchange
+// Exchanges created before this moment keep the old rules, so no chat that
+// is already open gets locked behind a new fee. Set it to your launch time.
+const PLATFORM_FEE_START_ISO = '2026-10-06T00:00:00+05:30';
+
+const FREE_LISTING_LIMIT_DEFAULT = 20;
+const LISTING_UNLOCK_FEE_DEFAULT = 20;    // ₹, one time, unlimited after
+const LISTING_UNLOCK_COUPONS_DEFAULT = ['BOOKSTORE2627'];
+
+const LISTING_UNLOCK_SHEET = 'ListingUnlocks';
+const LISTING_UNLOCK_HEADERS = [
+  'id', 'email', 'method', 'amount', 'couponCode', 'utr', 'screenshotUrl',
+  'status', 'rejectedReason', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'
+];
+const LISTING_UTR_PATTERN = /^[A-Za-z0-9]{4,25}$/;
+
+// ── Settings ────────────────────────────────────────────────────────────
+
+function readScriptProperty_(key) {
+  try {
+    return PropertiesService.getScriptProperties().getProperty(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+function numberSetting_(key, fallback) {
+  const raw = readScriptProperty_(key);
+  const n = Number(raw);
+  return raw !== null && raw !== '' && isFinite(n) && n >= 0 ? Math.round(n) : fallback;
+}
+
+function platformFeePerParty_() { return numberSetting_('PLATFORM_FEE_PER_PARTY', PLATFORM_FEE_DEFAULT); }
+function freeListingLimit_() { return numberSetting_('FREE_LISTING_LIMIT', FREE_LISTING_LIMIT_DEFAULT); }
+function listingUnlockFee_() { return numberSetting_('LISTING_UNLOCK_FEE', LISTING_UNLOCK_FEE_DEFAULT); }
+
+function listingUnlockCoupons_() {
+  const raw = readScriptProperty_('LISTING_UNLOCK_COUPONS');
+  const list = raw ? String(raw).split(',') : LISTING_UNLOCK_COUPONS_DEFAULT;
+  return list.map(c => String(c).trim().toUpperCase()).filter(Boolean);
+}
+
+// ── 1. Free registration ────────────────────────────────────────────────
+
+/** A reader is a member once they have an account row. Nothing expires. */
+function isRegisteredReader_(email) {
+  const normEmail = normalizeEmail(email);
+  if (!normEmail) return false;
+  if (isAdminEmail(normEmail)) return true;
+  if (approvedPartner_(normEmail)) return true;
+
+  const sub = findRowByEmail_('Subscriptions', normEmail);
+  if (sub) {
+    const admin = String(sub.adminStatus || '').trim().toLowerCase();
+    const status = String(sub.membershipStatus || '').trim().toUpperCase();
+    // Cancelled is the one way an account stops being a member: it is how
+    // an admin suspends someone.
+    return admin !== 'cancelled' && status !== 'CANCELLED';
+  }
+  return !!findRowByEmail_('Users', normEmail);
+}
+
+function findRowByEmail_(sheetName, normEmail) {
+  const values = getOrCreateSheet(sheetName, []).getDataRange().getValues();
+  if (values.length <= 1) return null;
+  const headers = values[0].map(h => String(h).trim());
+  const emailIdx = headers.indexOf('email');
+  if (emailIdx === -1) return null;
+  const row = values.slice(1).find(r => normalizeEmail(r[emailIdx]) === normEmail);
+  return row ? rowToObject(headers, row) : null;
+}
+
+/**
+ * The checkSubscription answer for a registered reader in free mode.
+ *
+ * Status is reported as 'TRIAL' on purpose: the proxy, server.ts and the
+ * app all already treat TRIAL as "active member", so nothing downstream
+ * needs to learn a new word. daysRemainingValid is false so no countdown
+ * is shown, and nothing ever flips it to EXPIRED.
+ */
+function freeMemberCheckSubscriptionResponse_(email, sub, profileUser) {
+  const normEmail = normalizeEmail(email);
+  const source = sub || profileUser || {};
+  const admin = String(source.adminStatus || '').trim().toLowerCase();
+  const mStatus = String(source.membershipStatus || '').trim().toUpperCase();
+  if (admin === 'cancelled' || mStatus === 'CANCELLED') {
+    return {
+      success: true, isRegistered: false, status: 'CANCELLED', membershipStatus: 'CANCELLED',
+      userTier: 'expired', isPremium: false, isTrial: false, isExpired: false,
+      message: 'This account has been suspended. Contact swapsutra@gmail.com.'
+    };
+  }
+
+  const booksListedCount = recalculateBooksListedCount(normEmail);
+  return {
+    success: true,
+    isRegistered: true,
+    isFreeMember: true,
+    status: 'TRIAL',
+    membershipStatus: 'TRIAL',
+    userTier: 'trial',
+    isPremium: false,
+    isTrial: true,
+    isExpired: false,
+    daysRemainingValid: false,
+    trialStartDate: '',
+    trialEndDate: '',
+    subscriptionStartDate: '',
+    subscriptionExpiry: '',
+    listingAllowance: getListingAllowanceFor_(normEmail, booksListedCount),
+    subscription: Object.assign({}, source, {
+      email: normEmail,
+      name: source.name || 'Reader',
+      computedStatus: 'TRIAL',
+      membershipStatus: 'TRIAL',
+      activationType: 'free',
+      membershipType: 'free',
+      adminStatus: 'Approved',
+      paymentRequired: 'No',
+      booksListedCount: booksListedCount,
+      booksRemaining: Math.max(0, freeListingLimit_() - booksListedCount),
+      subscriptionExpiry: '',
+      trialEndDate: ''
+    })
+  };
+}
+
+// ── 2. Platform fee on every exchange ───────────────────────────────────
+
+function platformFeeAppliesToSwap_(swapObj) {
+  const created = new Date(swapObj && swapObj.createdAt);
+  if (isNaN(created.getTime())) return true; // undated rows are new rows
+  return created.getTime() >= new Date(PLATFORM_FEE_START_ISO).getTime();
+}
+
+/**
+ * Replaces the body of securityFeeRequirements(). Who pays what on an
+ * exchange, from amounts the server already resolved — never from the
+ * request payload.
+ *
+ *   SWAP          requester: deposit + fee     owner: deposit + fee
+ *   RENT/LEND/SELL requester: deposit + fee    owner: fee
+ *
+ * A party owing nothing (pre-launch exchange, zero deposit) gets no row,
+ * exactly as before. The admin account never pays a platform fee.
+ */
+/** Manual deposits apply to new purchases and older escrow orders explicitly quoted by an admin. */
+function isEscrowSaleOrder_(obj) {
+  return String(obj.serviceType || '').trim().toUpperCase() === 'SELL' && saleEscrowAppliesToSwap_(obj);
+}
+
+function saleDepositState_(obj) {
+  const checkout = orderCheckout_(obj);
+  if (checkout && checkout.shippingOnly) return { manual: false, pending: false, amount: null, quotedAt: '' };
+  const manual = isEscrowSaleOrder_(obj) && (obj.requesterDepositBasis === 'MANUAL' || Boolean(obj.saleDepositQuote));
+  if (!manual) return { manual: false, pending: false, amount: null };
+  let quote;
+  try { quote = JSON.parse(obj.saleDepositQuote || 'null'); } catch (e) { quote = null; }
+  const valid = quote && Number.isSafeInteger(quote.amount) && quote.amount > 0 && Number.isFinite(Date.parse(quote.quotedAt));
+  return { manual: true, pending: !valid, amount: valid ? quote.amount : null, quotedAt: valid ? quote.quotedAt : '' };
+}
+
+function withSaleDepositLock_(run) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    return run();
+  } finally {
+    try { SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
+  }
+}
+
+/** Admin POST action: { action: 'adminSetSaleSecurityDeposit', swapId, amount }. */
+function adminSetSaleSecurityDeposit(data) {
+  return { success: false, message: 'Use the prepaid and COD shipping charges fields. Sales do not require a new manual security deposit.' };
+}
+
+// Admin shipping quotes and requester payment mode. Existing orders opt in when quoted.
+function orderCheckout_(obj) {
+  if (!obj.orderCheckout) return null;
+  let state;
+  try { state = JSON.parse(obj.orderCheckout); } catch (e) { state = {}; }
+  const sale = String(obj.serviceType || '').toUpperCase() === 'SELL';
+  const rateValid = value => Number.isSafeInteger(value) && value >= 0;
+  const quoted = rateValid(state.onlineShipping) && (!sale || rateValid(state.codShipping)) && Boolean(state.revision);
+  const mode = state.mode === 'COD' && sale ? 'COD' : 'ONLINE';
+  return Object.assign({}, state, {
+    mode: mode, codAllowed: sale, pending: !quoted,
+    shippingAmount: quoted ? (mode === 'COD' ? state.codShipping : state.onlineShipping) : null,
+    codConfirmed: mode === 'COD' && Boolean(state.confirmedAt),
+    collected: mode === 'COD' && Boolean(state.collectedAt)
+  });
+}
+
+function saveOrderCheckout_(swap, state) {
+  const headers = ensureSheetHeaders(swap.sheet, ['orderCheckout']);
+  swap.obj.orderCheckout = JSON.stringify(state);
+  swap.sheet.getRange(swap.rowIndex + 1, headers.indexOf('orderCheckout') + 1).setValue(swap.obj.orderCheckout);
+}
+
+function checkoutEditable_(swap) {
+  const checkout = orderCheckout_(swap.obj);
+  if (checkout && checkout.codConfirmed) return false;
+  if (!['pending', 'accepted', 'active', 'approved'].includes(String(swap.obj.status || '').toLowerCase())) return false;
+  return !loadSecurityFeeRows(swap.obj.id).rows.some(r =>
+    r.obj.submittedAt || r.obj.utr || ['ADMIN_PENDING', 'ADMIN_APPROVED', 'ADMIN_REJECTED'].includes(r.obj.adminStatus));
+}
+
+function adminSetOrderShipping(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, message: 'Unauthorized' };
+  return withSaleDepositLock_(() => {
+    const swap = loadSwapForCirculation(String(data.swapId || ''));
+    if (!swap || !checkoutEditable_(swap)) return { success: false, message: 'Shipping charges are locked after payment submission or COD confirmation.' };
+    const sale = String(swap.obj.serviceType || '').toUpperCase() === 'SELL';
+    const parse = value => /^\d+$/.test(String(value)) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
+    const online = parse(data.onlineShipping);
+    const cod = sale ? parse(data.codShipping) : null;
+    if (online === null || (sale && cod === null)) return { success: false, message: 'Enter shipping charges in whole rupees. Enter 0 for free shipping.' };
+    const previous = orderCheckout_(swap.obj) || { mode: 'ONLINE' };
+    if (previous.shippingOnly && !previous.pending && previous.onlineShipping === online && previous.codShipping === cod) return { success: true };
+    saveOrderCheckout_(swap, { mode: previous.mode, shippingOnly: true, onlineShipping: online, codShipping: cod,
+      revision: Utilities.getUuid(), quotedAt: new Date().toISOString() });
+    return { success: true, message: 'Shipping charges saved.' };
+  });
+}
+
+function selectOrderPaymentMode(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, message: 'Sign in first.' };
+  return withSaleDepositLock_(() => {
+    const swap = loadSwapForCirculation(String(data.swapId || ''));
+    if (!swap || caller !== swap.requesterEmail) return { success: false, message: 'Only the requester can choose the payment mode.' };
+    const checkout = orderCheckout_(swap.obj);
+    if (!checkout || checkout.pending || !checkoutEditable_(swap)) return { success: false, message: 'Wait for the shipping quote, or check whether this payment is already confirmed.' };
+    if (data.revision !== checkout.revision) return { success: false, message: 'Shipping charges changed. Refresh and review the amount.' };
+    const mode = String(data.mode || '');
+    if (!['ONLINE', 'COD'].includes(mode) || (mode === 'COD' && !checkout.codAllowed)) return { success: false, message: 'Cash on delivery is available only for book sales. Exchanges, rentals and loans require online payment in advance.' };
+    saveOrderCheckout_(swap, Object.assign({}, checkout, { mode: mode }));
+    return { success: true };
+  });
+}
+
+function confirmOrderCod(data) {
+  const caller = normalizeEmail(getAuthenticatedEmail());
+  if (!caller) return { success: false, message: 'Sign in first.' };
+  return withSaleDepositLock_(() => {
+    const swap = loadSwapForCirculation(String(data.swapId || ''));
+    if (!swap || caller !== swap.requesterEmail) return { success: false, message: 'Only the requester can confirm COD.' };
+    const checkout = orderCheckout_(swap.obj);
+    if (!checkout || !checkout.codAllowed || checkout.mode !== 'COD' || checkout.pending) return { success: false, message: 'Select COD after shipping charges are set.' };
+    if (checkout.codConfirmed) return { success: true };
+    if (!checkoutEditable_(swap) || !roomSwapAccepted_(swap.obj.status) || saleDepositState_(swap.obj).pending) {
+      return { success: false, message: 'Wait for acceptance and the deposit quote before confirming COD.' };
+    }
+    if (data.revision !== checkout.revision || (saleDepositState_(swap.obj).manual && data.depositQuotedAt !== saleDepositState_(swap.obj).quotedAt)) {
+      return { success: false, message: 'The amount changed. Refresh and review it before confirming.' };
+    }
+    const videos = vmsVideosForSwap_(swap.obj.id);
+    if (!videos.some(v => v.leg === 'outbound' && v.kind === 'QUALITY' && normalizeEmail(v.uploaderEmail) === swap.ownerEmail)) {
+      return { success: false, message: 'Review the owner’s condition video before confirming COD.' };
+    }
+    ensureSecurityFeeRecordsUnlocked_(swap);
+    saveOrderCheckout_(swap, Object.assign({}, checkout, { confirmedAt: new Date().toISOString() }));
+    return { success: true, message: 'COD confirmed. Pay the full quoted amount on delivery.' };
+  });
+}
+
+/** Recording receipt means the courier's money has reached SwapSutra. */
+function adminRecordCodReceived(data) {
+  if (!isAuthenticatedAdmin()) return { success: false, message: 'Unauthorized' };
+  const result = withSaleDepositLock_(() => {
+    const swap = loadSwapForCirculation(String(data.swapId || ''));
+    if (!swap) return { success: false, message: 'Order not found.' };
+    const checkout = orderCheckout_(swap.obj);
+    if (!checkout || !checkout.codConfirmed) return { success: false, message: 'This order has no confirmed COD payment.' };
+    if (checkout.collected) { ensureSecurityFeeRecordsUnlocked_(swap); return { success: true }; }
+    const requirement = computeExchangePayments_(swap).find(r => r.payerRole === 'requester');
+    if (!requirement || Number(data.amount) !== requirement.requiredAmount) return { success: false, message: 'The received amount must match the full COD total.' };
+    const reference = String(data.reference || '').trim();
+    if (!reference || reference.length > 150) return { success: false, message: 'Enter the courier remittance reference (up to 150 characters).' };
+    saveOrderCheckout_(swap, Object.assign({}, checkout, { collectedAt: new Date().toISOString(), collectedBy: normalizeEmail(getAuthenticatedEmail()), reference: reference }));
+    ensureSecurityFeeRecordsUnlocked_(swap);
+    return { success: true };
+  });
+  if (result.success) {
+    const swap = loadSwapForCirculation(String(data.swapId));
+    const events = journeyEventsBySwap_()[swap.obj.id] || [];
+    if (events.some(e => e.event === 'received' && e.leg === 'outbound' && /happy with the book/.test(String(e.note)))) {
+      confirmSaleCompleteFor_( { swapId: swap.obj.id, happy: true }, swap.requesterEmail);
+    }
+    roomAfterMark_(swap);
+  }
+  return result;
+}
+
+function codPaymentOutstanding_(swap) {
+  const checkout = orderCheckout_(swap.obj);
+  return Boolean(checkout && checkout.codConfirmed && !checkout.collected);
+}
+
+function computeExchangePayments_(swap) {
+  const checkout = orderCheckout_(swap.obj || {});
+  if (checkout && checkout.pending) return [];
+  const required = computeBaseExchangePayments_(swap);
+  if (!checkout) return required;
+  const shipping = checkout.shippingAmount || 0;
+  const requester = required.find(r => r.payerRole === 'requester');
+  if (requester) {
+    requester.shippingAmount = shipping;
+    requester.requiredAmount += shipping;
+    if (!Number.isSafeInteger(requester.requiredAmount)) throw new Error('The quoted total is too large. Check the shipping amount.');
+  } else if (shipping && !saleDepositState_(swap.obj).pending) {
+    required.push({ payerRole: 'requester', payerEmail: swap.requesterEmail, requiredAmount: shipping,
+      depositAmount: 0, platformFee: 0, saleAmount: 0, shippingAmount: shipping });
+  }
+  return required;
+}
+
+function computeBaseExchangePayments_(swap) {
+  const obj = swap.obj || {};
+  const serviceType = String(obj.serviceType || 'SWAP').trim().toUpperCase();
+  const feeApplies = platformFeeAppliesToSwap_(obj);
+  const baseFee = feeApplies ? platformFeePerParty_() : 0;
+
+  const requesterDeposit = Math.max(0, Math.round(Number(obj.securityDeposit || 0)));
+  const ownerDeposit = serviceType === 'SWAP'
+    ? Math.max(0, Math.round(Number(obj.ownerDeposit || 0)))
+    : 0;
+
+  const reqs = [];
+  // A sale through SwapSutra (Oct 2026): the buyer pays the owner's price
+  // plus the platform fee to SwapSutra; SwapSutra holds the price until the
+  // buyer confirms they have the book, then pays the seller. The seller
+  // pays nothing up front — their own fee comes out of the payout.
+  if (serviceType === 'SELL' && saleEscrowAppliesToSwap_(obj)) {
+    const saleAmount = Math.max(0, Math.round(Number(obj.amount || 0)));
+    const fee = isAdminEmail(swap.requesterEmail) ? 0 : baseFee;
+    const quote = saleDepositState_(obj);
+    if (quote.pending) return reqs;
+    const deposit = quote.amount || 0;
+    const total = saleAmount + fee + deposit;
+    if (swap.requesterEmail && total > 0) {
+      reqs.push({ payerRole: 'requester', payerEmail: swap.requesterEmail, requiredAmount: total,
+        depositAmount: deposit, platformFee: fee, saleAmount: saleAmount });
+    }
+    return reqs;
+  }
+  // 9 Oct 2026 (owner's rule): in a swap the ₹10 fee is not paid up front —
+  // it is taken out of the deposit when the deposit is refunded.
+  const feeFromDeposit = serviceType === 'SWAP' && swapFeeFromDeposit_(obj);
+  const add = (payerRole, payerEmail, depositAmount) => {
+    if (!payerEmail) return;
+    // Partners (9 Oct 2026) pay no platform fee on their own side (the book's
+    // owner). The buyer / requester always pays it (owner's rule, 10 Oct
+    // 2026: "buyer toh dega platform fee 10 rupees har case me").
+    const partnerSide = payerRole === 'owner' && approvedPartner_(payerEmail);
+    const platformFee = isAdminEmail(payerEmail) || partnerSide || (feeFromDeposit && depositAmount > 0) ? 0 : baseFee;
+    const requiredAmount = depositAmount + platformFee;
+    if (requiredAmount <= 0) return;
+    reqs.push({ payerRole, payerEmail, requiredAmount, depositAmount, platformFee, saleAmount: 0 });
+  };
+  add('requester', swap.requesterEmail, requesterDeposit);
+  // 9 Oct 2026 (owner's rule): on a lend only the borrower pays the fee.
+  if (serviceType !== 'LEND') add('owner', swap.ownerEmail, ownerDeposit);
+  return reqs;
+}
+
+// Swaps requested from this moment take the ₹10 fee from the deposit refund;
+// earlier swaps keep the fee they were quoted (paid with the deposit).
+const SWAP_FEE_FROM_DEPOSIT_START_ISO = '2026-10-09T22:30:00+05:30';
+function swapFeeFromDeposit_(obj) {
+  if (String((obj && obj.serviceType) || 'SWAP').toUpperCase() !== 'SWAP') return false;
+  if (!platformFeeAppliesToSwap_(obj)) return false;
+  const created = new Date(obj && obj.createdAt);
+  if (isNaN(created.getTime())) return true;
+  return created.getTime() >= new Date(SWAP_FEE_FROM_DEPOSIT_START_ISO).getTime();
+}
+
+/** The fee SwapSutra keeps from this reader's swap deposit (0 when it was paid up front). */
+function feeTakenFromDeposit_(swapObj, payerEmail, feeRec, payerRole) {
+  if (!swapFeeFromDeposit_(swapObj) || isAdminEmail(payerEmail)) return 0;
+  // A partner who OWNS the book keeps their whole deposit; a partner who is
+  // the requester pays like any buyer (owner's rule, 10 Oct 2026).
+  const role = payerRole || (feeRec && feeRec.payerRole) || '';
+  if (role === 'owner' && approvedPartner_(payerEmail)) return 0;
+  // Never charge twice: a reader who already paid the fee up front (e.g. a
+  // payment made before this rule went live) has nothing taken.
+  if (feeRec && feeRecordBreakdown_(feeRec).platformFee > 0) return 0;
+  return platformFeePerParty_();
+}
+function myFeeRecord_(swapId, role) {
+  try {
+    const rows = loadSecurityFeeRows(String(swapId)).rows.map(r => r.obj).filter(o => o.payerRole === role && o.adminStatus !== 'NOT_REQUIRED');
+    return rows.find(o => o.adminStatus === 'ADMIN_APPROVED') || rows[0] || null;
+  } catch (e) { return null; }
 }
 
 // Sales made from this moment on go through SwapSutra (escrow). Earlier
