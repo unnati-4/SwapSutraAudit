@@ -979,23 +979,26 @@ async function startServer() {
   });
 
   app.post("/api/notifications/send-email", async (req, res) => {
-    const { to, subject, html } = req.body;
+    const { to, subject, html, senderEmail, entityId } = req.body || {};
+    const sessionToken = readSessionToken(req);
+    if (!sessionToken) return res.status(401).json({ success: false, message: "Sign in before sending a notification." });
     if (!to || !subject || !html) return res.status(400).json({ success: false, message: "to, subject, and html are required" });
+    if (String(html).length > 30000) return res.status(413).json({ success: false, message: "Notification email is too large." });
 
     try {
-      // Proxy to Apps Script mailer or Google Apps Script MailApp API
       const result = await callAppsScript({
         action: 'sendNotificationEmail',
+        sessionToken,
         toEmail: to,
-        subject: subject,
-        htmlBody: html
+        subject: String(subject).slice(0, 180),
+        htmlBody: html,
+        senderEmail: String(senderEmail || '').trim().toLowerCase(),
+        entityId: String(entityId || '').slice(0, 120)
       }, 'POST');
-
-      res.json({ success: true, message: "Email notification dispatched", result });
+      res.status(result?.success ? 200 : 403).json(result);
     } catch (err: any) {
       console.warn("[Notification Mailer] Email dispatch log:", err?.message || err);
-      // Return success gracefully so notification flow completes
-      res.json({ success: true, message: "Email notification processed", deliveredLocally: true });
+      res.status(502).json({ success: false, message: "Email notification could not be dispatched." });
     }
   });
 
