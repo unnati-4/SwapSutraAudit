@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { apiUrl } from '../config/runtime';
+import { registerCurrentAccountDevice } from '../services/dailyPush';
 
 /**
  * Admin → Dashboard → "Daily book updates" (27 Sep).
@@ -53,6 +54,11 @@ export function AdminDailyPush() {
   const act = async (label: string, action: string, extra: Record<string, unknown> = {}) => {
     setBusy(label); setNote('');
     try {
+      let currentDevice: 'registered' | 'not-subscribed' | 'failed' | null = null;
+      if (action === 'sendDailyPushTest') {
+        currentDevice = await registerCurrentAccountDevice();
+        if (currentDevice === 'registered') await load();
+      }
       const r = await call(action, extra);
       if (action === 'sendDailyPushTest') {
         const summary = r?.summary || {};
@@ -60,7 +66,9 @@ export function AdminDailyPush() {
         else if (summary.skipped) setNote(`Not sent: ${summary.skipped}`);
         else if (Number(summary.sent) > 0) setNote(`Sent to your devices (${summary.sent}).`);
         else if (Number(summary.failed) > 0) setNote(`Delivery failed (${summary.failed} push attempt${Number(summary.failed) === 1 ? '' : 's'} failed).`);
-        else setNote('No notification was delivered. Check that this account has an active registered device.');
+        else if (currentDevice === 'not-subscribed') setNote('This browser has no push subscription. Allow notifications here and retry.');
+        else if (currentDevice === 'failed') setNote('Could not create or link this browser’s push subscription. Check notification setup and sign in again.');
+        else setNote('No active push devices are linked to this account.');
       } else if (r?.success) { setD(r); setHours((r.slots || []).join(', ')); }
       else setNote(r?.message || 'Could not complete this request.');
     } catch { setNote('Failed.'); }
@@ -82,11 +90,12 @@ export function AdminDailyPush() {
         <p className="mt-3 text-xs text-[var(--text-secondary)]">{note || 'Loading…'}</p>
       ) : (
         <>
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3">
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
             {[
               { label: 'Members reached', value: d.readers },
               { label: 'Visitors reached', value: d.visitors },
               { label: 'Devices', value: d.devicesReached },
+              { label: 'This account’s devices', value: d.accountDevices ?? 0 },
             ].map((m) => (
               <div key={m.label} className="rounded-xl bg-[var(--bg-page)] p-3">
                 <p className="text-2xs font-bold uppercase tracking-widest text-[var(--text-secondary)]">{m.label}</p>
@@ -106,7 +115,8 @@ export function AdminDailyPush() {
                   ['PUSH_RELAY_URL + secret in Apps Script', d.relayReady, 'Script Properties → PUSH_RELAY_URL = https://swapsutra.in/api/notifications/relay'],
                   ['GEMINI_API_KEY on Vercel (optional)', setup.server?.geminiKey, 'built-in lines are used'],
                   ['This browser allowed notifications', setup.permission === 'granted', `permission: ${setup.permission}`],
-                  ['This device is registered', setup.subscribed, 'reload the site once after the fixes above'],
+                  ['This browser has a push subscription', setup.subscribed, 'allow notifications in this browser'],
+                  ['This account has an active device', Number(d.accountDevices || 0) > 0, 'use Send me this now to link this browser'],
                 ].map(([label, ok, hint]: any) => (
                   <li key={label}>{ok ? '✅' : '❌'} {label}{!ok && hint ? <span className="text-[var(--text-secondary)]"> — {hint}</span> : null}</li>
                 ))}

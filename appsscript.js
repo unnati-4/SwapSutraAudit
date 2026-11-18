@@ -17845,13 +17845,15 @@ function getPushSubscriptionSheet() {
  */
 function savePushSubscription(data) {
   try {
-    const email = normalizeEmail((data && (data.userEmail || data.email)) || getAuthenticatedEmail());
+    const email = normalizeEmail(getAuthenticatedEmail());
+    const requestedEmail = normalizeEmail((data && (data.userEmail || data.email)) || '');
     const endpoint = String((data && data.endpoint) || '').trim();
     const keys = (data && data.keys) || {};
     const p256dh = String(keys.p256dh || data.p256dh || '').trim();
     const auth = String(keys.auth || data.auth || '').trim();
 
     if (!email) return { success: false, message: 'Sign in before enabling notifications.', error: 'EMAIL_REQUIRED' };
+    if (requestedEmail && requestedEmail !== email) return { success: false, message: 'This device must be linked to the signed-in account.', error: 'EMAIL_MISMATCH' };
     if (!endpoint || !p256dh || !auth) return { success: false, message: 'Incomplete push subscription.', error: 'INVALID_SUBSCRIPTION' };
 
     const sheet = getPushSubscriptionSheet();
@@ -22986,6 +22988,7 @@ function getDailyPushAdmin(data) {
   const relayReady = Boolean(String(props.getProperty('PUSH_RELAY_URL') || '').trim() && String(props.getProperty('PUSH_RELAY_SECRET') || '').trim());
   // What each slot would say to the admin today — the preview.
   const me = normalizeEmail(getAuthenticatedEmail() || '');
+  const accountDevices = me ? (audience[me] || []).length : 0;
   const slots = dailyPushSlots_();
   let preview = [];
   let festival = null, upcoming = [], copySource = 'templates';
@@ -23007,6 +23010,7 @@ function getDailyPushAdmin(data) {
     slots: slots,
     relayReady: relayReady,
     devicesReached: readers.reduce(function (n, k) { return n + audience[k].length; }, 0),
+    accountDevices: accountDevices,
     readers: readers.length - guests,
     visitors: guests,
     stats: stats,
