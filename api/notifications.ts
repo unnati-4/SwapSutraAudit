@@ -357,6 +357,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(result);
     }
 
+    // Notification emails are sent only for an authenticated reader event.
+    // Apps Script checks that the sender may notify this recipient and
+    // sends via the shared transactional mailer.
+    if (route === 'send-email') {
+      const { to, subject, html, senderEmail } = body;
+      if (!sessionToken) return res.status(401).json({ success: false, message: 'Sign in before sending a notification.' });
+      if (!to || !subject || !html) return res.status(400).json({ success: false, message: 'to, subject, and html are required.' });
+      if (String(html).length > 30000) return res.status(413).json({ success: false, message: 'Notification email is too large.' });
+      const result = await callAppsScript({
+        action: 'sendNotificationEmail',
+        sessionToken,
+        toEmail: String(to).trim().toLowerCase(),
+        subject: String(subject).slice(0, 180),
+        htmlBody: String(html),
+        senderEmail: String(senderEmail || '').trim().toLowerCase(),
+        entityId: String(body.entityId || '').slice(0, 120)
+      });
+      return res.status(result?.success ? 200 : 403).json(result);
+    }
+
     if (route === 'send-push') {
       if (!pushConfigured) {
         return res.status(200).json({
