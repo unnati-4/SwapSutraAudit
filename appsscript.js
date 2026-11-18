@@ -22819,7 +22819,7 @@ function sendDailyPushItems_(items) {
   const props = PropertiesService.getScriptProperties();
   const url = String(props.getProperty('PUSH_RELAY_URL') || '').trim();
   const secret = String(props.getProperty('PUSH_RELAY_SECRET') || '').trim();
-  if (!url || !secret || !/^https:\/\//i.test(url)) return { configured: false, sent: 0, failed: 0, calls: 0 };
+  if (!url || !secret || !/^https:\/\//i.test(url)) return { configured: false, sent: 0, failed: 0, calls: 0, error: 'relay not configured' };
   const requests = [];
   for (let i = 0; i < items.length; i += DAILY_PUSH_BATCH) {
     requests.push({
@@ -22829,7 +22829,7 @@ function sendDailyPushItems_(items) {
       muteHttpExceptions: true
     });
   }
-  let sent = 0, failed = 0;
+  let sent = 0, failed = 0, error = '';
   for (let i = 0; i < requests.length; i += DAILY_PUSH_PARALLEL) {
     const group = requests.slice(i, i + DAILY_PUSH_PARALLEL);
     let responses = [];
@@ -22837,18 +22837,35 @@ function sendDailyPushItems_(items) {
       responses = typeof UrlFetchApp.fetchAll === 'function'
         ? UrlFetchApp.fetchAll(group)
         : group.map(function (g) { return UrlFetchApp.fetch(g.url, g); });
-    } catch (e) { Logger.log('daily push relay failed: ' + e); failed += group.length; continue; }
+    } catch (e) {
+      Logger.log('daily push relay failed: ' + e);
+      failed += group.length;
+      error = error || 'request failed';
+      continue;
+    }
     responses.forEach(function (res) {
       try {
+        const status = typeof res.getResponseCode === 'function' ? Number(res.getResponseCode()) : 200;
         const body = JSON.parse(res.getContentText() || '{}');
+        if (status < 200 || status >= 300 || body.success === false) {
+          const detail = String(body.message || 'Relay rejected the request').replace(/[\\r\\n]+/g, ' ').slice(0, 120);
+          const reason = 'HTTP ' + status + ': ' + detail;
+          failed += Number(body.failed || 0) || 1;
+          error = error || reason;
+          Logger.log('daily push relay rejected request: ' + reason);
+          return;
+        }
         sent += Number(body.sent || 0);
         failed += Number(body.failed || 0);
-      } catch (e) { /* counts are best-effort */ }
+      } catch (e) {
+        failed++;
+        error = error || 'invalid relay response';
+        Logger.log('daily push relay response could not be read: ' + e);
+      }
     });
   }
-  return { configured: true, sent: sent, failed: failed, calls: requests.length };
+  return { configured: true, sent: sent, failed: failed, calls: requests.length, error: error };
 }
-
 function bumpDailyPushStats_(day, slot, field, n) {
   let lock = null;
   try {
@@ -22930,6 +22947,7 @@ function runDailyEngagementPush(opts) {
     summary.sent = res.sent;
     summary.failed = res.failed;
     if (!res.configured) summary.skipped = 'relay not configured';
+    else if (res.error) summary.skipped = 'relay error: ' + res.error;
     if (!forced) {
       bumpDailyPushStats_(ist.day, slot, 'readers', items.length);
       bumpDailyPushStats_(ist.day, slot, 'sent', res.sent);
