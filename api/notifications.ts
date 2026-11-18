@@ -317,15 +317,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sessionToken = readSessionToken(req);
 
     if (route === 'subscribe-push') {
-      const { userEmail, endpoint, keys, userAgent } = body;
-      if (!userEmail) return res.status(400).json({ success: false, message: 'userEmail required' });
+      const { endpoint, keys, userAgent } = body;
+      if (!sessionToken) return res.status(401).json({ success: false, message: 'Sign in before linking a device to your account.' });
       if (!endpoint || !keys?.p256dh || !keys?.auth) {
         return res.status(400).json({ success: false, message: 'A complete push subscription is required.' });
       }
+      // Apps Script derives the account email from this verified session.
       const result = await callAppsScript({
         action: 'savePushSubscription',
         sessionToken,
-        userEmail: String(userEmail).toLowerCase(),
         endpoint, keys, userAgent
       });
       return res.status(200).json(result);

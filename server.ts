@@ -804,16 +804,16 @@ async function startServer() {
   };
 
   app.post("/api/notifications/subscribe-push", async (req, res) => {
-    const { userEmail, endpoint, keys, userAgent } = req.body || {};
-    if (!userEmail) return res.status(400).json({ success: false, message: "userEmail required" });
+    const { endpoint, keys, userAgent } = req.body || {};
+    const sessionToken = readSessionToken(req);
+    if (!sessionToken) return res.status(401).json({ success: false, message: "Sign in before linking a device to your account." });
     if (!endpoint || !keys?.p256dh || !keys?.auth) {
       return res.status(400).json({ success: false, message: "A complete push subscription is required." });
     }
     try {
       const result = await callAppsScript({
         action: 'savePushSubscription',
-        sessionToken: readSessionToken(req),
-        userEmail: String(userEmail).toLowerCase(),
+        sessionToken,
         endpoint, keys, userAgent
       });
       res.json(result);

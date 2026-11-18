@@ -120,6 +120,22 @@ export async function enableDailyUpdates(userEmail?: string | null): Promise<'on
  * A device that already allowed notifications is kept registered: once a
  * day, and again whenever the reader changes (a guest signs in).
  */
+/** Refreshes this browser's subscription under the authenticated account. */
+export async function registerCurrentAccountDevice(): Promise<'registered' | 'not-subscribed' | 'failed'> {
+  if (!pushSupported()) return 'not-subscribed';
+  if (Notification.permission === 'default') {
+    try { if (await Notification.requestPermission() !== 'granted') return 'not-subscribed'; }
+    catch { return 'not-subscribed'; }
+  }
+  if (Notification.permission !== 'granted') return 'not-subscribed';
+  try {
+    const sub = await deviceSubscription(true);
+    if (!sub) return 'failed';
+    const saved = await post('/api/notifications/subscribe-push', toBody(sub));
+    return saved?.success ? 'registered' : 'failed';
+  } catch { return 'failed'; }
+}
+
 export async function syncDevice(userEmail?: string | null): Promise<boolean> {
   if (!pushSupported() || Notification.permission !== 'granted') return false;
   const mark = `${userEmail || 'guest'}|${new Date().toISOString().slice(0, 10)}`;
