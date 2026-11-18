@@ -59,7 +59,7 @@ export function AdminDailyPush() {
         if (!r?.success) setNote(`Not sent: ${r?.message || 'Request was rejected.'}`);
         else if (summary.skipped) setNote(`Not sent: ${summary.skipped}`);
         else if (Number(summary.sent) > 0) setNote(`Sent to your devices (${summary.sent}).`);
-        else if (Number(summary.failed) > 0) setNote(`Delivery failed (${summary.failed} relay request${Number(summary.failed) === 1 ? '' : 's'} failed).`);
+        else if (Number(summary.failed) > 0) setNote(`Delivery failed (${summary.failed} push attempt${Number(summary.failed) === 1 ? '' : 's'} failed).`);
         else setNote('No notification was delivered. Check that this account has an active registered device.');
       } else if (r?.success) { setD(r); setHours((r.slots || []).join(', ')); }
       else setNote(r?.message || 'Could not complete this request.');
