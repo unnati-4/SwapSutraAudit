@@ -20,6 +20,15 @@ import {apiUrl} from '../config/runtime';
  */
 let cachedVapidKey: string | null = null;
 
+function pushRequestHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const token = localStorage.getItem('swapsutraSessionToken') || '';
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch { /* storage can be unavailable in private browsing */ }
+  return headers;
+}
+
 export async function getPublicVapidKey(): Promise<string> {
   if (cachedVapidKey !== null) return cachedVapidKey;
   try {
@@ -152,18 +161,20 @@ export class WebPushManager {
         subscribedAt: new Date().toISOString()
       };
 
-      // Store subscription in localStorage
-      localStorage.setItem(`swapsutra_push_sub_${userEmail.toLowerCase()}`, JSON.stringify(subData));
-
       // Sync subscription to backend server
       try {
         await fetch(apiUrl('/api/notifications/subscribe-push'), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: pushRequestHeaders(),
           body: JSON.stringify(subData)
+        }).then(async (res) => {
+          const saved = await res.json().catch(() => null);
+          if (!res.ok || !saved?.success) throw new Error(saved?.message || 'Push subscription could not be saved.');
         });
+        localStorage.setItem(`swapsutra_push_sub_${userEmail.toLowerCase()}`, JSON.stringify(subData));
       } catch (e) {
         console.warn('[WebPushManager] Failed to sync push subscription to server endpoint:', e);
+        return null;
       }
 
       return subData;
@@ -194,7 +205,7 @@ export class WebPushManager {
 
       await fetch(apiUrl('/api/notifications/unsubscribe-push'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: pushRequestHeaders(),
         // Endpoint as well as email: without it the backend retires
         // every device the reader has, so turning notifications off on a
         // laptop would also silence their phone.
