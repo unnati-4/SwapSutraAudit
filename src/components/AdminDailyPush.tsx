@@ -10,8 +10,14 @@ const API = apiUrl('/api/swapsutra');
 const SLOT_LABEL: Record<string, string> = { morning: 'Morning', afternoon: 'Lunch', evening: 'Evening', night: 'Night' };
 
 async function call(action: string, extra: Record<string, unknown> = {}) {
-  const res = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...extra }) });
-  return res.json();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const token = localStorage.getItem('swapsutraSessionToken') || '';
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch { /* storage can be unavailable in private browsing */ }
+  const res = await fetch(API, { method: 'POST', headers, body: JSON.stringify({ action, ...extra }) });
+  const body = await res.json().catch(() => ({}));
+  return res.ok ? body : { ...body, success: false, status: res.status };
 }
 
 export function AdminDailyPush() {
@@ -48,8 +54,15 @@ export function AdminDailyPush() {
     setBusy(label); setNote('');
     try {
       const r = await call(action, extra);
-      if (action === 'sendDailyPushTest') setNote(r?.summary?.skipped ? `Not sent: ${r.summary.skipped}` : `Sent to your devices (${r?.summary?.sent ?? 0}).`);
-      else if (r?.success) { setD(r); setHours((r.slots || []).join(', ')); }
+      if (action === 'sendDailyPushTest') {
+        const summary = r?.summary || {};
+        if (!r?.success) setNote(`Not sent: ${r?.message || 'Request was rejected.'}`);
+        else if (summary.skipped) setNote(`Not sent: ${summary.skipped}`);
+        else if (Number(summary.sent) > 0) setNote(`Sent to your devices (${summary.sent}).`);
+        else if (Number(summary.failed) > 0) setNote(`Delivery failed (${summary.failed} relay request${Number(summary.failed) === 1 ? '' : 's'} failed).`);
+        else setNote('No notification was delivered. Check that this account has an active registered device.');
+      } else if (r?.success) { setD(r); setHours((r.slots || []).join(', ')); }
+      else setNote(r?.message || 'Could not complete this request.');
     } catch { setNote('Failed.'); }
     setBusy('');
   };
