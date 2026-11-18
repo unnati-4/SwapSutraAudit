@@ -78,7 +78,15 @@ function toBody(sub: PushSubscription) {
 }
 
 async function post(path: string, body: any) {
-  const res = await fetch(apiUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  // The Apps Script subscription action is session-gated. Forward the
+  // same token used by /api/swapsutra so an allowed device is actually
+  // attached to the signed-in reader instead of being silently rejected.
+  try {
+    const token = window.localStorage.getItem('swapsutraSessionToken') || '';
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch { /* storage can be unavailable in private browsing */ }
+  const res = await fetch(apiUrl(path), { method: 'POST', headers, body: JSON.stringify(body) });
   try { return await res.json(); } catch { return { success: false }; }
 }
 
