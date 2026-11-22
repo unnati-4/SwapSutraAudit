@@ -22,6 +22,8 @@ export interface BannerSlide {
   title: string;
   subtitle?: string;
   imageUrl?: string;
+  /** Preserve the complete artwork for portrait or landscape event posters. */
+  imageFit?: 'cover' | 'contain';
   /** Shown as a "Sponsored" chip — every ad must carry it. */
   sponsored?: boolean;
   /** A partner's banner shows the SwapSutra logo with it. */
@@ -105,7 +107,7 @@ export default function MascotBanner({ mascot, slides, label, interval = 10000, 
   const body = (
     <>
       <span className="ss-mascot__media">
-        {s.imageUrl ? <img key={s.key} src={s.imageUrl} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" /> : <span className="ss-mascot__media-blank" aria-hidden="true">{mascot === 'mug' ? '☕' : '📚'}</span>}
+        {s.imageUrl ? <img key={s.key} src={s.imageUrl} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" style={s.imageFit ? { objectFit: s.imageFit } : undefined} /> : <span className="ss-mascot__media-blank" aria-hidden="true">{mascot === 'mug' ? '☕' : '📚'}</span>}
         {s.partner && <span className="ss-adbanner__logo"><img src="/swapsutra-logo.png" alt="" />SwapSutra partner</span>}
       </span>
       <span className="ss-mascot__text">
