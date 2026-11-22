@@ -13188,7 +13188,8 @@ export default function App() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="swapsutra-welcome-title"
-            className="relative w-full max-w-4xl overflow-hidden rounded-[28px] border border-[#E7D5B8]/30 bg-[#F9F6F0] shadow-2xl"
+            className="relative w-full overflow-hidden rounded-[28px] border border-[#E7D5B8]/30 bg-[#F9F6F0] shadow-2xl"
+            style={{ width: 'min(90vw, 405px, calc(56.25dvh - 4.5rem))', maxHeight: 'calc(100dvh - 2rem)' }}
             onClick={event => event.stopPropagation()}
           >
             <button
@@ -13203,14 +13204,16 @@ export default function App() {
               <h2 id="swapsutra-welcome-title" className="font-serif text-2xl font-semibold text-[#4A3B32] sm:text-3xl">Welcome to SwapSutra</h2>
               <p className="mt-1 text-sm text-[#7C6E65]">A little tour of our readers’ community</p>
             </div>
-            <div className="aspect-video w-full bg-[#211914]">
+            <div className="relative aspect-[9/16] w-full bg-black">
               <iframe
-                className="h-full w-full"
+                className="absolute inset-0 h-full w-full"
                 src="https://drive.google.com/file/d/1jV1oD7PYthK5h9SYmYKPsbYNROEiwEmO/preview"
                 title="Welcome to SwapSutra video"
-                allow="autoplay; fullscreen"
+                sandbox="allow-scripts allow-same-origin"
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen
               />
+              <div className="pointer-events-auto absolute right-0 top-0 z-10 h-12 w-12 bg-black" aria-hidden="true" />
             </div>
           </section>
         </div>
