@@ -10425,8 +10425,8 @@ export default function App() {
       const locationQuery = pincodeFilter.trim().toLocaleLowerCase();
       const bookPincode = String(b.pincode ?? '').trim();
       const bookArea = String(b.area ?? '').trim().toLocaleLowerCase();
-      const matchesPincode = !locationQuery || (/^\\d{6}$/.test(locationQuery)
-        ? bookPincode.replace(/\\D/g, '') === locationQuery
+      const matchesPincode = !locationQuery || (/^\d{6}$/.test(locationQuery)
+        ? bookPincode.replace(/\D/g, '') === locationQuery
         : bookArea.includes(locationQuery) || bookPincode.toLocaleLowerCase().includes(locationQuery));
       const matchesCondition = !conditionFilter || b.condition === conditionFilter;
       // A book with no genre stays visible under "All Genres" — it only
