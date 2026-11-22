@@ -16,6 +16,20 @@ import { seoForPath } from '../seo/pages';
  * the page shows what is actually available, never stock photography.
  */
 
+export interface LibraryHeroEvent {
+  eventId?: string | number;
+  title?: string;
+  date?: string;
+  time?: string;
+  startTime?: string;
+  venue?: string;
+  location?: string;
+  thumbnailUrl?: string;
+  bannerUrl?: string;
+  imageUrl?: string;
+  status?: string;
+}
+
 export interface HeroBook {
   id: string | number;
   title?: string;
@@ -36,10 +50,11 @@ const photoOf = (b: HeroBook) => {
   return /^https:\/\//i.test(u) ? adImageSrc(u) : '';
 };
 
-export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onBrowse, onJoin, showJoin, ads = [], onOpenAdBook, adStart = 0 }: {
+export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onBrowse, onJoin, showJoin, ads = [], events = [], onOpenAdBook, adStart = 0 }: {
   books: B[];
-  /** Sponsored ads for the banner (9 Oct 2026); shown under the window. */
+  /** Sponsored ads and upcoming event posters for the banner. */
   ads?: SponsoredAd[];
+  events?: LibraryHeroEvent[];
   onOpenAdBook?: (bookId: string) => boolean;
   adStart?: number;
   onOpenBook: (b: B) => void;
@@ -59,11 +74,39 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
       })
       .sort((a, b) => String(b.listedAt || b.createdAt || '').localeCompare(String(a.listedAt || a.createdAt || '')));
   }, [books]);
-  // The banner (in the Library window, 10 Oct 2026): ads first; with no ad
-  // running, featured books take turns — any listed book with a cover or a
-  // photo; with no books yet, an invitation to browse.
+  // Upcoming event posters rotate with sponsored ads. Their dates and
+  // artwork come from the same event records used by the Events page.
   const bannerSlides = useMemo<BannerSlide[]>(() => {
-    if (ads.length) return ads.map((a) => adToSlide(a, onOpenAdBook));
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const eventSlides: BannerSlide[] = events
+      .filter((event) => {
+        const date = new Date(event.date || '');
+        return !Number.isNaN(date.getTime()) && date >= today;
+      })
+      .sort((a, b) => new Date(a.date || '').getTime() - new Date(b.date || '').getTime())
+      .map((event) => {
+        const date = new Date(event.date || '');
+        const posterUrl = event.bannerUrl || event.thumbnailUrl || event.imageUrl || '';
+        const details = [
+          date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+          event.time || event.startTime,
+          event.venue || event.location,
+        ].filter(Boolean).join(' · ');
+        return {
+          key: `event-${event.eventId || event.title || date.toISOString()}`,
+          eyebrow: 'Upcoming event',
+          title: event.title || 'SwapSutra community event',
+          subtitle: details || undefined,
+          imageUrl: posterUrl ? adImageSrc(posterUrl) : undefined,
+          imageFit: 'contain' as const,
+          cta: 'See event details',
+          href: '/events',
+          ariaLabel: `Upcoming event: ${event.title || 'SwapSutra community event'}${details ? ` · ${details}` : ''}. Open Events.`,
+        };
+      });
+    const adSlides = ads.map((a) => adToSlide(a, onOpenAdBook));
+    if (adSlides.length || eventSlides.length) return [...adSlides, ...eventSlides];
     const pictured = books.filter((b) => b.title && (coverOf(b) || photoOf(b)));
     const picks = shuffled<B>(pictured.slice(0, 60), adStart || 1).slice(0, 6);
     if (!picks.length) return [{
@@ -80,7 +123,7 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
       cta: 'See the book',
       onOpen: () => onOpenBook(b),
     }));
-  }, [ads, books, adStart, onOpenAdBook, onOpenBook, onBrowse]);
+  }, [ads, events, books, adStart, onOpenAdBook, onOpenBook, onBrowse]);
   const row = withCovers.slice(0, 16);
   const rowRef = useRef<HTMLDivElement>(null);
   const scrollRow = (dir: number) => rowRef.current?.scrollBy({ left: dir * rowRef.current.clientWidth * 0.8, behavior: 'smooth' });

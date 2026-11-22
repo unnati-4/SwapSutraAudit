@@ -10042,12 +10042,12 @@ export default function App() {
     }
   };
 
-  // Events load the first time an events page is opened (cached copy
-  // paints first), instead of on every app open.
+  // Events load when the Library or an events page opens. The cached copy
+  // paints first, so upcoming event banners can appear without blocking books.
   const eventsLoadedRef = useRef(false);
   useEffect(() => {
     if (eventsLoadedRef.current) return;
-    if (activeTab !== 'events' && activeTab !== 'reader-circle' && activeTab !== 'events-gallery') return;
+    if (activeTab !== 'browse' && activeTab !== 'events' && activeTab !== 'reader-circle' && activeTab !== 'events-gallery') return;
     eventsLoadedRef.current = true;
     fetch(`${API_URL}?action=getEvents`)
       .then(r => r.json())
@@ -15608,6 +15608,7 @@ export default function App() {
                     onJoin={handleBecomeMemberClick}
                     showJoin={!activeUserEmail}
                     ads={bannerAds}
+                    events={upcomingReaderCircle}
                     onOpenAdBook={openAdBook}
                     adStart={shelfSeed}
                   />
