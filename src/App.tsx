@@ -6362,6 +6362,7 @@ export default function App() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isQuillOpen, setIsQuillOpen] = useState(false);
+  const [showWelcomeVideo, setShowWelcomeVideo] = useState(false);
   const [quillClosedPages, setQuillClosedPages] = useState<string[]>(() => {
     if (typeof window === 'undefined') return [];
     try {
@@ -7080,6 +7081,20 @@ export default function App() {
     if (isAdmin || userRole === 'admin') return true;
     return userTier === 'trial' || userTier === 'premium';
   }, [activeUserEmail, isAdmin, userRole, userTier]);
+
+  // Show the SwapSutra introduction once per browser session to guests and
+  // verified signed-in accounts that have not completed registration.
+  // Existing members and paused accounts continue directly to the app.
+  useEffect(() => {
+    if (!sessionVerified || showSplash || isAdmin || userTier === 'expired') return;
+    const isUnregisteredVisitor = userTier === 'guest'
+      || (!!activeUserEmail && membershipCheckDone && !membershipCheckFailed && !isRegisteredMember && userTier === 'pending');
+    if (!isUnregisteredVisitor) return;
+    try {
+      if (sessionStorage.getItem('swapsutraWelcomeVideoDismissed') === 'true') return;
+    } catch { /* Continue if browser storage is unavailable. */ }
+    setShowWelcomeVideo(true);
+  }, [sessionVerified, showSplash, isAdmin, userTier, activeUserEmail, membershipCheckDone, membershipCheckFailed, isRegisteredMember]);
 
   // Keep the listing allowance current for a signed-in member, so the
   // listing form can say "12 of 20 free listings used" before they start.
@@ -13037,6 +13052,10 @@ export default function App() {
       return next;
     });
   };
+  const closeWelcomeVideo = () => {
+    setShowWelcomeVideo(false);
+    try { sessionStorage.setItem('swapsutraWelcomeVideoDismissed', 'true'); } catch { /* The close still works without storage. */ }
+  };
 
   // AUTH_CHECKING gate: this is a hard early return, not a post-render
   // redirect. A returning visitor's browser may have a cached
@@ -13161,6 +13180,43 @@ export default function App() {
         onConfirm={quillPromptModal.onConfirm}
       />
 
+      {showWelcomeVideo && (
+        <div
+          className="fixed inset-0 z-[100000] flex items-center justify-center bg-[#211914]/80 p-3 backdrop-blur-sm sm:p-6"
+          onClick={closeWelcomeVideo}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="swapsutra-welcome-title"
+            className="relative w-full max-w-4xl overflow-hidden rounded-[28px] border border-[#E7D5B8]/30 bg-[#F9F6F0] shadow-2xl"
+            onClick={event => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={closeWelcomeVideo}
+              aria-label="Close SwapSutra introduction"
+              className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-[#2D2925]/75 text-white transition hover:bg-[#2D2925]"
+            >
+              <X size={20} />
+            </button>
+            <div className="px-5 pb-4 pt-5 text-center sm:px-8 sm:pt-7">
+              <h2 id="swapsutra-welcome-title" className="font-serif text-2xl font-semibold text-[#4A3B32] sm:text-3xl">Welcome to SwapSutra</h2>
+              <p className="mt-1 text-sm text-[#7C6E65]">A little tour of our readers’ community</p>
+            </div>
+            <div className="aspect-video w-full bg-[#211914]">
+              <iframe
+                className="h-full w-full"
+                src="https://drive.google.com/file/d/1jV1oD7PYthK5h9SYmYKPsbYNROEiwEmO/preview"
+                title="Welcome to SwapSutra video"
+                allow="autoplay; fullscreen"
+                allowFullScreen
+              />
+            </div>
+          </section>
+        </div>
+      )}
+
       {/* 10 Oct 2026 (owner's request): Quill stays out of every chat — a
           circle's chat page and the exchange chat — where it covered the
           chat summary and the message box. */}
@@ -13210,23 +13266,21 @@ export default function App() {
         </AnimatePresence>
         <button
           type="button"
-          onClick={() => setIsQuillOpen(prev => {
-            if (!prev) logQuillInteraction();
-            return !prev;
-          })}
+          onClick={() => { logQuillInteraction(); setShowWelcomeVideo(true); }}
           className="quill-trigger group flex items-center gap-3 rounded-full border border-brand-gold/30 bg-[#FFFDF8]/95 px-3 py-2 text-[var(--text-primary)] shadow-[0_14px_40px_rgba(45,41,37,0.16)] backdrop-blur transition-all hover:-translate-y-0.5 hover:border-brand-gold hover:bg-[var(--bg-surface-raised)]"
-          aria-expanded={isQuillOpen}
-          aria-label="Open Quill guide"
+          aria-expanded={showWelcomeVideo}
+          aria-label="Watch the SwapSutra introduction"
         >
           <span className="quill-icon relative flex h-11 w-11 items-center justify-center rounded-full bg-brand-brown overflow-hidden transition-colors group-hover:bg-brand-gold">
             <span className="absolute inset-0 z-10 rounded-full border border-brand-beige/20 pointer-events-none" />
-            <div className="scale-[1.18] translate-y-[2px]">
-              <QuillAvatar mood={quillMood} size={48} tab={activeTab} />
-            </div>
+            <img
+              src="/swapsutra-fox-mascot.png"
+              alt=""
+              className="absolute left-[-50%] top-[-20%] h-[200%] w-[200%] max-w-none object-cover"
+              aria-hidden="true"
+            />
           </span>
-          {!isQuillClosedForPage && (
-            <span className="quill-label hidden pr-2 text-2xs font-semibold uppercase tracking-eyebrow sm:inline">Ask Quill</span>
-          )}
+          <span className="quill-label hidden pr-2 text-2xs font-semibold uppercase tracking-eyebrow sm:inline">Watch intro</span>
         </button>
       </div>
 
