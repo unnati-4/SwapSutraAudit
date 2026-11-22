@@ -8524,6 +8524,13 @@ export default function App() {
   const [isSearchingNearby, setIsSearchingNearby] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [locationInput, setLocationInput] = useState(''); // area or pincode manual search
+  const submitLocationSearch = () => {
+    // Manual location and GPS are alternatives; clear stale GPS coordinates.
+    setUserCoords(null);
+    setLocationError(null);
+    setPincodeFilter(locationInput.trim());
+    track('pincode_submitted', { method: 'typed' });
+  };
 
   // Initialize Onboarding
   useEffect(() => {
@@ -10415,7 +10422,12 @@ export default function App() {
         || b.title.toLowerCase().includes(searchLower)
         || b.author.toLowerCase().includes(searchLower)
         || (b.genre || '').toLowerCase().includes(searchLower);
-      const matchesPincode = !pincodeFilter || b.pincode === pincodeFilter;
+      const locationQuery = pincodeFilter.trim().toLocaleLowerCase();
+      const bookPincode = String(b.pincode ?? '').trim();
+      const bookArea = String(b.area ?? '').trim().toLocaleLowerCase();
+      const matchesPincode = !locationQuery || (/^\d{6}$/.test(locationQuery)
+        ? bookPincode.replace(/\D/g, '') === locationQuery
+        : bookArea.includes(locationQuery) || bookPincode.toLocaleLowerCase().includes(locationQuery));
       const matchesCondition = !conditionFilter || b.condition === conditionFilter;
       // A book with no genre stays visible under "All Genres" — it only
       // drops out once a SPECIFIC genre is selected, matching "existing
@@ -10441,8 +10453,10 @@ export default function App() {
       result = result
         .map(book => ({
           book,
-          dist: (book.latitude && book.longitude)
-            ? haversineDistance(userCoords.lat, userCoords.lng, book.latitude, book.longitude)
+          dist: book.latitude !== undefined && book.latitude !== null && String(book.latitude).trim() !== ''
+            && book.longitude !== undefined && book.longitude !== null && String(book.longitude).trim() !== ''
+            && Number.isFinite(Number(book.latitude)) && Number.isFinite(Number(book.longitude))
+            ? haversineDistance(userCoords.lat, userCoords.lng, Number(book.latitude), Number(book.longitude))
             : null as number | null
         }))
         .filter(({ dist }) => dist === null || dist <= nearbyRadiusKm) // the reader's chosen radius; unknown-distance books are kept, not excluded
@@ -15762,6 +15776,8 @@ export default function App() {
                                                       navigator.geolocation.getCurrentPosition(
                                                         (pos) => {
                                                           setUserCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+                                                          setPincodeFilter('');
+                                                          setLocationInput('');
                                                           setIsSearchingNearby(false);
                                                           track('pincode_submitted', { method: 'geolocation' });
                                                         },
@@ -15782,7 +15798,7 @@ export default function App() {
                                                   {isSearchingNearby ? (
                                                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                                   ) : <Icons.Location size={18} />}
-                                                  <span className="hidden sm:inline">{userCoords ? "Refreshing Location..." : "Show books near me"}</span><span className="sm:hidden text-xs">Near me</span>
+                                                  <span className="hidden sm:inline">{isSearchingNearby ? "Finding nearby books..." : userCoords ? "Refresh Location" : "Show books near me"}</span><span className="sm:hidden text-xs">{isSearchingNearby ? "Finding…" : "Near me"}</span>
                                                 </button>
 
                                                 <div className="hidden sm:block text-xs font-bold text-[var(--text-secondary)] uppercase tracking-eyebrow">or</div>
@@ -15793,16 +15809,12 @@ export default function App() {
                                                     placeholder="Pincode or area" 
                                                     value={locationInput}
                                                     onChange={(e) => setLocationInput(e.target.value)}
-                                                    onKeyDown={(e) => {
-                                                      if (e.key === 'Enter') {
-                                                        setPincodeFilter(locationInput);
-                                                        track('pincode_submitted', { method: 'typed' });
-                                                      }
-                                                    }}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') submitLocationSearch(); }}
                                                     className="night-input input-classic !bg-[var(--bg-page)] !py-3 w-full min-w-0 md:w-64"
                                                   />
                                                   <button
-                                                    onClick={() => { setPincodeFilter(locationInput); track('pincode_submitted', { method: 'typed' }); }}
+                                                    type="button"
+                                                    onClick={submitLocationSearch}
                                                     className="btn-outline shrink-0 !py-3 !px-3 sm:!px-6 text-2xs uppercase font-bold"
                                                   >
                                                     Search
@@ -15838,6 +15850,7 @@ export default function App() {
                                                       setUserCoords(null);
                                                       setPincodeFilter('');
                                                       setLocationInput('');
+                                                      setLocationError(null);
                                                     }}
                                                     className="text-2xs text-[var(--text-secondary)] underline decoration-brand-gold underline-offset-4 font-bold uppercase"
                                                   >
