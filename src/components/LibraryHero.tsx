@@ -43,7 +43,7 @@ export interface HeroBook {
 }
 
 const coverOf = (b: HeroBook) => photoOf(b) || shelfCoverUrl(b.isbn);
-const eventDateFromValue = (value) => {
+const eventDateFromValue = (value?: string) => {
   const raw = String(value || '').trim();
   // Event dates may be serialized as India midnight in UTC (for example,
   // 29 Nov at 18:30Z). Keep the calendar date from the source record.
