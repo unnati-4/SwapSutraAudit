@@ -127,7 +127,6 @@ export default function MascotBanner({ mascot, slides, label, interval = 10000, 
       className={`ss-mascot ss-mascot--${mascot} is-${phase}`}
       aria-label={label}
       aria-roledescription="carousel"
-      onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}
       data-testid={testId || 'mascot-banner'}
       data-phase={phase}
