@@ -43,6 +43,14 @@ export interface HeroBook {
 }
 
 const coverOf = (b: HeroBook) => photoOf(b) || shelfCoverUrl(b.isbn);
+const eventDateFromValue = (value?: string) => {
+  const raw = String(value || '').trim();
+  // Event dates may be serialized as India midnight in UTC (for example,
+  // 29 Nov at 18:30Z). Keep the calendar date from the source record.
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (isoDate) return new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]));
+  return new Date(raw);
+};
 /** The reader's own first photo of the book (Drive links made viewable). */
 const photoOf = (b: HeroBook) => {
   const raw = uploadedBookImages(b)[0];
@@ -81,12 +89,12 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
     today.setHours(0, 0, 0, 0);
     const eventSlides: BannerSlide[] = events
       .filter((event) => {
-        const date = new Date(event.date || '');
+        const date = eventDateFromValue(event.date);
         return !Number.isNaN(date.getTime()) && date >= today;
       })
-      .sort((a, b) => new Date(a.date || '').getTime() - new Date(b.date || '').getTime())
+      .sort((a, b) => eventDateFromValue(a.date).getTime() - eventDateFromValue(b.date).getTime())
       .map((event) => {
-        const date = new Date(event.date || '');
+        const date = eventDateFromValue(event.date);
         const posterUrl = event.bannerUrl || event.thumbnailUrl || event.imageUrl || '';
         const details = [
           date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
@@ -137,7 +145,7 @@ export default function LibraryHero<B extends HeroBook>({ books, onOpenBook, onB
           and search engines. */}
       <div className="lib-hero lib-hero--banner ss-bleed">
         <h1 className="sr-only">{(typeof window !== 'undefined' && seoForPath(window.location.pathname)?.h1) || 'SwapSutra is a reader-first library spread across homes in India.'}</h1>
-        <MascotBanner mascot="book" slides={bannerSlides} startAt={adStart}
+        <MascotBanner mascot="book" slides={bannerSlides} interval={5000} startAt={adStart}
           label={ads.length ? 'Sponsored' : 'Featured books'} testId="library-banner" />
       </div>
 

@@ -92,14 +92,16 @@ export default function MascotBanner({ mascot, slides, label, interval = 10000, 
   // Then: roll up, next slide, unroll.
   useEffect(() => {
     if (phase !== 'show' || paused || slides.length < 2) return;
+    const transitionMs = reduce ? 0 : 1450;
+    const holdMs = Math.max(0, interval - transitionMs);
     const t = window.setTimeout(() => {
       if (reduce) { setI((n) => (n + 1) % slides.length); return; }
       setPhase('fold');
       later(() => { setI((n) => (n + 1) % slides.length); setPhase('unfold'); }, 550);
-      later(() => setPhase('show'), 1450);
-    }, interval);
+      later(() => setPhase('show'), transitionMs);
+    }, holdMs);
     return () => window.clearTimeout(t);
-  }, [phase, paused, slides.length, interval, reduce]);
+  }, [phase, paused, slides.length, interval, reduce, i]);
 
   if (!slides.length) return null;
   const s = slides[Math.min(i, slides.length - 1)];
@@ -125,7 +127,6 @@ export default function MascotBanner({ mascot, slides, label, interval = 10000, 
       className={`ss-mascot ss-mascot--${mascot} is-${phase}`}
       aria-label={label}
       aria-roledescription="carousel"
-      onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}
       data-testid={testId || 'mascot-banner'}
       data-phase={phase}
