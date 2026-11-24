@@ -2229,6 +2229,35 @@ const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 };
 
+const normalizeIndianPincode = (value: unknown): string => {
+  const pin = String(value ?? '').trim();
+  return /^\\d{6}$/.test(pin) ? pin : '';
+};
+
+const pincodeCoordinateCache = new Map<string, { lat: number; lng: number } | null>();
+const getPincodeCoordinates = async (pincode: string): Promise<{ lat: number; lng: number } | null> => {
+  if (pincodeCoordinateCache.has(pincode)) return pincodeCoordinateCache.get(pincode) || null;
+  try {
+    // Use the same server-side Google geocoder as the location picker. This
+    // resolves postal-code centroids without asking every lister to tag a map.
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'geocodePlace', query: `${pincode}, India` }),
+    });
+    const data = await response.json();
+    const place = Array.isArray(data?.places) ? data.places[0] : null;
+    const lat = Number(place?.lat);
+    const lng = Number(place?.lng);
+    const coordinates = data?.success && Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+    pincodeCoordinateCache.set(pincode, coordinates);
+    return coordinates;
+  } catch {
+    pincodeCoordinateCache.set(pincode, null);
+    return null;
+  }
+};
+
 const BADGES_POOL = [
   { id: 'b1', name: 'Literary Soul 🌱', icon: '🌱', desc: 'Setup your space and stepped through the gates of SwapSutra.', category: 'core', requirement: 'Join SwapSutra' },
   { id: 'b2', name: 'Midnight Candle 🔥', icon: '🔥', desc: 'Maintained a cozy 3-day active visit streak, reading by candlelight.', category: 'core', requirement: '3-Day Streak' },
@@ -8509,6 +8538,7 @@ export default function App() {
 
   // Location States
   const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
+  const [nearbyPinCoords, setNearbyPinCoords] = useState<Record<string, { lat: number; lng: number } | null>>({});
   // Oct 2026: the reader chooses how far "nearby" reaches. Remembered on
   // this device; 25 km is the old fixed radius and stays the default.
   const NEARBY_RADIUS_CHOICES = [2, 5, 10, 25, 50, 100];
@@ -10389,6 +10419,28 @@ export default function App() {
     return () => { cancelled = true; };
   }, [showSwapModal?.id, offeredBookId, swapFormPreference]);
 
+  useEffect(() => {
+    if (!userCoords) {
+      setNearbyPinCoords({});
+      return;
+    }
+    let cancelled = false;
+    const pins = [...new Set(books.map(book => normalizeIndianPincode(book.pincode)).filter(Boolean))];
+    (async () => {
+      for (const pincode of pins) {
+        if (pincodeCoordinateCache.has(pincode)) {
+          const cached = pincodeCoordinateCache.get(pincode) || null;
+          if (!cancelled) setNearbyPinCoords(current => ({ ...current, [pincode]: cached }));
+          continue;
+        }
+        const coordinates = await getPincodeCoordinates(pincode);
+        if (cancelled) return;
+        setNearbyPinCoords(current => ({ ...current, [pincode]: coordinates }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [books, userCoords]);
+
   const filteredBooks = useMemo(() => {
     // The shelf is applied before every other filter: it is which library
     // you walked into, not one more thing you narrowed by.
@@ -10436,41 +10488,28 @@ export default function App() {
       return bookHasLibraryVisibility(b) && matchesShelf(b) && matchesSearch && matchesPincode && matchesCondition && matchesGenre && matchesLibraryCategory(b);
     });
 
-    // Nearby Filter
-    //
-    // BUG FIX: this used to hard-exclude any book without BOTH latitude and
-    // longitude the instant "Show books near me" was on (`return false` for
-    // every book lacking coordinates, no fallback). Location-tagging a
-    // listing is an entirely optional step in the listing form (a "Tag My
-    // Location" button the reader has to actively tap) -- almost no real
-    // listing has it set, so turning on "near me" was silently wiping out
-    // nearly every book in the Library/Discover page, which is exactly the
-    // "listed books aren't visible" symptom this fixes. A book with an
-    // unknown distance is not the same as a book that's confirmed far away:
-    // it now stays visible (just sorted after the confirmed-nearby ones)
-    // instead of disappearing.
+    // Nearby results require a valid listing PIN. Compare the user's
+    // location with the PIN-code centroid, then enforce the selected radius.
+    // Missing or unresolvable PINs have no reliable distance and stay hidden.
     if (userCoords) {
       result = result
-        .map(book => ({
-          book,
-          dist: book.latitude !== undefined && book.latitude !== null && String(book.latitude).trim() !== ''
-            && book.longitude !== undefined && book.longitude !== null && String(book.longitude).trim() !== ''
-            && Number.isFinite(Number(book.latitude)) && Number.isFinite(Number(book.longitude))
-            ? haversineDistance(userCoords.lat, userCoords.lng, Number(book.latitude), Number(book.longitude))
-            : null as number | null
-        }))
-        .filter(({ dist }) => dist === null || dist <= nearbyRadiusKm) // the reader's chosen radius; unknown-distance books are kept, not excluded
-        .sort((a, b) => {
-          if (a.dist === null && b.dist === null) return 0;
-          if (a.dist === null) return 1;
-          if (b.dist === null) return -1;
-          return a.dist - b.dist;
+        .map(book => {
+          const pincode = normalizeIndianPincode(book.pincode);
+          const coordinates = pincode ? nearbyPinCoords[pincode] : null;
+          return {
+            book,
+            dist: coordinates
+              ? haversineDistance(userCoords.lat, userCoords.lng, coordinates.lat, coordinates.lng)
+              : null as number | null,
+          };
         })
+        .filter(({ book, dist }) => !!normalizeIndianPincode(book.pincode) && dist !== null && dist <= nearbyRadiusKm)
+        .sort((a, b) => (a.dist as number) - (b.dist as number))
         .map(({ book }) => book);
     }
 
     return result;
-  }, [books, search, pincodeFilter, conditionFilter, genreFilter, libraryCategoryFilter, libraryShelf, userCoords, nearbyRadiusKm]);
+  }, [books, search, pincodeFilter, conditionFilter, genreFilter, libraryCategoryFilter, libraryShelf, userCoords, nearbyRadiusKm, nearbyPinCoords]);
 
   // 9 Oct 2026 (owner's request): the admin's sponsored ads show on the
   // Library banner and between the books, and every time the Library is
