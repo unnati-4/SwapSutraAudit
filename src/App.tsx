@@ -2231,7 +2231,7 @@ const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
 
 const normalizeIndianPincode = (value: unknown): string => {
   const pin = String(value ?? '').trim();
-  return /^\\d{6}$/.test(pin) ? pin : '';
+  return /^\d{6}$/.test(pin) ? pin : '';
 };
 
 const pincodeCoordinateCache = new Map<string, { lat: number; lng: number } | null>();
@@ -10442,7 +10442,7 @@ export default function App() {
         });
         const data = await response.json();
         const address = String(data?.place?.address || '');
-        const originPin = normalizeIndianPincode(address.match(/\\b\\d{6}\\b/)?.[0]);
+        const originPin = normalizeIndianPincode(address.match(/\b\d{6}\b/)?.[0]);
         if (originPin) origin = (await getPincodeCoordinates(originPin)) || userCoords;
       } catch {
         // Keep the exact GPS point if postal reverse-geocoding is unavailable.
