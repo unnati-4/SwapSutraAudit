@@ -8539,6 +8539,7 @@ export default function App() {
   // Location States
   const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
   const [nearbyPinCoords, setNearbyPinCoords] = useState<Record<string, { lat: number; lng: number } | null>>({});
+  const [nearbyOriginPinCoords, setNearbyOriginPinCoords] = useState<{ lat: number; lng: number } | null>(null);
   // Oct 2026: the reader chooses how far "nearby" reaches. Remembered on
   // this device; 25 km is the old fixed radius and stays the default.
   const NEARBY_RADIUS_CHOICES = [2, 5, 10, 25, 50, 100];
@@ -10422,11 +10423,32 @@ export default function App() {
   useEffect(() => {
     if (!userCoords) {
       setNearbyPinCoords({});
+      setNearbyOriginPinCoords(null);
       return;
     }
     let cancelled = false;
+    setNearbyPinCoords({});
+    setNearbyOriginPinCoords(null);
     const pins = [...new Set(books.map(book => normalizeIndianPincode(book.pincode)).filter(Boolean))];
     (async () => {
+      // Resolve the reader's GPS point to a postal PIN, then compare PIN
+      // centroids on both sides for a consistent PIN-to-PIN radius.
+      let origin = userCoords;
+      try {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'reversePlace', lat: userCoords.lat, lng: userCoords.lng }),
+        });
+        const data = await response.json();
+        const address = String(data?.place?.address || '');
+        const originPin = normalizeIndianPincode(address.match(/\\b\\d{6}\\b/)?.[0]);
+        if (originPin) origin = (await getPincodeCoordinates(originPin)) || userCoords;
+      } catch {
+        // Keep the exact GPS point if postal reverse-geocoding is unavailable.
+      }
+      if (cancelled) return;
+      setNearbyOriginPinCoords(origin);
       for (const pincode of pins) {
         if (pincodeCoordinateCache.has(pincode)) {
           const cached = pincodeCoordinateCache.get(pincode) || null;
@@ -10499,7 +10521,7 @@ export default function App() {
           return {
             book,
             dist: coordinates
-              ? haversineDistance(userCoords.lat, userCoords.lng, coordinates.lat, coordinates.lng)
+              ? haversineDistance((nearbyOriginPinCoords || userCoords).lat, (nearbyOriginPinCoords || userCoords).lng, coordinates.lat, coordinates.lng)
               : null as number | null,
           };
         })
@@ -10509,7 +10531,7 @@ export default function App() {
     }
 
     return result;
-  }, [books, search, pincodeFilter, conditionFilter, genreFilter, libraryCategoryFilter, libraryShelf, userCoords, nearbyRadiusKm, nearbyPinCoords]);
+  }, [books, search, pincodeFilter, conditionFilter, genreFilter, libraryCategoryFilter, libraryShelf, userCoords, nearbyRadiusKm, nearbyPinCoords, nearbyOriginPinCoords]);
 
   // 9 Oct 2026 (owner's request): the admin's sponsored ads show on the
   // Library banner and between the books, and every time the Library is
